@@ -1,6 +1,9 @@
 # Created by https://www.toptal.com/developers/gitignore/api/python,c++,c,visualstudiocode,git,linux
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,c++,c,visualstudiocode,git,linux
 
+results/
+*.npy
+
 ### Custom ###
 ./jnrh2023/
 c_generated_code

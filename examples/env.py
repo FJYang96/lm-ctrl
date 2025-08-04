@@ -6,8 +6,8 @@ import time
 
 robot_name = 'go2' # 'b2', 'go1', 'go2', 'hyqreal', 'mini_cheetah', 'aliengo'
 terrain_type = 'flat' # 'flat', 'perlin'
-sim_dt = 0.01 # seconds
-sim_duration = 1 # seconds
+sim_dt = 0.1 # seconds
+sim_duration = 2.0 # seconds
 
 ################################################################################
 # Create environment
@@ -27,7 +27,17 @@ env = QuadrupedEnv(
 # Print out the observation space
 ################################################################################
 print("-"*20, "Observation space", "-"*20)
-state = env.reset()
+initial_qpos = np.zeros(19)
+initial_qpos[0:3] = [0., 0., 0.23]  # base position
+initial_qpos[3:7] = [1., 0., 0., 0.]  # base orientation (quaternion)
+initial_qpos[7:19] = [  # joint angles
+    0.0,  1.0, -2.1,   # FL: no abd, folded hip/knee
+    0.0,  1.0, -2.1,   # FR
+    0.0,  1.0, -2.1,   # RL
+    0.0,  1.0, -2.1    # RR
+]
+initial_qvel = np.zeros(18)
+state = env.reset(qpos=initial_qpos, qvel=initial_qvel)
 for obs_name, obs_val in state.items():
     print(f'{obs_name:20s}--\t{obs_val.shape}')
 
@@ -37,18 +47,22 @@ for obs_name, obs_val in state.items():
 print("-"*20, "Action space", "-"*25)
 print(env.action_space)
 
+# Load action sequence
+action_sequence = np.load("results/joint_torques_traj.npy")
+
 ################################################################################
 # Simulate and render
 ################################################################################
 print("-"*20, "Simulating and rendering", "-"*13)
 images = []
 sim_times, render_times = [], []
-for _ in tqdm(range(int(sim_duration / sim_dt))):
+for i in tqdm(range(int(sim_duration / sim_dt))):
     import imageio
 
     # Step forward in the simulation
     start_time = time.time()
-    action = env.action_space.sample() * 5  # Sample random action
+    # action = env.action_space.sample() * 0  # Sample random action
+    action = action_sequence[i, :]
     state, reward, is_terminated, is_truncated, info = env.step(action=action)
     sim_times.append(time.time() - start_time)
 
