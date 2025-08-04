@@ -6,7 +6,7 @@ import time
 
 robot_name = 'go2' # 'b2', 'go1', 'go2', 'hyqreal', 'mini_cheetah', 'aliengo'
 terrain_type = 'flat' # 'flat', 'perlin'
-sim_dt = 0.1 # seconds
+sim_dt = 0.01 # seconds
 sim_duration = 2.0 # seconds
 
 ################################################################################
@@ -56,13 +56,16 @@ action_sequence = np.load("results/joint_torques_traj.npy")
 print("-"*20, "Simulating and rendering", "-"*13)
 images = []
 sim_times, render_times = [], []
+action_index = 0
 for i in tqdm(range(int(sim_duration / sim_dt))):
     import imageio
 
     # Step forward in the simulation
     start_time = time.time()
     # action = env.action_space.sample() * 0  # Sample random action
-    action = action_sequence[i, :]
+    action = action_sequence[action_index, :]
+    if (i + 1) % 10 == 0:
+        action_index += 1
     state, reward, is_terminated, is_truncated, info = env.step(action=action)
     sim_times.append(time.time() - start_time)
 
