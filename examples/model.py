@@ -6,11 +6,9 @@
 import os
 
 import casadi as cs
+import gym_quadruped
 import numpy as np
 from acados_template import AcadosModel
-
-import gym_quadruped
-import os
 
 gym_quadruped_path = os.path.dirname(gym_quadruped.__file__)
 
@@ -33,43 +31,50 @@ else:
 # Class that defines the prediction model of the NMPC
 class KinoDynamic_Model:
     def __init__(self, config) -> None:
-        if config.robot == 'go2':
-            urdf_filename = gym_quadruped_path + '/robot_model/go2/go2.urdf'
-            xml_filename = gym_quadruped_path + '/robot_model/go2/go2.xml'
-        if config.robot == 'go1':
-            urdf_filename = gym_quadruped_path + '/robot_model/go1/go1.urdf'
-            xml_filename = gym_quadruped_path + '/robot_model/go1/go1.xml'
-        elif config.robot == 'aliengo':
-            urdf_filename = gym_quadruped_path + '/robot_model/aliengo/aliengo.urdf'
-            xml_filename = gym_quadruped_path + '/robot_model/aliengo/aliengo.xml'
-        elif config.robot == 'b2':
-            urdf_filename = gym_quadruped_path + '/robot_model/b2/b2.urdf'
-            xml_filename = gym_quadruped_path + '/robot_model/b2/b2.xml'
-        elif config.robot == 'hyqreal':
-            urdf_filename = gym_quadruped_path + '/robot_model/hyqreal/hyqreal.urdf'
-            xml_filename = gym_quadruped_path + '/robot_model/hyqreal/hyqreal.xml'
-        elif config.robot == 'mini_cheetah':
-            urdf_filename = gym_quadruped_path + '/robot_model/mini_cheetah/mini_cheetah.urdf'
-            xml_filename = gym_quadruped_path + '/robot_model/mini_cheetah/mini_cheetah.xml'
-
+        if config.robot == "go2":
+            urdf_filename = gym_quadruped_path + "/robot_model/go2/go2.urdf"
+            xml_filename = gym_quadruped_path + "/robot_model/go2/go2.xml"
+        if config.robot == "go1":
+            urdf_filename = gym_quadruped_path + "/robot_model/go1/go1.urdf"
+            xml_filename = gym_quadruped_path + "/robot_model/go1/go1.xml"
+        elif config.robot == "aliengo":
+            urdf_filename = gym_quadruped_path + "/robot_model/aliengo/aliengo.urdf"
+            xml_filename = gym_quadruped_path + "/robot_model/aliengo/aliengo.xml"
+        elif config.robot == "b2":
+            urdf_filename = gym_quadruped_path + "/robot_model/b2/b2.urdf"
+            xml_filename = gym_quadruped_path + "/robot_model/b2/b2.xml"
+        elif config.robot == "hyqreal":
+            urdf_filename = gym_quadruped_path + "/robot_model/hyqreal/hyqreal.urdf"
+            xml_filename = gym_quadruped_path + "/robot_model/hyqreal/hyqreal.xml"
+        elif config.robot == "mini_cheetah":
+            urdf_filename = (
+                gym_quadruped_path + "/robot_model/mini_cheetah/mini_cheetah.urdf"
+            )
+            xml_filename = (
+                gym_quadruped_path + "/robot_model/mini_cheetah/mini_cheetah.xml"
+            )
 
         joint_list = [
-            'FL_hip_joint',
-            'FL_thigh_joint',
-            'FL_calf_joint',
-            'FR_hip_joint',
-            'FR_thigh_joint',
-            'FR_calf_joint',
-            'RL_hip_joint',
-            'RL_thigh_joint',
-            'RL_calf_joint',
-            'RR_hip_joint',
-            'RR_thigh_joint',
-            'RR_calf_joint',
+            "FL_hip_joint",
+            "FL_thigh_joint",
+            "FL_calf_joint",
+            "FR_hip_joint",
+            "FR_thigh_joint",
+            "FR_calf_joint",
+            "RL_hip_joint",
+            "RL_thigh_joint",
+            "RL_calf_joint",
+            "RR_hip_joint",
+            "RR_thigh_joint",
+            "RR_calf_joint",
         ]
 
-        self.kindyn = KinDynComputations(urdfstring=urdf_filename, joints_name_list=joint_list)
-        self.kindyn.set_frame_velocity_representation(representation=Representations.MIXED_REPRESENTATION)
+        self.kindyn = KinDynComputations(
+            urdfstring=urdf_filename, joints_name_list=joint_list
+        )
+        self.kindyn.set_frame_velocity_representation(
+            representation=Representations.MIXED_REPRESENTATION
+        )
         self.mass_mass_fun = self.kindyn.mass_matrix_fun()
         self.com_position_fun = self.kindyn.CoM_position_fun()
         self.bias_force_fun = self.kindyn.bias_force_fun()
@@ -77,10 +82,18 @@ class KinoDynamic_Model:
         self.coriolis_fun = self.kindyn.coriolis_term_fun()
 
         if use_adam:
-            self.forward_kinematics_FL_fun = self.kindyn.forward_kinematics_fun("FL_foot")
-            self.forward_kinematics_FR_fun = self.kindyn.forward_kinematics_fun("FR_foot")
-            self.forward_kinematics_RL_fun = self.kindyn.forward_kinematics_fun("RL_foot")
-            self.forward_kinematics_RR_fun = self.kindyn.forward_kinematics_fun("RR_foot")
+            self.forward_kinematics_FL_fun = self.kindyn.forward_kinematics_fun(
+                "FL_foot"
+            )
+            self.forward_kinematics_FR_fun = self.kindyn.forward_kinematics_fun(
+                "FR_foot"
+            )
+            self.forward_kinematics_RL_fun = self.kindyn.forward_kinematics_fun(
+                "RL_foot"
+            )
+            self.forward_kinematics_RR_fun = self.kindyn.forward_kinematics_fun(
+                "RR_foot"
+            )
 
             self.jacobian_FL_fun = self.kindyn.jacobian_fun("FL_foot")
             self.jacobian_FR_fun = self.kindyn.jacobian_fun("FR_foot")
@@ -241,7 +254,9 @@ class KinoDynamic_Model:
         self.stanceFR = cs.SX.sym("stanceFR", 1, 1)
         self.stanceRL = cs.SX.sym("stanceRL", 1, 1)
         self.stanceRR = cs.SX.sym("stanceRR", 1, 1)
-        self.stance_param = cs.vertcat(self.stanceFL, self.stanceFR, self.stanceRL, self.stanceRR)
+        self.stance_param = cs.vertcat(
+            self.stanceFL, self.stanceFR, self.stanceRL, self.stanceRR
+        )
 
         self.mu_friction = cs.SX.sym("mu_friction", 1, 1)
         self.stance_proximity = cs.SX.sym("stanceProximity", 4, 1)
@@ -292,7 +307,9 @@ class KinoDynamic_Model:
         b_R_w = Rx @ Ry @ Rz
         return b_R_w
 
-    def forward_dynamics(self, states: np.ndarray, inputs: np.ndarray, param: np.ndarray) -> cs.SX:
+    def forward_dynamics(
+        self, states: np.ndarray, inputs: np.ndarray, param: np.ndarray
+    ) -> cs.SX:
         """
         This method computes the symbolic forward dynamics of the robot. It is used inside
         Acados to compute the prediction model. It fill the same variables as the one in
@@ -359,13 +376,25 @@ class KinoDynamic_Model:
         H[0:3, 3] = com_position
 
         # Compute com pos, feet pos and inertia via ADAM
-        joint_position = cs.vertcat(joint_position_fl, joint_position_fr, joint_position_rl, joint_position_rr)
-        joints_velocities = cs.vertcat(joint_velocity_fl, joint_velocity_fr, joint_velocity_rl, joint_velocity_rr)
+        joint_position = cs.vertcat(
+            joint_position_fl, joint_position_fr, joint_position_rl, joint_position_rr
+        )
+        joints_velocities = cs.vertcat(
+            joint_velocity_fl, joint_velocity_fr, joint_velocity_rl, joint_velocity_rr
+        )
 
-        self.foot_position_fl = self.forward_kinematics_FL_fun(H, joint_position)[0:3, 3]
-        self.foot_position_fr = self.forward_kinematics_FR_fun(H, joint_position)[0:3, 3]
-        self.foot_position_rl = self.forward_kinematics_RL_fun(H, joint_position)[0:3, 3]
-        self.foot_position_rr = self.forward_kinematics_RR_fun(H, joint_position)[0:3, 3]
+        self.foot_position_fl = self.forward_kinematics_FL_fun(H, joint_position)[
+            0:3, 3
+        ]
+        self.foot_position_fr = self.forward_kinematics_FR_fun(H, joint_position)[
+            0:3, 3
+        ]
+        self.foot_position_rl = self.forward_kinematics_RL_fun(H, joint_position)[
+            0:3, 3
+        ]
+        self.foot_position_rr = self.forward_kinematics_RR_fun(H, joint_position)[
+            0:3, 3
+        ]
 
         inertia = param[19:28]
         inertia = inertia.reshape((3, 3))
@@ -384,24 +413,48 @@ class KinoDynamic_Model:
 
         # FINAL euler_rates_base STATE (3)
         temp2 = cs.skew(self.foot_position_fl - com_position) @ foot_force_fl @ stanceFL
-        temp2 += cs.skew(self.foot_position_fr - com_position) @ foot_force_fr @ stanceFR
-        temp2 += cs.skew(self.foot_position_rl - com_position) @ foot_force_rl @ stanceRL
-        temp2 += cs.skew(self.foot_position_rr - com_position) @ foot_force_rr @ stanceRR
+        temp2 += (
+            cs.skew(self.foot_position_fr - com_position) @ foot_force_fr @ stanceFR
+        )
+        temp2 += (
+            cs.skew(self.foot_position_rl - com_position) @ foot_force_rl @ stanceRL
+        )
+        temp2 += (
+            cs.skew(self.foot_position_rr - com_position) @ foot_force_rr @ stanceRR
+        )
         temp2 = temp2 + external_wrench_angular
         angular_acc_base = cs.inv(inertia) @ (b_R_w @ temp2 - cs.skew(w) @ inertia @ w)
 
         # breakpoint()
 
         if not use_centroidal_model:
-            u_wrenches = self.jacobian_FL_fun(H, joint_position)[0:3, :].T @ foot_force_fl @ stanceFL
-            u_wrenches += self.jacobian_FR_fun(H, joint_position)[0:3, :].T @ foot_force_fr @ stanceFR
-            u_wrenches += self.jacobian_RL_fun(H, joint_position)[0:3, :].T @ foot_force_rl @ stanceRL
-            u_wrenches += self.jacobian_RR_fun(H, joint_position)[0:3, :].T @ foot_force_rr @ stanceRR
+            u_wrenches = (
+                self.jacobian_FL_fun(H, joint_position)[0:3, :].T
+                @ foot_force_fl
+                @ stanceFL
+            )
+            u_wrenches += (
+                self.jacobian_FR_fun(H, joint_position)[0:3, :].T
+                @ foot_force_fr
+                @ stanceFR
+            )
+            u_wrenches += (
+                self.jacobian_RL_fun(H, joint_position)[0:3, :].T
+                @ foot_force_rl
+                @ stanceRL
+            )
+            u_wrenches += (
+                self.jacobian_RR_fun(H, joint_position)[0:3, :].T
+                @ foot_force_rr
+                @ stanceRR
+            )
             u_wrenches = u_wrenches[0:6]
 
             joints_velocities = inputs[0:12]
             base_velocities = cs.vertcat(linear_com_vel, w)
-            eta = self.bias_force_fun(H, joint_position, base_velocities, joints_velocities)[0:6]
+            eta = self.bias_force_fun(
+                H, joint_position, base_velocities, joints_velocities
+            )[0:6]
             inertia_base = self.mass_mass_fun(H, joint_position)[0:6, 0:6]
             acc = cs.inv(inertia_base) @ (-eta + u_wrenches)
 
