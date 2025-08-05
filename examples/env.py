@@ -55,9 +55,6 @@ for obs_name, obs_val in state.items():
 print("-" * 20, "Action space", "-" * 25)
 print(env.action_space)
 
-# Load action sequence
-action_sequence = np.load("results/joint_torques_traj.npy")
-
 ################################################################################
 # Simulate and render
 ################################################################################
@@ -70,10 +67,7 @@ for i in tqdm(range(int(sim_duration / sim_dt))):
 
     # Step forward in the simulation
     start_time = time.time()
-    # action = env.action_space.sample() * 0  # Sample random action
-    action = action_sequence[action_index, :]
-    if (i + 1) % 10 == 0:
-        action_index += 1
+    action = env.action_space.sample() * 0  # Sample random action
     state, reward, is_terminated, is_truncated, info = env.step(action=action)
     sim_times.append(time.time() - start_time)
 
@@ -85,7 +79,7 @@ for i in tqdm(range(int(sim_duration / sim_dt))):
     images.append(image)
 
 fps = 1 / sim_dt
-imageio.mimsave("test.mp4", images, fps=fps)
+imageio.mimsave("results/env_test.mp4", images, fps=fps)
 env.close()
 
 print("-" * 20, "Performance", "-" * 20)

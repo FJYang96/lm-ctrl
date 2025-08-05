@@ -1,9 +1,3 @@
-# Description: This file contains a new Acados NMPC controller class specifically
-# designed for generating a hopping trajectory. It defines a single optimization
-# problem for the entire hop, with different constraints for the stance and flight phases.
-
-import pathlib
-
 import casadi as cs
 import numpy as np
 import scipy.linalg
@@ -15,140 +9,55 @@ from .model import KinoDynamic_Model
 
 # New class for the hopping MPC, designed for a single trajectory optimization
 class HoppingMPC:
-    def __init__(self, T: float, dt: float, config):
+    def __init__(self, model: KinoDynamic_Model, config):
         """
-        Initializes the hopping MPC solver.
-
-        Args:
-            T (float): The total duration of the optimization horizon in seconds.
-            dt (float): The duration of a single time step in seconds.
+        Initializes and compiles the hopping MPC solver.
         """
-        self.T = T
-        self.dt = dt
-        self.horizon = int(self.T / self.dt)
+        self.horizon = config.mpc_params["horizon"]
         self.config = config
 
         # Create the class of the kinodynamic model and instantiate the acados model
-        self.kindyn_model = KinoDynamic_Model(config)
+        self.kindyn_model = model
         acados_model = self.kindyn_model.export_robot_model()
         self.states_dim = acados_model.x.size()[0]
         self.inputs_dim = acados_model.u.size()[0]
 
         # Create the acados ocp solver
         self.ocp = self._create_ocp_solver_description(acados_model)
-
-        # Set code export directory
-        code_export_dir = pathlib.Path(__file__).parent.parent / "c_generated_code"
-        self.ocp.code_export_directory = str(code_export_dir)
-
-        # The acados_ocp_solver.py is now called with `acados_ocp` that has the
-        # `parameter_values` set, which will fix the error.
-        self.acados_ocp_solver = AcadosOcpSolver(
-            self.ocp,
-            json_file=self.ocp.code_export_directory + "/hopping_nmpc" + ".json",
-        )
-
-        # Initialize solver with zeros
-        for stage in range(self.horizon + 1):
-            self.acados_ocp_solver.set(stage, "x", np.zeros((self.states_dim,)))
-        for stage in range(self.horizon):
-            self.acados_ocp_solver.set(stage, "u", np.zeros((self.inputs_dim,)))
+        self._compile_and_initialize_solver()
 
     def _create_ocp_solver_description(self, acados_model) -> AcadosOcp:
         """
         Sets up the Acados OCP object with cost, constraints, and solver options.
+        These will be updated via `self._setup_cost` and `self._setup_constraints`.
         """
         ocp = AcadosOcp()
         ocp.model = acados_model
-        nx = self.states_dim
-        nu = self.inputs_dim
 
-        # --- FIX 1: Recalculate dimensions based on explicit expressions ---
-        # The cost expression for intermediate stages
-        cost_y_expr = cs.vertcat(
-            acados_model.x[0:12],  # Base states
-            acados_model.x[12:24],  # Joint positions
-            acados_model.u,  # Inputs (joint velocities and GRFs)
-        )
-        ny = cost_y_expr.size()[0]  # This will be 12 + 12 + 24 = 48
-
-        # The cost expression for the terminal stage
-        cost_y_expr_e = cs.vertcat(
-            acados_model.x[0:12],  # Base states
-            acados_model.x[12:24],  # Joint positions
-        )
-        ny_e = cost_y_expr_e.size()[0]  # This will be 12 + 12 = 24
-
+        # Specify the horizon and dimensions of the OCP
         ocp.dims.N = self.horizon
-        ocp.cost.cost_type = "NONLINEAR_LS"
-        ocp.cost.cost_type_e = "NONLINEAR_LS"
+        ocp.dims.N_horizon = self.horizon
+        ocp.dims.nbu = self.inputs_dim
 
-        # --- FIX 2: Assign the symbolic cost expressions directly ---
-        ocp.model.cost_y_expr = cost_y_expr
-        ocp.model.cost_y_expr_e = cost_y_expr_e
-
-        # Weight matrices
-        Q_diag = np.diag(
-            [
-                1e3,
-                1e3,
-                1e3,  # com_position
-                1e2,
-                1e2,
-                1e2,  # com_velocity
-                1e3,
-                1e3,
-                1e3,  # orientation_rpy
-                1e1,
-                1e1,
-                1e1,  # angular_velocity
-                1e-1,
-                1e-1,
-                1e-1,  # joint_position FL
-                1e-1,
-                1e-1,
-                1e-1,  # joint_position FR
-                1e-1,
-                1e-1,
-                1e-1,  # joint_position RL
-                1e-1,
-                1e-1,
-                1e-1,  # joint_position RR
-            ]
+        # Setup the form of the quadratic tracking cost function
+        self._setup_cost(
+            ocp,
+            self.config.mpc_params["q_base"],
+            self.config.mpc_params["q_joint"],
+            self.config.mpc_params["r_joint_vel"],
+            self.config.mpc_params["r_forces"],
+            self.config.mpc_params["q_terminal_base"],
+            self.config.mpc_params["q_terminal_joint"],
         )
-        R_diag_joint_vel = np.diag([1e-6] * 12)
-        R_diag_forces = np.diag([1e-8] * 12)
 
-        # --- FIX 3: Ensure W and W_e are sized correctly based on new dimensions ---
-        ocp.cost.W = scipy.linalg.block_diag(Q_diag, R_diag_joint_vel, R_diag_forces)
-        ocp.cost.W_e = Q_diag[
-            0:ny_e, 0:ny_e
-        ]  # Use a slice of Q_diag for the correct size
+        # Setup the form of the state constraint
+        ocp.constraints.x0 = np.zeros(self.states_dim)
+        ocp.constraints.idxbu = np.arange(self.inputs_dim)
+        ocp.constraints.lbu = np.array([-1e6] * self.inputs_dim)
+        ocp.constraints.ubu = np.array([1e6] * self.inputs_dim)
 
-        # Define `Vx` and `Vu` to map `x` and `u` to `y_expr`
-        ocp.cost.Vx = np.zeros((ny, nx))
-        # The first `nx` terms of y_expr correspond to states
-        ocp.cost.Vx[:24, :] = np.eye(nx)[:24, :]
-
-        ocp.cost.Vu = np.zeros((ny, nu))
-        # The last `nu` terms of y_expr correspond to inputs
-        ocp.cost.Vu[24:, :] = np.eye(nu)
-
-        ocp.cost.Vx_e = np.eye(ny_e, nx)  # Map final states to terminal cost
-
-        # --- FIX 4: Set the yref and yref_e sizes based on the new dimensions ---
-        ocp.cost.yref = np.zeros(ny)
-        ocp.cost.yref_e = np.zeros(ny_e)
-
-        # Set initial state constraint
-        ocp.constraints.x0 = np.zeros(nx)
-
-        ocp.dims.nbu = nu
-        ocp.constraints.idxbu = np.arange(nu)
-        ocp.constraints.lbu = np.array([-1e6] * nu)
-        ocp.constraints.ubu = np.array([1e6] * nu)
-
-        # Set the initial parameter values
+        # TODO: why are the base position and yaw not updated?
+        # Set the default parameter values (will take these values unless updated)
         init_contact_status = np.array([1.0, 1.0, 1.0, 1.0])
         init_mu = np.array([self.config.mpc_params["mu"]])
         init_stance_proximity = np.array([0, 0, 0, 0])
@@ -172,27 +81,102 @@ class HoppingMPC:
         )
 
         # Solver options
-        ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
-        ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
-        ocp.solver_options.integrator_type = "ERK"
-        ocp.solver_options.nlp_solver_type = "SQP"
+        ocp.solver_options.qp_solver = self.config.mpc_params["qp_solver"]
+        ocp.solver_options.hessian_approx = self.config.mpc_params["hessian_approx"]
+        ocp.solver_options.integrator_type = self.config.mpc_params["integrator_type"]
+        ocp.solver_options.nlp_solver_type = self.config.mpc_params["nlp_solver_type"]
         ocp.solver_options.nlp_solver_max_iter = self.config.mpc_params[
-            "num_qp_iterations"
+            "nlp_solver_max_iter"
         ]
-        ocp.solver_options.tf = self.T
+        ocp.solver_options.tf = self.config.duration
 
         return ocp
 
-    def solve_trajectory(
+    def _setup_cost(
         self,
-        initial_state: dict,
-        reference: dict,
-        contact_sequence: np.ndarray,
-    ) -> (np.ndarray, np.ndarray, np.ndarray, int):
+        ocp: AcadosOcp,
+        q_base: np.ndarray = np.eye(12) * 1e-2,
+        q_joint: np.ndarray = np.eye(12) * 1e-2,
+        r_joint_vel: np.ndarray = np.eye(12) * 1e-6,
+        r_forces: np.ndarray = np.eye(12) * 1e-8,
+        q_terminal_base: np.ndarray = np.eye(12) * 1e-1,
+        q_terminal_joint: np.ndarray = np.eye(12) * 1e-1,
+    ) -> None:
+        """Sets up the cost function for the OCP.
+        The cost function is a quadratic cost function of the form:
+            J(x, u) = 1/2 * (y - yref) ^T * W * (y - yref)
+        where y is a function of x and u. Specifically, for the intermediate stages,
+            y = [base_states, joint_positions, joint_velocities, GRFs]
+        and for the terminal stage,
+            y = [base_states, joint_positions]
         """
-        Solves the trajectory optimization problem and returns the results.
+        ocp.cost.cost_type = "NONLINEAR_LS"
+        ocp.cost.cost_type_e = "NONLINEAR_LS"
+
+        nx = self.states_dim
+        nu = self.inputs_dim
+
+        # The cost expression for intermediate stages
+        ocp.model.cost_y_expr = cs.vertcat(
+            ocp.model.x[0:12],  # Base states
+            ocp.model.x[12:24],  # Joint positions
+            ocp.model.u,  # Inputs (joint velocities and GRFs)
+        )
+        ny = ocp.model.cost_y_expr.size()[0]  # This will be 12 + 12 + 24 = 48
+
+        # The cost expression for the terminal stage
+        ocp.model.cost_y_expr_e = cs.vertcat(
+            ocp.model.x[0:12],  # Base states
+            ocp.model.x[12:24],  # Joint positions
+        )
+        ny_e = ocp.model.cost_y_expr_e.size()[0]  # This will be 12 + 12 = 24
+
+        # Weight matrices for the quadratic cost function
+        ocp.cost.W = scipy.linalg.block_diag(
+            np.eye(12) * q_base,
+            np.eye(12) * q_joint,
+            np.eye(12) * r_joint_vel,
+            np.eye(12) * r_forces,
+        )
+        ocp.cost.W_e = scipy.linalg.block_diag(
+            np.eye(12) * q_terminal_base,
+            np.eye(12) * q_terminal_joint,
+        )
+
+        # Define Vx and Vu to map x and u to y_expr, i.e. y = Vx @ x + Vu @ u
+        ocp.cost.Vx = np.zeros((ny, nx))
+        ocp.cost.Vu = np.zeros((ny, nu))
+        ocp.cost.Vx[:24, :] = np.eye(24, nx)
+        ocp.cost.Vu[24:, :] = np.eye(nu)
+        ocp.cost.Vx_e = np.eye(ny_e, nx)  # Map final states to terminal cost
+
+        # Initialize yref and yref_e to zero
+        ocp.cost.yref = np.zeros(ny)
+        ocp.cost.yref_e = np.zeros(ny_e)
+
+    def _compile_and_initialize_solver(self):
         """
-        # Set initial state constraint
+        Compiles the solver and initializes the decision variables with zeros.
+        """
+        code_export_dir = self.config.mpc_params["compile_dir"]
+        json_filename = code_export_dir + "/hopping_nmpc" + ".json"
+        self.ocp.code_export_directory = str(code_export_dir)
+
+        # Compile the solver
+        self.acados_ocp_solver = AcadosOcpSolver(
+            self.ocp, json_file=json_filename, verbose=False
+        )
+
+        # Initialize the solutions with zeros
+        for stage in range(self.horizon + 1):
+            self.acados_ocp_solver.set(stage, "x", np.zeros((self.states_dim,)))
+        for stage in range(self.horizon):
+            self.acados_ocp_solver.set(stage, "u", np.zeros((self.inputs_dim,)))
+
+    def _set_initial_state(self, initial_state: dict) -> None:
+        """
+        Sets the initial state constraint.
+        """
         state_acados = np.concatenate(
             (
                 initial_state["position"],
@@ -209,28 +193,29 @@ class HoppingMPC:
         self.acados_ocp_solver.set(0, "lbx", state_acados)
         self.acados_ocp_solver.set(0, "ubx", state_acados)
 
-        # --- FIX 5: Create and fill yref with the correct dimensions and values ---
-        # The dimension of yref must match the symbolic cost expression.
-        # It is: 12 (base states) + 12 (joint positions) + 24 (inputs) = 48.
-        ny = 12 + 12 + 24
+    def _set_reference(self, ref: np.ndarray) -> None:
+        """
+        Sets the reference for the OCP.
+        """
+        # intermediate references
+        for j in range(self.horizon):
+            self.acados_ocp_solver.set(j, "yref", ref)
+        # terminal reference
+        self.acados_ocp_solver.set(self.horizon, "yref_e", ref[:24])
+
+    def solve_trajectory(
+        self,
+        initial_state: dict,
+        ref: np.ndarray,
+        contact_sequence: np.ndarray,
+    ) -> (np.ndarray, np.ndarray, np.ndarray, int):
+        """
+        Solves the trajectory optimization problem and returns the results.
+        """
+        self._set_initial_state(initial_state)
+        self._set_reference(ref)
 
         for j in range(self.horizon):
-            yref = np.zeros(ny)
-
-            # Reference for base states (12 elements)
-            yref[0:3] = reference["ref_position"]
-            yref[3:6] = reference["ref_linear_velocity"]
-            yref[6:9] = reference["ref_orientation"]
-            yref[9:12] = reference["ref_angular_velocity"]
-
-            # Reference for joint positions (12 elements)
-            yref[12:24] = reference["ref_joints"]
-
-            # Reference for inputs (12 joint velocities + 12 GRFs)
-            # The default reference is zero for inputs.
-
-            self.acados_ocp_solver.set(j, "yref", yref)
-
             # Define lower and upper bounds for inputs (joint velocities, GRFs)
             lbu = np.array([-1e6] * self.inputs_dim)
             ubu = np.array([1e6] * self.inputs_dim)
@@ -315,25 +300,12 @@ class HoppingMPC:
             param_values[0:4] = contact_sequence[:, j]
             self.acados_ocp_solver.set(j, "p", param_values)
 
-        # --- FIX 7: Set final step reference to match new terminal dimension ---
-        # The terminal cost expression is now size 24.
-        ny_e = 12 + 12
-        yref_e = np.zeros(ny_e)
-
-        # Reference for final base states (12 elements)
-        yref_e[0:3] = reference["ref_position"]
-        yref_e[3:6] = reference["ref_linear_velocity"]
-        yref_e[6:9] = reference["ref_orientation"]
-        yref_e[9:12] = reference["ref_angular_velocity"]
-
-        # Reference for final joint positions (12 elements)
-        yref_e[12:24] = reference["ref_joints"]
-
-        self.acados_ocp_solver.set(self.horizon, "yref", yref_e)
-
         # Solve the optimization problem
         status = self.acados_ocp_solver.solve()
+        state_traj, grf_traj, joint_vel_traj = self._extract_trajectory()
+        return state_traj, grf_traj, joint_vel_traj, status
 
+    def _extract_trajectory(self):
         # Extract the full trajectory
         state_traj = np.zeros((self.horizon + 1, self.states_dim))
         inputs_traj = np.zeros((self.horizon, self.inputs_dim))
@@ -347,4 +319,4 @@ class HoppingMPC:
         joint_vel_traj = inputs_traj[:, 0:12]
         grf_traj = inputs_traj[:, 12:24]
 
-        return state_traj, grf_traj, joint_vel_traj, status
+        return state_traj, grf_traj, joint_vel_traj

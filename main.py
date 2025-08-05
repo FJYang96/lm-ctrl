@@ -1,95 +1,118 @@
-# Description: This script orchestrates a two-stage, decoupled approach for
-# generating a hopping trajectory using the new `HoppingMPC` class for
-# trajectory optimization and a helper function for inverse dynamics.
-
 import numpy as np
+from gym_quadruped.quadruped_env import QuadrupedEnv
+from tqdm import tqdm
 
 import config
 from examples.model import KinoDynamic_Model
-
-# Import the new HoppingMPC class
 from examples.mpc import HoppingMPC
-
-# Import the inverse dynamics helper
-from examples.util import compute_joint_torques
+from utils.inv_dyn import compute_joint_torques
 
 
-def main():
-    # Define a hopping gait by its duration and discretization step
-    T = 2.0  # total duration in seconds
-    dt = 0.1  # time step in seconds
-    horizon = int(T / dt)
+def color_print(text):
+    print("\033[1m\033[38;5;208m" + text + "\033[0m")
 
-    stance_duration = 0.4  # seconds
-    flight_duration = 0.5  # seconds
 
-    steps_per_phase = int(stance_duration / dt)
+# ----------------------------------------------------------------------------------------------------------------
+# STAGE 0: Create the model and the simulation environment
+# ----------------------------------------------------------------------------------------------------------------
+color_print("--- Stage 0: Creating the model and the simulation environment ---")
 
-    # Create a contact sequence for a hop based on T and dt
-    contact_sequence = np.ones((4, horizon))
-    contact_sequence[
-        :, steps_per_phase : steps_per_phase + int(flight_duration / dt)
-    ] = 0.0
+# create the model and MPC
+kinodynamic_model = KinoDynamic_Model(config)
+mpc = HoppingMPC(model=kinodynamic_model, config=config)
 
-    # --- STAGE 1: Trajectory Optimization using HoppingMPC ---
-    print("--- Stage 1: Solving Kinodynamic Trajectory Optimization ---")
+env = QuadrupedEnv(
+    robot=config.robot,
+    scene="flat",
+    ground_friction_coeff=config.sim_params[
+        "ground_friction_coeff"
+    ],  # pass a float for a fixed value
+    # state_obs_names=...,  # Desired quantities in the 'state', see ALL_OBS in quadruped_env.py
+    sim_dt=config.sim_params["sim_dt"],
+)
 
-    # Initialize the new HoppingMPC class with T and dt
-    mpc = HoppingMPC(T=T, dt=dt, config=config)
+# ----------------------------------------------------------------------------------------------------------------
+# STAGE 1: Trajectory Optimization using HoppingMPC
+# ----------------------------------------------------------------------------------------------------------------
+color_print("--- Stage 1: Solving Kinodynamic Trajectory Optimization ---")
+# # Set up the initial state and reference for the hopping motion
+initial_state = {
+    "position": config.initial_qpos[0:3],
+    "linear_velocity": np.zeros(3),
+    "orientation": np.zeros(3),
+    "angular_velocity": np.zeros(3),
+    "joint_FL": config.initial_qpos[7:10],
+    "joint_FR": config.initial_qpos[10:13],
+    "joint_RL": config.initial_qpos[13:16],
+    "joint_RR": config.initial_qpos[16:19],
+}
 
-    # Set up the initial state and reference for the hopping motion
-    initial_state = {
-        "position": np.array([0.0, 0.0, 0.5]),
-        "linear_velocity": np.array([0.0, 0.0, 0.0]),
-        "orientation": np.array([0.0, 0.0, 0.0]),
-        "angular_velocity": np.array([0.0, 0.0, 0.0]),
-        "joint_FL": np.zeros(3),
-        "joint_FR": np.zeros(3),
-        "joint_RL": np.zeros(3),
-        "joint_RR": np.zeros(3),
-    }
-
-    reference = {
-        "ref_position": np.array([0.5, 0.0, 0.5]),
-        "ref_linear_velocity": np.array([0.5, 0.0, 0.0]),
-        "ref_orientation": np.zeros(3),
-        "ref_angular_velocity": np.zeros(3),
-        "ref_joints": np.zeros(12),
-    }
-
-    state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
-        initial_state, reference, contact_sequence
+reference = {
+    "ref_position": np.array([0.5, 0.0, 0.5]),
+    "ref_linear_velocity": np.array([0.5, 0.0, 0.0]),
+    "ref_orientation": np.zeros(3),
+    "ref_angular_velocity": np.zeros(3),
+    "ref_joints": np.zeros(12),
+}
+ref = np.concatenate(
+    (
+        reference["ref_position"],
+        reference["ref_linear_velocity"],
+        reference["ref_orientation"],
+        reference["ref_angular_velocity"],
+        reference["ref_joints"],
     )
+)
 
-    if status != 0:
-        print(f"Optimization failed with status: {status}")
-        return
+state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
+    initial_state, ref, config.contact_sequence
+)
 
-    print("Optimization successful. Extracted trajectory of states and GRFs.")
-    np.save("results/state_traj.npy", state_traj)
-    np.save("results/grf_traj.npy", grf_traj)
-    np.save("results/contact_sequence.npy", contact_sequence)
+if status != 0:
+    print(f"Optimization failed with status: {status}")
+    exit(1)
 
-    state_traj = np.load("results/state_traj.npy")
-    grf_traj = np.load("results/grf_traj.npy")
-    contact_sequence = np.load("results/contact_sequence.npy")
+print("Optimization successful. Extracted trajectory of states and GRFs.")
+np.save("results/state_traj.npy", state_traj)
+np.save("results/grf_traj.npy", grf_traj)
+np.save("results/contact_sequence.npy", config.contact_sequence)
 
-    # --- STAGE 2: Inverse Dynamics to find Joint Torques ---
-    print("\n--- Stage 2: Computing Joint Torques via Inverse Dynamics ---")
+# ----------------------------------------------------------------------------------------------------------------
+# STAGE 2: Inverse Dynamics to find Joint Torques
+# ----------------------------------------------------------------------------------------------------------------
+color_print("--- Stage 2: Computing Joint Torques via Inverse Dynamics ---")
+state_traj = np.load("results/state_traj.npy")
+grf_traj = np.load("results/grf_traj.npy")
+contact_sequence = np.load("results/contact_sequence.npy")
 
-    # We create an instance of your original model to access its internal
-    # `kindyn` object.
-    kinodynamic_model = KinoDynamic_Model(config)
+joint_torques_traj = compute_joint_torques(
+    kinodynamic_model, state_traj, grf_traj, config.contact_sequence, config.mpc_dt
+)
 
-    print(
-        f"state_traj: {state_traj.shape}, grf_traj: {grf_traj.shape}, contact_sequence: {contact_sequence.shape}, dt: {dt}"
-    )
-    joint_torques_traj = compute_joint_torques(
-        kinodynamic_model, state_traj, grf_traj, contact_sequence, dt
-    )
+np.save("results/joint_torques_traj.npy", joint_torques_traj)
 
-    np.save("results/joint_torques_traj.npy", joint_torques_traj)
+# ----------------------------------------------------------------------------------------------------------------
+# STAGE 3: Simulate the trajectory
+# ----------------------------------------------------------------------------------------------------------------
+color_print("--- Stage 3: Simulating the trajectory ---")
+# simulate the trajectory
+env.reset(qpos=config.initial_qpos, qvel=config.initial_qvel)
+images = []
+sim_times, render_times = [], []
+action_index = 0
+for i in tqdm(range(int(config.duration / config.sim_dt))):
+    import imageio
 
+    # Step forward in the simulation
+    action = joint_torques_traj[action_index, :]
+    if (i + 1) % int(config.mpc_dt / config.sim_dt) == 0:
+        action_index += 1
+    state, reward, is_terminated, is_truncated, info = env.step(action=action)
 
-if __name__ == "__main__":
-    main()
+    # Render the environment into an image
+    image = env.render(mode="rgb_array", tint_robot=True)
+    images.append(image)
+
+fps = 1 / config.sim_dt
+imageio.mimsave("results/trajectory.mp4", images, fps=fps)
+env.close()

@@ -9,10 +9,9 @@ import casadi as cs
 import gym_quadruped
 import numpy as np
 from acados_template import AcadosModel
+from liecasadi import SO3
 
 gym_quadruped_path = os.path.dirname(gym_quadruped.__file__)
-
-from liecasadi import SO3
 
 use_adam = True
 use_fixed_inertia = True
