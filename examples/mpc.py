@@ -364,9 +364,11 @@ class HoppingMPC:
             for i in range(4):
                 if contact_sequence[i, t] == 1:
                     lb_foot_height[t, i] = 0
-                    ub_foot_height[t, i] = EPS
+                    # DEBUG: deactivate this height constraint
+                    # ub_foot_height[t, i] = EPS
+                    ub_foot_height[t, i] = 0.1
                 else:
-                    lb_foot_height[t, i] = 0.5 * EPS
+                    lb_foot_height[t, i] = 0.0
                     ub_foot_height[t, i] = 1e6
         return lb_foot_height, ub_foot_height
 
@@ -384,8 +386,11 @@ class HoppingMPC:
         for t in range(self.horizon):
             for i in range(4):
                 if contact_sequence[i, t] == 1:
-                    lb_foot_velocity[t, i * 3 : (i + 1) * 3] = 0
-                    ub_foot_velocity[t, i * 3 : (i + 1) * 3] = 0
+                    # DEBUG: deactivate this velocity constraint
+                    # lb_foot_velocity[t, i * 3 : (i + 1) * 3] = 0
+                    # ub_foot_velocity[t, i * 3 : (i + 1) * 3] = 0
+                    lb_foot_velocity[t, i * 3 : (i + 1) * 3] = -1.0
+                    ub_foot_velocity[t, i * 3 : (i + 1) * 3] = 1.0
                 else:
                     lb_foot_velocity[t, i * 3 : (i + 1) * 3] = -1e3
                     ub_foot_velocity[t, i * 3 : (i + 1) * 3] = 1e3
@@ -395,13 +400,13 @@ class HoppingMPC:
         """
         Computes the bounds of the friction cone constraints for the OCP.
         """
-        lb_friction_cone = self.lb_friction_cone.copy()
-        ub_friction_cone = self.ub_friction_cone.copy()
+        lb_friction_cone = np.tile(self.lb_friction_cone, (self.horizon, 1))
+        ub_friction_cone = np.tile(self.ub_friction_cone, (self.horizon, 1))
         for t in range(self.horizon):
             for i in range(4):
-                if contact_sequence[i, t] == 1:
-                    lb_friction_cone[i * 5 : (i + 1) * 5] = -1e6
-                    ub_friction_cone[i * 5 : (i + 1) * 5] = 1e6
+                if contact_sequence[i, t] == 0:
+                    lb_friction_cone[t, i * 5 : (i + 1) * 5] = -1e6
+                    ub_friction_cone[t, i * 5 : (i + 1) * 5] = 1e6
         return lb_friction_cone, ub_friction_cone
 
     def _set_constraints(self, contact_sequence: np.ndarray) -> None:
@@ -417,20 +422,16 @@ class HoppingMPC:
         lb_friction_cone, ub_friction_cone = self._compute_friction_cone_constraints(
             contact_sequence
         )
+        lh = np.hstack((lb_friction_cone, lb_foot_height, lb_foot_velocity))
+        uh = np.hstack((ub_friction_cone, ub_foot_height, ub_foot_velocity))
 
         # Finally, also add an actuation limit constraint
         lbu = np.concatenate((np.ones(12) * -1e2, np.ones(12) * -1e2))
         ubu = np.concatenate((np.ones(12) * 1e2, np.ones(12) * 1e2))
 
         for t in range(1, self.horizon):
-            lh = np.hstack(
-                (lb_friction_cone, lb_foot_height[t, :], lb_foot_velocity[t, :])
-            )
-            uh = np.hstack(
-                (ub_friction_cone, ub_foot_height[t, :], ub_foot_velocity[t, :])
-            )
-            self.acados_ocp_solver.constraints_set(t, "lh", lh)
-            self.acados_ocp_solver.constraints_set(t, "uh", uh)
+            self.acados_ocp_solver.constraints_set(t, "lh", lh[t, :])
+            self.acados_ocp_solver.constraints_set(t, "uh", uh[t, :])
             self.acados_ocp_solver.set(t, "lbu", lbu)
             self.acados_ocp_solver.set(t, "ubu", ubu)
 

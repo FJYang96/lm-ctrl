@@ -100,20 +100,20 @@ mpc_params = {
     "integrator_type": "ERK",  # "IRK", "ERK"
     "use_RTI": False,  # use RTI
     "nlp_solver_type": "SQP",  # "SQP", "SQP_RTI"
-    "nlp_solver_max_iter": 1000,  # number of iterations
+    "nlp_solver_max_iter": 5000,  # number of iterations
     "compile_dir": str(pathlib.Path(__file__).parent / "c_generated_code"),
-    "q_base": np.eye(12) * 1e-7,
-    "q_joint": np.eye(12) * 1e-7,
-    "r_joint_vel": np.eye(12) * 1e-6,
-    "r_forces": np.eye(12) * 1e-8,
+    "q_base": np.eye(12) * 0.0,
+    "q_joint": np.eye(12) * 0.0,
+    "r_joint_vel": np.eye(12) * 1e-3,
+    "r_forces": np.eye(12) * 1e-4,
     "q_terminal_base": np.eye(12) * 1e-1,
     "q_terminal_joint": np.eye(12) * 1e-1,
-    # --- Below not used for now ---
-    "use_integrators": False,  # use integrators
-    "use_warm_start": False,  # use warm start
     "grf_max": 500,  # maximum ground reaction force
     "grf_min": 0,  # minimum ground reaction force
     "mu": 0.5,  # friction coefficient
+    # --- Below not used for now ---
+    "use_integrators": False,  # use integrators
+    "use_warm_start": False,  # use warm start
     "external_wrenches_compensation": False,
     "use_nonuniform_discretization": False,
     "external_wrenches_compensation_num_step": 0,
@@ -141,8 +141,8 @@ sim_params = {
 # ----------------------------------------------------------------------------------------------------------------
 # Define the gait / contact sequence
 # ----------------------------------------------------------------------------------------------------------------
-stance_duration = 0.2  # seconds
-flight_duration = 0.8  # seconds
+stance_duration = 0.5  # seconds
+flight_duration = 0.3  # seconds
 steps_per_phase = int(stance_duration / mpc_dt)
 contact_sequence = np.ones((4, mpc_params["horizon"]))
 contact_sequence[

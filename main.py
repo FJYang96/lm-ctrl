@@ -10,18 +10,26 @@ from utils.inv_dyn import compute_joint_torques
 from utils.visualization import render_planned_trajectory
 
 
-def color_print(text):
+def print_orange(text):
     print("\033[1m\033[38;5;208m" + text + "\033[0m")
+
+
+def print_red(text):
+    print("\033[1m\033[38;5;196m" + text + "\033[0m")
+
+
+def print_green(text):
+    print("\033[1m\033[38;5;46m" + text + "\033[0m")
 
 
 # ----------------------------------------------------------------------------------------------------------------
 # STAGE 0: Create the model and the simulation environment
 # ----------------------------------------------------------------------------------------------------------------
-color_print("--- Stage 0: Creating the model and the simulation environment ---")
+print_orange("--- Stage 0: Creating the model and the simulation environment ---")
 
 # create the model and MPC
 kinodynamic_model = KinoDynamic_Model(config)
-mpc = HoppingMPC(model=kinodynamic_model, config=config, build=False)
+mpc = HoppingMPC(model=kinodynamic_model, config=config, build=True)
 
 env = QuadrupedEnv(
     robot=config.robot,
@@ -36,7 +44,7 @@ env = QuadrupedEnv(
 # ----------------------------------------------------------------------------------------------------------------
 # STAGE 1: Trajectory Optimization using HoppingMPC
 # ----------------------------------------------------------------------------------------------------------------
-color_print("--- Stage 1: Solving Kinodynamic Trajectory Optimization ---")
+print_orange("--- Stage 1: Solving Kinodynamic Trajectory Optimization ---")
 
 # Set up the initial state and reference for the hopping motion
 initial_state = {
@@ -73,10 +81,9 @@ state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
 )
 
 if status != 0:
-    print(f"Optimization failed with status: {status}")
-    exit(1)
-
-print("Optimization successful. Extracted trajectory of states and GRFs.")
+    print_red(f"Optimization failed with status: {status}")
+else:
+    print_green("Optimization successful. Extracted trajectory of states and GRFs.")
 np.save("results/state_traj.npy", state_traj)
 np.save("results/joint_vel_traj.npy", joint_vel_traj)
 np.save("results/grf_traj.npy", grf_traj)
@@ -94,7 +101,7 @@ imageio.mimsave("results/planned_traj.mp4", planned_traj_images, fps=1 / config.
 # ----------------------------------------------------------------------------------------------------------------
 # STAGE 2: Inverse Dynamics to find Joint Torques
 # ----------------------------------------------------------------------------------------------------------------
-color_print("--- Stage 2: Computing Joint Torques via Inverse Dynamics ---")
+print_orange("--- Stage 2: Computing Joint Torques via Inverse Dynamics ---")
 
 joint_torques_traj = compute_joint_torques(
     kinodynamic_model, state_traj, grf_traj, config.contact_sequence, config.mpc_dt
@@ -104,7 +111,7 @@ np.save("results/joint_torques_traj.npy", joint_torques_traj)
 # ----------------------------------------------------------------------------------------------------------------
 # STAGE 3: Simulate the trajectory
 # ----------------------------------------------------------------------------------------------------------------
-color_print("--- Stage 3: Simulating the trajectory ---")
+print_orange("--- Stage 3: Simulating the trajectory ---")
 # simulate the trajectory
 env.reset(qpos=config.initial_qpos, qvel=config.initial_qvel)
 images = []
