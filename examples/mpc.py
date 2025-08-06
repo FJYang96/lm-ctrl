@@ -9,7 +9,7 @@ from .model import KinoDynamic_Model
 
 # New class for the hopping MPC, designed for a single trajectory optimization
 class HoppingMPC:
-    def __init__(self, model: KinoDynamic_Model, config):
+    def __init__(self, model: KinoDynamic_Model, config, build=True):
         """
         Initializes and compiles the hopping MPC solver.
         """
@@ -24,7 +24,7 @@ class HoppingMPC:
 
         # Create the acados ocp solver
         self.ocp = self._create_ocp_solver_description(acados_model)
-        self._compile_and_initialize_solver()
+        self._compile_and_initialize_solver(build)
 
     def _create_ocp_solver_description(self, acados_model) -> AcadosOcp:
         """
@@ -50,14 +50,41 @@ class HoppingMPC:
             self.config.mpc_params["q_terminal_joint"],
         )
 
-        # Setup the form of the state constraint
+        # Setup nonlinear constraints (total dimension: 20 + 4 + 12 = 36)
+        self.nh = 36
+        h_friction_cone, self.lb_friction_cone, self.ub_friction_cone = (
+            self._friction_cone_constraints_expr(
+                ocp,
+                self.config.mpc_params["mu"],
+                self.config.mpc_params["grf_min"],
+                self.config.mpc_params["grf_max"],
+            )
+        )
+        h_foot_height, lb_foot_height, ub_foot_height = (
+            self._foot_height_constraints_expr(ocp)
+        )
+        h_foot_velocity, lb_foot_velocity, ub_foot_velocity = (
+            self._foot_velocity_constraints_expr(ocp)
+        )
+
+        ocp.model.con_h_expr = cs.vertcat(
+            h_friction_cone, h_foot_height, h_foot_velocity
+        )
+        ocp.constraints.lh = np.concatenate(
+            (self.lb_friction_cone, lb_foot_height, lb_foot_velocity)
+        )
+        ocp.constraints.uh = np.concatenate(
+            (self.ub_friction_cone, ub_foot_height, ub_foot_velocity)
+        )
+
+        # Setup the state and input box constraints
         ocp.constraints.x0 = np.zeros(self.states_dim)
         ocp.constraints.idxbu = np.arange(self.inputs_dim)
         ocp.constraints.lbu = np.array([-1e6] * self.inputs_dim)
         ocp.constraints.ubu = np.array([1e6] * self.inputs_dim)
 
-        # TODO: why are the base position and yaw not updated?
         # Set the default parameter values (will take these values unless updated)
+        # most of these are not used in our case, but we need to set them to something
         init_contact_status = np.array([1.0, 1.0, 1.0, 1.0])
         init_mu = np.array([self.config.mpc_params["mu"]])
         init_stance_proximity = np.array([0, 0, 0, 0])
@@ -154,7 +181,111 @@ class HoppingMPC:
         ocp.cost.yref = np.zeros(ny)
         ocp.cost.yref_e = np.zeros(ny_e)
 
-    def _compile_and_initialize_solver(self):
+    def _friction_cone_constraints_expr(
+        self, ocp: AcadosOcp, mu: float, f_min: float, f_max: float
+    ) -> (cs.SX, np.ndarray, np.ndarray):
+        """
+        Computes the friction cone constraints. Dimension: 20
+        Adapted from the original centroidal NMPC problem
+        """
+        n = np.array([0, 0, 1])
+        t = np.array([1, 0, 0])
+        b = np.array([0, 1, 0])
+
+        # Friction cone constraint patterns for each foot
+        friction_cone_patterns = np.array(
+            [
+                -n * mu + t,  # Row 0: -μn + t
+                -n * mu + b,  # Row 1: -μn + b
+                n * mu + b,  # Row 2: μn + b
+                n * mu + t,  # Row 3: μn + t
+                n,  # Row 4: n
+            ]
+        )
+
+        # Create the full constraint matrix using block structure
+        Jbu = cs.SX.zeros(20, 12)
+        for foot_idx in range(4):  # 4 feet
+            row_start = foot_idx * 5
+            col_start = foot_idx * 3
+            for pattern_idx in range(5):  # 5 constraints per foot
+                Jbu[row_start + pattern_idx, col_start : col_start + 3] = (
+                    friction_cone_patterns[pattern_idx]
+                )
+        Jbu = Jbu @ cs.vertcat(self.kindyn_model.inputs[12:24])
+
+        lbu = np.array([-1e6, -1e6, 0, 0, f_min] * 4)
+        ubu = np.array([0, 0, 1e6, 1e6, f_max] * 4)
+        return Jbu, lbu, ubu
+
+    def _foot_height_constraints_expr(
+        self, ocp: AcadosOcp
+    ) -> (cs.SX, np.ndarray, np.ndarray):
+        """
+        Computes the height of the feet. Dimension: 4
+        """
+        foot_height_FL = self.kindyn_model.foot_position_fl[2]
+        foot_height_FR = self.kindyn_model.foot_position_fr[2]
+        foot_height_RL = self.kindyn_model.foot_position_rl[2]
+        foot_height_RR = self.kindyn_model.foot_position_rr[2]
+        return (
+            cs.vertcat(foot_height_FL, foot_height_FR, foot_height_RL, foot_height_RR),
+            np.zeros(4),
+            np.ones(4) * 1e6,
+        )
+
+    def _foot_velocity_constraints_expr(
+        self, ocp: AcadosOcp
+    ) -> (cs.SX, np.ndarray, np.ndarray):
+        """
+        Computes the velocity of the footholds. Dimension: 12
+        """
+        qvel_joints_FL = self.kindyn_model.inputs[0:3]
+        qvel_joints_FR = self.kindyn_model.inputs[3:6]
+        qvel_joints_RL = self.kindyn_model.inputs[6:9]
+        qvel_joints_RR = self.kindyn_model.inputs[9:12]
+
+        joint_position = self.kindyn_model.states[12:24]
+        com_position = self.kindyn_model.states[0:3]
+        com_velocity = self.kindyn_model.states[3:6]
+        com_angular_velocity = self.kindyn_model.states[9:12]
+        roll = self.kindyn_model.states[6]
+        pitch = self.kindyn_model.states[7]
+        yaw = self.kindyn_model.states[8]
+        b_R_w = self.kindyn_model.compute_b_R_w(roll, pitch, yaw)
+        H = cs.SX.eye(4)
+        H[0:3, 0:3] = b_R_w.T
+        H[0:3, 3] = com_position
+
+        qvel = cs.vertcat(
+            com_velocity,
+            com_angular_velocity,
+            qvel_joints_FL,
+            qvel_joints_FR,
+            qvel_joints_RL,
+            qvel_joints_RR,
+        )
+
+        foot_vel_FL = (
+            self.kindyn_model.jacobian_FL_fun(H, joint_position)[0:3, :] @ qvel
+        )  # qvel_FL
+        foot_vel_FR = (
+            self.kindyn_model.jacobian_FR_fun(H, joint_position)[0:3, :] @ qvel
+        )  # qvel_FR
+        foot_vel_RL = (
+            self.kindyn_model.jacobian_RL_fun(H, joint_position)[0:3, :] @ qvel
+        )  # qvel_RL
+        foot_vel_RR = (
+            self.kindyn_model.jacobian_RR_fun(H, joint_position)[0:3, :] @ qvel
+        )  # qvel_RR
+
+        return (
+            cs.vertcat(foot_vel_FL, foot_vel_FR, foot_vel_RL, foot_vel_RR),
+            -np.ones(12) * 1e6,
+            np.ones(12) * 1e6,
+        )
+
+    def _compile_and_initialize_solver(self, build=True):
         """
         Compiles the solver and initializes the decision variables with zeros.
         """
@@ -164,7 +295,11 @@ class HoppingMPC:
 
         # Compile the solver
         self.acados_ocp_solver = AcadosOcpSolver(
-            self.ocp, json_file=json_filename, verbose=False
+            self.ocp,
+            json_file=json_filename,
+            verbose=False,
+            build=build,
+            generate=build,
         )
 
         # Initialize the solutions with zeros
@@ -201,7 +336,103 @@ class HoppingMPC:
         for j in range(self.horizon):
             self.acados_ocp_solver.set(j, "yref", ref)
         # terminal reference
-        self.acados_ocp_solver.set(self.horizon, "yref_e", ref[:24])
+        self.acados_ocp_solver.set(self.horizon, "yref", ref[:24])
+
+    def _set_parameter_values(self, contact_sequence: np.ndarray) -> None:
+        """
+        Sets the parameter values for the OCP.
+        """
+        param_values = self.ocp.parameter_values.copy()
+        for j in range(self.horizon):
+            param_values[0:4] = contact_sequence[:, j]
+            self.acados_ocp_solver.set(j, "p", param_values)
+
+    def _compute_foot_height_constraints(
+        self, contact_sequence: np.ndarray, EPS: float = 1e-3
+    ) -> None:
+        """
+        Computes the bounds of the foot height constraints for the OCP.
+        If a foot is in stance, the height constraint is lb=0, ub=EPS.
+        If a foot is in swing, the height constraint is lb=EPS, ub=1e6.
+        Returns:
+            lb_foot_height: np.ndarray, shape (horizon, 4)
+            ub_foot_height: np.ndarray, shape (horizon, 4)
+        """
+        lb_foot_height = np.zeros((self.horizon, 4))
+        ub_foot_height = np.zeros((self.horizon, 4))
+        for t in range(self.horizon):
+            for i in range(4):
+                if contact_sequence[i, t] == 1:
+                    lb_foot_height[t, i] = 0
+                    ub_foot_height[t, i] = EPS
+                else:
+                    lb_foot_height[t, i] = 0.5 * EPS
+                    ub_foot_height[t, i] = 1e6
+        return lb_foot_height, ub_foot_height
+
+    def _compute_foot_velocity_constraints(self, contact_sequence: np.ndarray) -> None:
+        """
+        Computes the bounds of the foot velocity constraints for the OCP.
+        If a foot is in stance, the velocity constraint is lb=0, ub=0.
+        If a foot is in swing, the velocity constraint is lb=-1e3, ub=1e3.
+        Returns:
+            lb_foot_velocity: np.ndarray, shape (horizon, 12)
+            ub_foot_velocity: np.ndarray, shape (horizon, 12)
+        """
+        lb_foot_velocity = np.zeros((self.horizon, 12))
+        ub_foot_velocity = np.zeros((self.horizon, 12))
+        for t in range(self.horizon):
+            for i in range(4):
+                if contact_sequence[i, t] == 1:
+                    lb_foot_velocity[t, i * 3 : (i + 1) * 3] = 0
+                    ub_foot_velocity[t, i * 3 : (i + 1) * 3] = 0
+                else:
+                    lb_foot_velocity[t, i * 3 : (i + 1) * 3] = -1e3
+                    ub_foot_velocity[t, i * 3 : (i + 1) * 3] = 1e3
+        return lb_foot_velocity, ub_foot_velocity
+
+    def _compute_friction_cone_constraints(self, contact_sequence: np.ndarray) -> None:
+        """
+        Computes the bounds of the friction cone constraints for the OCP.
+        """
+        lb_friction_cone = self.lb_friction_cone.copy()
+        ub_friction_cone = self.ub_friction_cone.copy()
+        for t in range(self.horizon):
+            for i in range(4):
+                if contact_sequence[i, t] == 1:
+                    lb_friction_cone[i * 5 : (i + 1) * 5] = -1e6
+                    ub_friction_cone[i * 5 : (i + 1) * 5] = 1e6
+        return lb_friction_cone, ub_friction_cone
+
+    def _set_constraints(self, contact_sequence: np.ndarray) -> None:
+        """
+        Sets the constraints for the OCP.
+        """
+        lb_foot_height, ub_foot_height = self._compute_foot_height_constraints(
+            contact_sequence
+        )
+        lb_foot_velocity, ub_foot_velocity = self._compute_foot_velocity_constraints(
+            contact_sequence
+        )
+        lb_friction_cone, ub_friction_cone = self._compute_friction_cone_constraints(
+            contact_sequence
+        )
+
+        # Finally, also add an actuation limit constraint
+        lbu = np.concatenate((np.ones(12) * -1e2, np.ones(12) * -1e2))
+        ubu = np.concatenate((np.ones(12) * 1e2, np.ones(12) * 1e2))
+
+        for t in range(1, self.horizon):
+            lh = np.hstack(
+                (lb_friction_cone, lb_foot_height[t, :], lb_foot_velocity[t, :])
+            )
+            uh = np.hstack(
+                (ub_friction_cone, ub_foot_height[t, :], ub_foot_velocity[t, :])
+            )
+            self.acados_ocp_solver.constraints_set(t, "lh", lh)
+            self.acados_ocp_solver.constraints_set(t, "uh", uh)
+            self.acados_ocp_solver.set(t, "lbu", lbu)
+            self.acados_ocp_solver.set(t, "ubu", ubu)
 
     def solve_trajectory(
         self,
@@ -214,91 +445,8 @@ class HoppingMPC:
         """
         self._set_initial_state(initial_state)
         self._set_reference(ref)
-
-        for j in range(self.horizon):
-            # Define lower and upper bounds for inputs (joint velocities, GRFs)
-            lbu = np.array([-1e6] * self.inputs_dim)
-            ubu = np.array([1e6] * self.inputs_dim)
-
-            mpc_params = self.config.mpc_params
-            # Contact forces (stance phase)
-            if contact_sequence[0, j] == 1:  # FL foot is in stance
-                lbu[12:15] = [
-                    -mpc_params["mu"] * mpc_params["grf_max"],
-                    -mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["grf_min"],
-                ]
-                ubu[12:15] = [
-                    mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["grf_max"],
-                ]
-            else:  # FL foot is in flight
-                lbu[12:15] = [0.0, 0.0, 0.0]
-                ubu[12:15] = [0.0, 0.0, 0.0]
-
-            # Repeat for other feet
-            if contact_sequence[1, j] == 1:  # FR foot is in stance
-                lbu[15:18] = [
-                    -mpc_params["mu"] * mpc_params["grf_max"],
-                    -mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["grf_min"],
-                ]
-                ubu[15:18] = [
-                    mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["grf_max"],
-                ]
-            else:  # FR foot is in flight
-                lbu[15:18] = [0.0, 0.0, 0.0]
-                ubu[15:18] = [0.0, 0.0, 0.0]
-
-            if contact_sequence[2, j] == 1:  # RL foot is in stance
-                lbu[18:21] = [
-                    -mpc_params["mu"] * mpc_params["grf_max"],
-                    -mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["grf_min"],
-                ]
-                ubu[18:21] = [
-                    mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["grf_max"],
-                ]
-            else:  # RL foot is in flight
-                lbu[18:21] = [0.0, 0.0, 0.0]
-                ubu[18:21] = [0.0, 0.0, 0.0]
-
-            if contact_sequence[3, j] == 1:  # RR foot is in stance
-                lbu[21:24] = [
-                    -mpc_params["mu"] * mpc_params["grf_max"],
-                    -mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["grf_min"],
-                ]
-                ubu[21:24] = [
-                    mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["mu"] * mpc_params["grf_max"],
-                    mpc_params["grf_max"],
-                ]
-            else:  # RR foot is in flight
-                lbu[21:24] = [0.0, 0.0, 0.0]
-                ubu[21:24] = [0.0, 0.0, 0.0]
-
-            # In the stance phase, joint velocities must be close to zero.
-            if contact_sequence[:, j].any():
-                lbu[0:12] = [-1e-2] * 12
-                ubu[0:12] = [1e-2] * 12
-            else:  # In flight, joint velocities can be anything
-                lbu[0:12] = [-1e6] * 12
-                ubu[0:12] = [1e6] * 12
-
-            self.acados_ocp_solver.constraints_set(j, "lbu", lbu)
-            self.acados_ocp_solver.constraints_set(j, "ubu", ubu)
-
-            # --- FIX 6: Update the parameter values at each stage
-            # The `kinodynamic_nmpc` also updates parameters per stage.
-            param_values = self.ocp.parameter_values.copy()
-            param_values[0:4] = contact_sequence[:, j]
-            self.acados_ocp_solver.set(j, "p", param_values)
+        self._set_parameter_values(contact_sequence)
+        self._set_constraints(contact_sequence)
 
         # Solve the optimization problem
         status = self.acados_ocp_solver.solve()

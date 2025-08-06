@@ -100,10 +100,10 @@ mpc_params = {
     "integrator_type": "ERK",  # "IRK", "ERK"
     "use_RTI": False,  # use RTI
     "nlp_solver_type": "SQP",  # "SQP", "SQP_RTI"
-    "nlp_solver_max_iter": 100,  # number of iterations
+    "nlp_solver_max_iter": 1000,  # number of iterations
     "compile_dir": str(pathlib.Path(__file__).parent / "c_generated_code"),
-    "q_base": np.eye(12) * 1e-2,
-    "q_joint": np.eye(12) * 1e-2,
+    "q_base": np.eye(12) * 1e-7,
+    "q_joint": np.eye(12) * 1e-7,
     "r_joint_vel": np.eye(12) * 1e-6,
     "r_forces": np.eye(12) * 1e-8,
     "q_terminal_base": np.eye(12) * 1e-1,
@@ -141,8 +141,8 @@ sim_params = {
 # ----------------------------------------------------------------------------------------------------------------
 # Define the gait / contact sequence
 # ----------------------------------------------------------------------------------------------------------------
-stance_duration = 0.5  # seconds
-flight_duration = 0.3  # seconds
+stance_duration = 0.2  # seconds
+flight_duration = 0.8  # seconds
 steps_per_phase = int(stance_duration / mpc_dt)
 contact_sequence = np.ones((4, mpc_params["horizon"]))
 contact_sequence[
