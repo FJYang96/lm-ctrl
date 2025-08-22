@@ -40,8 +40,7 @@ Both versions generate:
 
 ### Docker Scripts
 - `run_opti.sh` - Run Opti version in Docker
-- `run_acados.sh` - Run original version in Docker  
-- `docker_shell.sh` - Interactive Docker shell
+- `run_acados.sh` - Run original version in Docker
 
 ## CasADi Opti Advantages
 
