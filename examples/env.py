@@ -1,7 +1,7 @@
 import time
 
 import numpy as np
-from gym_quadruped.quadruped_env import QuadrupedEnv
+from gym_quadruped import quadruped_env
 from tqdm import tqdm
 
 robot_name = "go2"  # 'b2', 'go1', 'go2', 'hyqreal', 'mini_cheetah', 'aliengo'
@@ -13,7 +13,7 @@ sim_duration = 2.0  # seconds
 # Create environment
 ################################################################################
 print(f"Testing robot {robot_name} on terrain {terrain_type}")
-env = QuadrupedEnv(
+env = quadruped_env.QuadrupedEnv(
     robot=robot_name,
     scene=terrain_type,
     ref_base_lin_vel=(0.5, 1.0),  # pass a float for a fixed value
@@ -67,7 +67,8 @@ for i in tqdm(range(int(sim_duration / sim_dt))):
 
     # Step forward in the simulation
     start_time = time.time()
-    action = env.action_space.sample() * 0  # Sample random action
+    # action = env.action_space.sample() * 0  # Sample random action
+    action = np.ones(12) * 1.1  # Sample random action
     state, reward, is_terminated, is_truncated, info = env.step(action=action)
     sim_times.append(time.time() - start_time)
 

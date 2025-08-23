@@ -91,6 +91,7 @@ elif robot == "mini_cheetah":
 
 
 gravity_constant = 9.81  # Exposed in case of different gravity conditions
+mu_friction = 0.5
 
 mpc_params = {
     "horizon": int(duration / mpc_dt),
@@ -110,7 +111,7 @@ mpc_params = {
     "q_terminal_joint": np.eye(12) * 1e-1,
     "grf_max": 500,  # maximum ground reaction force
     "grf_min": 0,  # minimum ground reaction force
-    "mu": 0.5,  # friction coefficient
+    "mu": mu_friction,  # friction coefficient
     # --- Below not used for now ---
     "use_integrators": False,  # use integrators
     "use_warm_start": False,  # use warm start
@@ -145,9 +146,9 @@ stance_duration = 0.5  # seconds
 flight_duration = 0.3  # seconds
 steps_per_phase = int(stance_duration / mpc_dt)
 contact_sequence = np.ones((4, mpc_params["horizon"]))
-contact_sequence[
-    :, steps_per_phase : steps_per_phase + int(flight_duration / mpc_dt)
-] = 0.0
+# contact_sequence[
+#     :, steps_per_phase : steps_per_phase + int(flight_duration / mpc_dt)
+# ] = 0.0
 
 # ----------------------------------------------------------------------------------------------------------------
 # Define the initial state

@@ -339,10 +339,10 @@ class KinoDynamic_Model:
         joint_position_rl = states[18:21]
         joint_position_rr = states[21:24]
 
-        stanceFL = param[0]
-        stanceFR = param[1]
-        stanceRL = param[2]
-        stanceRR = param[3]
+        stanceFL = param[0:1]
+        stanceFR = param[1:2]
+        stanceRL = param[2:3]
+        stanceRR = param[3:4]
 
         external_wrench_linear = param[13:16]
         external_wrench_angular = param[16:19]
@@ -408,7 +408,7 @@ class KinoDynamic_Model:
         temp += external_wrench_linear
         gravity = np.array([0, 0, -self.gravity_constant])
         mass = self.kindyn.get_total_mass()
-        linear_com_acc = (1 / mass) @ temp + gravity
+        linear_com_acc = (1 / mass) * temp + gravity.reshape((3, 1))
 
         # FINAL euler_rates_base STATE (3)
         temp2 = cs.skew(self.foot_position_fl - com_position) @ foot_force_fl @ stanceFL
