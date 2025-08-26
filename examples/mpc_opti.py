@@ -177,12 +177,35 @@ class HoppingMPCOpti:
             # Foot velocity constraints  
             self._add_foot_velocity_constraints(x_k, u_k, contact_k, k)
             
-            # Input bounds
-            self.opti.subject_to(self.opti.bounded(-1e2, u_k[0:12], 1e2))  # Joint velocities
-            self.opti.subject_to(self.opti.bounded(-1e2, u_k[12:24], 1e2))  # Forces
+            # Add joint limits to prevent broken configurations
+            joint_positions = x_k[12:24]  # 12 joint angles
+            
+            # Basic joint limits for Go2 robot (approximate)
+            # Hip: ±45°, Thigh: -90° to +90°, Calf: -150° to -30°
+            joint_limits_lower = np.array([
+                -0.8, -1.6, -2.6,  # FL: hip, thigh, calf
+                -0.8, -1.6, -2.6,  # FR
+                -0.8, -1.6, -2.6,  # RL  
+                -0.8, -1.6, -2.6,  # RR
+            ])
+            joint_limits_upper = np.array([
+                0.8, 1.6, -0.5,   # FL: hip, thigh, calf
+                0.8, 1.6, -0.5,   # FR
+                0.8, 1.6, -0.5,   # RL
+                0.8, 1.6, -0.5,   # RR  
+            ])
+            
+            # Apply joint limits
+            for joint_idx in range(12):
+                self.opti.subject_to(joint_positions[joint_idx] >= joint_limits_lower[joint_idx])
+                self.opti.subject_to(joint_positions[joint_idx] <= joint_limits_upper[joint_idx])
+            
+            # Input bounds (already there but let's make them more reasonable)
+            self.opti.subject_to(self.opti.bounded(-10, u_k[0:12], 10))  # Joint velocities (rad/s)
+            self.opti.subject_to(self.opti.bounded(-500, u_k[12:24], 500))  # Forces (N)
             
     def _add_friction_cone_constraints(self, u_k, contact_k, k):
-        """Add friction cone constraints for ground reaction forces."""
+        """Add friction cone constraints exactly like working Acados version."""
         # Extract forces for each foot
         forces = u_k[12:24]
         
@@ -192,37 +215,69 @@ class HoppingMPCOpti:
             f_z = forces[foot_idx * 3 + 2]
             contact_flag = contact_k[foot_idx]
             
-            # Normal force constraints (only when in contact)
+            # Key insight: The working version uses contact_sequence to DISABLE constraints
+            # When contact_flag = 0, ALL force constraints become [-1e6, 1e6] (no constraint)
+            # When contact_flag = 1, proper friction cone constraints are applied
+            
+            # Normal force constraints
             self.opti.subject_to(f_z >= 0)  # Always non-negative
-            self.opti.subject_to(f_z <= self.P_grf_max * contact_flag)
             
-            # For swing phase, forces should be zero
-            self.opti.subject_to(f_x <= 1000 * contact_flag)
-            self.opti.subject_to(f_x >= -1000 * contact_flag)
-            self.opti.subject_to(f_y <= 1000 * contact_flag)  
-            self.opti.subject_to(f_y >= -1000 * contact_flag)
-            self.opti.subject_to(f_z <= 1000 * contact_flag)
+            # Contact-dependent force bounds
+            # When in contact: proper bounds, when not in contact: very relaxed bounds
+            f_max = self.P_grf_max
+            large_bound = 1e6
             
-            # Friction cone constraints (linearized for stability)
-            # |f_tangential| <= mu * f_normal becomes:
-            # f_x <= mu * f_z, f_x >= -mu * f_z, f_y <= mu * f_z, f_y >= -mu * f_z
-            self.opti.subject_to(f_x <= self.P_mu * f_z + 1000 * (1 - contact_flag))
-            self.opti.subject_to(f_x >= -self.P_mu * f_z - 1000 * (1 - contact_flag))
-            self.opti.subject_to(f_y <= self.P_mu * f_z + 1000 * (1 - contact_flag))
-            self.opti.subject_to(f_y >= -self.P_mu * f_z - 1000 * (1 - contact_flag))
-                
+            # Apply bounds that become very loose when not in contact
+            self.opti.subject_to(f_x >= -large_bound * (1 - contact_flag) - f_max * contact_flag)
+            self.opti.subject_to(f_x <= large_bound * (1 - contact_flag) + f_max * contact_flag)
+            self.opti.subject_to(f_y >= -large_bound * (1 - contact_flag) - f_max * contact_flag)
+            self.opti.subject_to(f_y <= large_bound * (1 - contact_flag) + f_max * contact_flag)
+            self.opti.subject_to(f_z <= large_bound * (1 - contact_flag) + f_max * contact_flag)
+            
+            # Friction cone constraints (only meaningful when in contact)
+            mu_term = self.P_mu * f_z
+            relaxation = large_bound * (1 - contact_flag)
+            
+            self.opti.subject_to(f_x <= mu_term + relaxation)
+            self.opti.subject_to(f_x >= -mu_term - relaxation)
+            self.opti.subject_to(f_y <= mu_term + relaxation)
+            self.opti.subject_to(f_y >= -mu_term - relaxation)
+            
     def _add_foot_height_constraints(self, x_k, contact_k, k):
-        """Add foot height constraints - simplified version for now."""
-        # For now, skip foot height constraints that require complex forward kinematics
-        # TODO: Implement proper foot height constraints with MX-compatible forward kinematics
-        pass
+        """Add very basic foot height constraints."""
+        # For debugging: only apply the most basic ground penetration constraint
+        # Extract components for forward kinematics
+        com_position = x_k[0:3]
+        roll = x_k[6]
+        pitch = x_k[7] 
+        yaw = x_k[8]
+        joint_positions = x_k[12:24]
+        
+        # Create homogeneous transformation matrix
+        from liecasadi import SO3
+        w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
+        b_R_w = w_R_b.T
+        H = cs.MX.eye(4)
+        H[0:3, 0:3] = b_R_w.T
+        H[0:3, 3] = com_position
+        
+        # Compute foot heights
+        foot_height_fl = self.kindyn_model.forward_kinematics_FL_fun(H, joint_positions)[2, 3]
+        foot_height_fr = self.kindyn_model.forward_kinematics_FR_fun(H, joint_positions)[2, 3]
+        foot_height_rl = self.kindyn_model.forward_kinematics_RL_fun(H, joint_positions)[2, 3]
+        foot_height_rr = self.kindyn_model.forward_kinematics_RR_fun(H, joint_positions)[2, 3]
+        
+        foot_heights = [foot_height_fl, foot_height_fr, foot_height_rl, foot_height_rr]
+        
+        # Only prevent severe ground penetration, no upper bounds for now
+        for foot_idx in range(4):
+            self.opti.subject_to(foot_heights[foot_idx] >= -0.05)  # Allow some penetration for numerical stability
             
     def _add_foot_velocity_constraints(self, x_k, u_k, contact_k, k):
-        """Add foot velocity constraints - simplified version."""
-        # For now, skip complex foot velocity constraints
-        # TODO: Implement proper foot velocity constraints with Jacobians
+        """Disable foot velocity constraints for debugging."""
+        # Completely disable velocity constraints to isolate the issue
         pass
-            
+
     def _setup_solver(self):
         """Setup the solver options."""
         # Use IPOPT solver with valid settings
@@ -278,23 +333,32 @@ class HoppingMPCOpti:
         self.opti.set_value(self.P_mass, self.config.mass)
         self.opti.set_value(self.P_inertia, self.config.inertia.flatten())
         
-        # Better initial guess
-        # States: initialize with initial state repeated
+        # Better initial guess for joint positions
+        # Start with the initial configuration and keep it reasonable
         X_init = np.zeros((self.states_dim, self.horizon + 1))
         for i in range(self.horizon + 1):
-            X_init[:, i] = state_acados
+            X_init[:, i] = state_acados.copy()
+            # Ensure joint angles stay in reasonable ranges
+            X_init[12:24, i] = state_acados[12:24]  # Keep initial joint configuration
+            
         self.opti.set_initial(self.X, X_init)
         
-        # Inputs: reasonable initial guess for forces and velocities
+        # Better initial guess for inputs
         U_init = np.zeros((self.inputs_dim, self.horizon))
         for i in range(self.horizon):
-            # Small joint velocities (deterministic)
-            U_init[0:12, i] = 0.01 * np.sin(np.arange(12) * 0.1)
-            # Gravity compensation forces for stance feet
+            # Very small joint velocities
+            U_init[0:12, i] = 0.001 * np.sin(np.arange(12) * 0.1)  # Much smaller velocities
+            
+            # Gravity compensation forces for stance feet (more conservative)
             contact_i = contact_sequence[:, i] if i < contact_sequence.shape[1] else contact_sequence[:, -1]
             for foot in range(4):
                 if contact_i[foot] > 0.5:  # In stance
-                    U_init[12 + foot*3 + 2, i] = self.config.mass * 9.81 / 4  # Share weight
+                    # More conservative force distribution
+                    U_init[12 + foot*3 + 2, i] = self.config.mass * 9.81 / 4 * 0.8  # 80% of weight
+                else:
+                    # No forces during flight
+                    U_init[12 + foot*3:12 + foot*3 + 3, i] = 0.0
+                    
         self.opti.set_initial(self.U, U_init)
         
         try:
