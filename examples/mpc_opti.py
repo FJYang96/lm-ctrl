@@ -2,6 +2,7 @@ import casadi as cs
 import numpy as np
 from liecasadi import SO3
 
+
 from .model import KinoDynamic_Model
 
 
@@ -274,9 +275,63 @@ class HoppingMPCOpti:
             self.opti.subject_to(foot_heights[foot_idx] >= -0.05)  # Allow some penetration for numerical stability
             
     def _add_foot_velocity_constraints(self, x_k, u_k, contact_k, k):
-        """Disable foot velocity constraints for debugging."""
-        # Completely disable velocity constraints to isolate the issue
-        pass
+        com_position = x_k[0:3]
+        com_velocity = x_k[3:6] 
+        roll = x_k[6]
+        pitch = x_k[7]
+        yaw = x_k[8]
+        com_angular_velocity = x_k[9:12]
+        joint_positions = x_k[12:24]
+        
+     
+        qvel_joints_FL = u_k[0:3]
+        qvel_joints_FR = u_k[3:6]
+        qvel_joints_RL = u_k[6:9]
+        qvel_joints_RR = u_k[9:12]
+        
+        # Create homogeneous transformation matrix
+        w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
+        b_R_w = w_R_b.T
+        H = cs.MX.eye(4)
+        H[0:3, 0:3] = b_R_w.T
+        H[0:3, 3] = com_position
+        
+        qvel = cs.vertcat(
+            com_velocity,        
+            com_angular_velocity, 
+            qvel_joints_FL,      
+            qvel_joints_FR,      
+            qvel_joints_RL,      
+            qvel_joints_RR       
+        )
+        
+        foot_vel_FL = self.kindyn_model.jacobian_FL_fun(H, joint_positions)[0:3, :] @ qvel
+        foot_vel_FR = self.kindyn_model.jacobian_FR_fun(H, joint_positions)[0:3, :] @ qvel
+        foot_vel_RL = self.kindyn_model.jacobian_RL_fun(H, joint_positions)[0:3, :] @ qvel
+        foot_vel_RR = self.kindyn_model.jacobian_RR_fun(H, joint_positions)[0:3, :] @ qvel
+        
+        # Stack all foot velocities
+        foot_velocities = [foot_vel_FL, foot_vel_FR, foot_vel_RL, foot_vel_RR]
+        
+        # Apply velocity constraints based on contact status
+        large_bound = 1e3  
+        stance_tolerance = 1.0  
+        
+        for foot_idx in range(4):
+            contact_flag = contact_k[foot_idx]
+            foot_vel = foot_velocities[foot_idx]
+            
+            # For each axis (x, y, z) of foot velocity
+            for axis in range(3):
+                vel_component = foot_vel[axis]
+                # When in contact (contact_flag = 1): tight bounds [-1.0, 1.0]
+                # When in swing (contact_flag = 0): loose bounds [-1e3, 1e3]
+                
+                lower_bound = -stance_tolerance * contact_flag - large_bound * (1 - contact_flag)
+                upper_bound = stance_tolerance * contact_flag + large_bound * (1 - contact_flag)
+                
+                self.opti.subject_to(vel_component >= lower_bound)
+                self.opti.subject_to(vel_component <= upper_bound)
 
     def _setup_solver(self):
         """Setup the solver options."""
