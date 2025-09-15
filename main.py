@@ -73,8 +73,9 @@ def main():
         "joint_RR": config.initial_qpos[16:19],
     }
 
+    target_jump_height = 0.15  # Target 15cm jump height
     reference = {
-        "ref_position": config.initial_qpos[0:3] + np.array([0.1, 0.0, 0.0]),
+        "ref_position": config.initial_qpos[0:3] + np.array([0.1, 0.0, target_jump_height]),
         "ref_linear_velocity": np.array([0.0, 0.0, 0.0]),
         "ref_orientation": np.zeros(3),
         "ref_angular_velocity": np.zeros(3),
