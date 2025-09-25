@@ -1,5 +1,7 @@
 FROM ubuntu:jammy
 
+ARG TARGETARCH
+RUN echo "Building for architecture: $TARGETARCH"
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -21,7 +23,13 @@ RUN apt install -y libosmesa6 libosmesa6-dev
 # Install Miniforge
 RUN apt-get update && \
     apt-get install -y wget bzip2 ca-certificates libglib2.0-0 libxext6 libsm6 libxrender1 git && \
-    wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh -O /tmp/miniforge.sh && \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+        wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh -O /tmp/miniforge.sh; \
+    else \
+        echo "Unsupported architecture: $TARGETARCH" && exit 1; \
+    fi && \
     bash /tmp/miniforge.sh -b -p $CONDA_DIR && \
     rm /tmp/miniforge.sh && \
     conda init bash && \
@@ -48,9 +56,11 @@ RUN echo 'export ACADOS_SOURCE_DIR="/Quadruped-PyMPC/quadruped_pympc/acados"' >>
 RUN cd Quadruped-PyMPC && pip install -e .
 
 # Pre-install the correct ARM64 Tera renderer to avoid runtime architecture issues
-RUN mkdir -p /Quadruped-PyMPC/quadruped_pympc/acados/bin && \
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+    mkdir -p /Quadruped-PyMPC/quadruped_pympc/acados/bin && \
     wget https://github.com/acados/tera_renderer/releases/download/v0.2.0/t_renderer-v0.2.0-linux-arm64 -O /Quadruped-PyMPC/quadruped_pympc/acados/bin/t_renderer && \
-    chmod +x /Quadruped-PyMPC/quadruped_pympc/acados/bin/t_renderer
+    chmod +x /Quadruped-PyMPC/quadruped_pympc/acados/bin/t_renderer; \
+fi
 
 # Set the shell to bash and configure the shell prompt and aliases
 RUN echo 'export PS1="\[\e]0;\u@\h: \w\a\]${debian_chroot:+($debian_chroot)}\[\033[01;37m\]\u\[\033[00m\]@\[\033[01;32m\]\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\] "'  >> /root/.bashrc
