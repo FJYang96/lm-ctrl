@@ -245,24 +245,24 @@ class HoppingMPCOpti:
             self.opti.subject_to(f_y >= -mu_term - relaxation)
             
     def _add_foot_height_constraints(self, x_k, contact_k, k):
-        """Add very basic foot height constraints."""
-        # For debugging: only apply the most basic ground penetration constraint
-        # Extract components for forward kinematics
+        """
+        Add foot height constraints based on the contact schedule.
+        - Stance feet: Constrain vertical position to be slightly above zero.
+        - Swing feet: Constrain vertical position to be non-negative (above ground).
+        """
+        # ... (the forward kinematics part remains the same) ...
         com_position = x_k[0:3]
         roll = x_k[6]
-        pitch = x_k[7] 
+        pitch = x_k[7]
         yaw = x_k[8]
         joint_positions = x_k[12:24]
         
-        # Create homogeneous transformation matrix
-        from liecasadi import SO3
         w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
         b_R_w = w_R_b.T
         H = cs.MX.eye(4)
         H[0:3, 0:3] = b_R_w.T
         H[0:3, 3] = com_position
         
-        # Compute foot heights
         foot_height_fl = self.kindyn_model.forward_kinematics_FL_fun(H, joint_positions)[2, 3]
         foot_height_fr = self.kindyn_model.forward_kinematics_FR_fun(H, joint_positions)[2, 3]
         foot_height_rl = self.kindyn_model.forward_kinematics_RL_fun(H, joint_positions)[2, 3]
@@ -270,9 +270,21 @@ class HoppingMPCOpti:
         
         foot_heights = [foot_height_fl, foot_height_fr, foot_height_rl, foot_height_rr]
         
-        # Only prevent severe ground penetration, no upper bounds for now
+        # --- RELAXED LOGIC ---
+        # Apply constraints dynamically based on the contact schedule with relaxation
+        stance_upper_bound = 0.05  # Relaxed upper bound for stance [0, 0.05]
+        swing_height_max = 1e6     # A large number for infinity
+        
         for foot_idx in range(4):
-            self.opti.subject_to(foot_heights[foot_idx] >= -0.05)  # Allow some penetration for numerical stability
+            contact_flag = contact_k[foot_idx]
+            foot_height = foot_heights[foot_idx]
+            
+            # When contact_flag is 1 (stance), bounds are [0, 0.05].
+            # When contact_flag is 0 (swing), bounds are [0, 1e6].
+            lower_bound = 0.0 # Always prevent ground penetration
+            upper_bound = stance_upper_bound * contact_flag + swing_height_max * (1 - contact_flag)
+            
+            self.opti.subject_to(self.opti.bounded(lower_bound, foot_height, upper_bound))
             
     def _add_foot_velocity_constraints(self, x_k, u_k, contact_k, k):
         com_position = x_k[0:3]
