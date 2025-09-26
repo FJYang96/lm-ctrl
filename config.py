@@ -103,8 +103,8 @@ mpc_params = {
     "nlp_solver_type": "SQP",  # "SQP", "SQP_RTI"
     "nlp_solver_max_iter": 5000,  # number of iterations
     "compile_dir": str(pathlib.Path(__file__).parent / "c_generated_code"),
-    "q_base": np.eye(12) * 0.0,
-    "q_joint": np.eye(12) * 0.0,
+    "q_base": np.eye(12),
+    "q_joint": np.eye(12),
     "r_joint_vel": np.eye(12) * 1e-3,
     "r_forces": np.eye(12) * 1e-4,
     "q_terminal_base": np.eye(12) * 1e-1,
@@ -142,13 +142,13 @@ sim_params = {
 # ----------------------------------------------------------------------------------------------------------------
 # Define the gait / contact sequence
 # ----------------------------------------------------------------------------------------------------------------
-stance_duration = 0.5  # seconds
+stance_duration = 2  # seconds
 flight_duration = 0.3  # seconds
 steps_per_phase = int(stance_duration / mpc_dt)
 contact_sequence = np.ones((4, mpc_params["horizon"]))
-# contact_sequence[
-#     :, steps_per_phase : steps_per_phase + int(flight_duration / mpc_dt)
-# ] = 0.0
+contact_sequence[
+    :, steps_per_phase : steps_per_phase + int(flight_duration / mpc_dt)
+] = 0.0
 
 # ----------------------------------------------------------------------------------------------------------------
 # Define the initial state
