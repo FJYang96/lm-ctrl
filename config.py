@@ -2,6 +2,18 @@ import pathlib
 
 import numpy as np
 from gym_quadruped.robot_cfgs import RobotConfig, get_robot_config
+import mpc.constraints.constraints as constr
+
+#----------------------------------------------------------------------------------------------------------------
+# Path constraints
+#----------------------------------------------------------------------------------------------------------------
+path_constraints= [
+    constr.friction_cone_constraints,
+    constr.foot_height_constraints,
+    constr.foot_velocity_constraints,
+    constr.joint_limits_constraints,
+    constr.input_limits_constraints,
+]
 
 # ----------------------------------------------------------------------------------------------------------------
 # Select the robot
@@ -185,3 +197,41 @@ initial_qpos[7:19] = [  # joint angles
     -2.1,  # RR
 ]
 initial_qvel = np.zeros(18)
+
+# Basic joint limits for Go2 robot (approximate)
+# Hip: ±45°, Thigh: -90° to +90°, Calf: -150° to -30°
+joint_limits_lower = np.array(
+    [
+        -0.8,
+        -1.6,
+        -2.6,  # FL: hip, thigh, calf
+        -0.8,
+        -1.6,
+        -2.6,  # FR
+        -0.8,
+        -1.6,
+        -2.6,  # RL
+        -0.8,
+        -1.6,
+        -2.6,  # RR
+    ]
+)
+joint_limits_upper = np.array(
+    [
+        0.8,
+        1.6,
+        -0.5,  # FL: hip, thigh, calf
+        0.8,
+        1.6,
+        -0.5,  # FR
+        0.8,
+        1.6,
+        -0.5,  # RL
+        0.8,
+        1.6,
+        -0.5,  # RR
+    ]
+)
+
+joint_velocity_limits = 10
+grf_limits = 300

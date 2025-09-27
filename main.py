@@ -1,11 +1,12 @@
 import argparse
+
 import imageio
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
 from tqdm import tqdm
 
 import config
-from examples.model import KinoDynamic_Model
+from mpc.dynamics.model import KinoDynamic_Model
 from utils.inv_dyn import compute_joint_torques
 from utils.visualization import render_planned_trajectory
 
@@ -23,9 +24,13 @@ def print_green(text):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Quadruped Hopping MPC')
-    parser.add_argument('--solver', choices=['acados', 'opti'], default='opti',
-                        help='Choose solver: acados (original) or opti (new)')
+    parser = argparse.ArgumentParser(description="Quadruped Hopping MPC")
+    parser.add_argument(
+        "--solver",
+        choices=["acados", "opti"],
+        default="opti",
+        help="Choose solver: acados (original) or opti (new)",
+    )
     args = parser.parse_args()
 
     # ----------------------------------------------------------------------------------------------------------------
@@ -38,12 +43,14 @@ def main():
     kinodynamic_model = KinoDynamic_Model(config)
 
     # Create MPC based on solver choice
-    if args.solver == 'acados':
-        from examples.mpc import HoppingMPC
+    if args.solver == "acados":
+        from mpc.mpc import HoppingMPC
+
         mpc = HoppingMPC(model=kinodynamic_model, config=config, build=True)
         suffix = ""  # No suffix for original files
     else:  # opti
-        from examples.mpc_opti import HoppingMPCOpti
+        from mpc.mpc_opti import HoppingMPCOpti
+
         mpc = HoppingMPCOpti(model=kinodynamic_model, config=config, build=True)
         suffix = "_opti"  # Add suffix for opti files
 
@@ -59,7 +66,9 @@ def main():
     # ----------------------------------------------------------------------------------------------------------------
     # STAGE 1: Trajectory Optimization
     # ----------------------------------------------------------------------------------------------------------------
-    print_orange(f"--- Stage 1: Solving Kinodynamic Trajectory Optimization with {args.solver.upper()} ---")
+    print_orange(
+        f"--- Stage 1: Solving Kinodynamic Trajectory Optimization with {args.solver.upper()} ---"
+    )
 
     # Set up the initial state and reference for the hopping motion
     initial_state = {
@@ -75,34 +84,39 @@ def main():
 
     target_jump_height = 0.15  # Target 15cm jump height
     reference = {
-        "ref_position": config.initial_qpos[0:3] + np.array([0.1, 0.0, target_jump_height]),
+        "ref_position": config.initial_qpos[0:3]
+        + np.array([0.1, 0.0, target_jump_height]),
         "ref_linear_velocity": np.array([0.0, 0.0, 0.0]),
         "ref_orientation": np.zeros(3),
         "ref_angular_velocity": np.zeros(3),
         "ref_joints": config.initial_qpos[7:19],
     }
 
-    if args.solver == 'acados':
+    if args.solver == "acados":
         # Original Acados format
-        ref = np.concatenate([
-            reference["ref_position"],
-            reference["ref_linear_velocity"],
-            reference["ref_orientation"],
-            reference["ref_angular_velocity"],
-            reference["ref_joints"],
-            np.zeros(24),  # Reference for inputs
-        ])
+        ref = np.concatenate(
+            [
+                reference["ref_position"],
+                reference["ref_linear_velocity"],
+                reference["ref_orientation"],
+                reference["ref_angular_velocity"],
+                reference["ref_joints"],
+                np.zeros(24),  # Reference for inputs
+            ]
+        )
     else:
         # Opti format with integral states
-        ref = np.concatenate([
-            reference["ref_position"],
-            reference["ref_linear_velocity"],
-            reference["ref_orientation"],
-            reference["ref_angular_velocity"],
-            reference["ref_joints"],
-            np.zeros(6),   # Reference for integral states
-            np.zeros(24),  # Reference for inputs (joint velocities + forces)
-        ])
+        ref = np.concatenate(
+            [
+                reference["ref_position"],
+                reference["ref_linear_velocity"],
+                reference["ref_orientation"],
+                reference["ref_angular_velocity"],
+                reference["ref_joints"],
+                np.zeros(6),  # Reference for integral states
+                np.zeros(24),  # Reference for inputs (joint velocities + forces)
+            ]
+        )
 
     state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
         initial_state, ref, config.contact_sequence
@@ -121,7 +135,9 @@ def main():
 
     print("Rendering planned trajectory...")
     planned_traj_images = render_planned_trajectory(state_traj, joint_vel_traj, env)
-    imageio.mimsave(f"results/planned_traj{suffix}.mp4", planned_traj_images, fps=1 / config.mpc_dt)
+    imageio.mimsave(
+        f"results/planned_traj{suffix}.mp4", planned_traj_images, fps=1 / config.mpc_dt
+    )
 
     # ----------------------------------------------------------------------------------------------------------------
     # STAGE 2: Inverse Dynamics to find Joint Torques
@@ -150,14 +166,18 @@ def main():
 
         # Render the environment into an image
         image = env.render(mode="rgb_array", tint_robot=True)
-        overplotted_image = np.uint8(0.7 * image + 0.3 * planned_traj_images[action_index])
+        overplotted_image = np.uint8(
+            0.7 * image + 0.3 * planned_traj_images[action_index]
+        )
         images.append(overplotted_image)
 
     fps = 1 / config.sim_dt
     imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
     env.close()
 
-    print_green(f"✅ Complete! Generated files with suffix '{suffix}' in results/ directory")
+    print_green(
+        f"✅ Complete! Generated files with suffix '{suffix}' in results/ directory"
+    )
 
 
 if __name__ == "__main__":
