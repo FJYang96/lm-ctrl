@@ -103,12 +103,12 @@ mpc_params = {
     "nlp_solver_type": "SQP",  # "SQP", "SQP_RTI"
     "nlp_solver_max_iter": 5000,  # number of iterations
     "compile_dir": str(pathlib.Path(__file__).parent / "c_generated_code"),
-    "q_base": np.eye(12) * 0.0,
-    "q_joint": np.eye(12) * 0.0,
-    "r_joint_vel": np.eye(12) * 1e-3,
-    "r_forces": np.eye(12) * 1e-4,
-    "q_terminal_base": np.eye(12) * 1e-1,
-    "q_terminal_joint": np.eye(12) * 1e-1,
+    "q_base": np.diag([10, 10, 50, 1, 1, 1, 1, 1, 1, 1, 1, 1]) * 1.0, # Penalize CoM and orientation errors
+    "q_joint": np.eye(12) * 0.1,                                     # Penalize joint angle errors
+    "r_joint_vel": np.eye(12) * 1e-4,                                # Penalize joint velocity
+    "r_forces": np.eye(12) * 1e-5,                                   # Penalize ground reaction forces
+    "q_terminal_base": np.eye(12) * 10.0,                            # Strongly penalize final base error
+    "q_terminal_joint": np.eye(12) * 0.5,                            # Penalize final joint error
     "grf_max": 500,  # maximum ground reaction force
     "grf_min": 0,  # minimum ground reaction force
     "mu": mu_friction,  # friction coefficient
@@ -142,13 +142,27 @@ sim_params = {
 # ----------------------------------------------------------------------------------------------------------------
 # Define the gait / contact sequence
 # ----------------------------------------------------------------------------------------------------------------
-stance_duration = 0.5  # seconds
-flight_duration = 0.3  # seconds
-steps_per_phase = int(stance_duration / mpc_dt)
-contact_sequence = np.ones((4, mpc_params["horizon"]))
-# contact_sequence[
-#     :, steps_per_phase : steps_per_phase + int(flight_duration / mpc_dt)
-# ] = 0.0
+pre_flight_stance_duration = 0.3  # seconds to crouch and push off
+flight_duration = 0.4             # seconds in the air
+post_flight_stance_duration = 0.3 # seconds to absorb landing
+
+# --- UPDATE THE TOTAL DURATION TO MATCH THE SEQUENCE ---
+duration = pre_flight_stance_duration + flight_duration + post_flight_stance_duration
+
+# Recalculate horizon based on new duration
+mpc_params["horizon"] = int(duration / mpc_dt)
+sim_params["sim_duration"] = duration
+
+# Define the number of MPC steps for each phase
+pre_flight_steps = int(pre_flight_stance_duration / mpc_dt)
+flight_steps = int(flight_duration / mpc_dt)
+# The remaining steps will be for the post-flight stance
+
+# Create the contact sequence: STANCE -> FLIGHT -> STANCE
+contact_sequence = np.ones((4, mpc_params["horizon"])) # Start with all feet in contact
+
+# Set the middle section to 0 for the flight phase
+contact_sequence[:, pre_flight_steps : pre_flight_steps + flight_steps] = 0.0
 
 # ----------------------------------------------------------------------------------------------------------------
 # Define the initial state

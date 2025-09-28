@@ -3,6 +3,7 @@
 
 results/
 *.npy
+*.mp4
 
 ### Custom ###
 ./jnrh2023/
