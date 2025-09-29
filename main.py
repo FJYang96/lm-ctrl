@@ -26,6 +26,8 @@ def main():
     parser = argparse.ArgumentParser(description='Quadruped Hopping MPC')
     parser.add_argument('--solver', choices=['acados', 'opti'], default='opti',
                         help='Choose solver: acados (original) or opti (new)')
+    parser.add_argument('--complementary', action='store_true',
+                        help='Use complementary constraints for contact dynamics')
     args = parser.parse_args()
 
     # ----------------------------------------------------------------------------------------------------------------
@@ -33,6 +35,7 @@ def main():
     # ----------------------------------------------------------------------------------------------------------------
     print_orange("--- Stage 0: Creating the model and the simulation environment ---")
     print(f"Using solver: {args.solver}")
+    print(f"Using complementary constraints: {args.complementary}")
 
     # Create the model
     kinodynamic_model = KinoDynamic_Model(config)
@@ -44,8 +47,11 @@ def main():
         suffix = ""  # No suffix for original files
     else:  # opti
         from examples.mpc_opti import HoppingMPCOpti
-        mpc = HoppingMPCOpti(model=kinodynamic_model, config=config, build=True)
+        mpc = HoppingMPCOpti(model=kinodynamic_model, config=config, build=True, 
+                            use_complementary=args.complementary)
         suffix = "_opti"  # Add suffix for opti files
+        if args.complementary:
+            suffix += "_comp"  # Additional suffix for complementary constraints
 
     env = QuadrupedEnv(
         robot=config.robot,

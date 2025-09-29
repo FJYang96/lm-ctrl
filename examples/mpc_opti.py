@@ -15,7 +15,7 @@ class HoppingMPCOpti:
     of the optimization problem directly.
     """
     
-    def __init__(self, model: KinoDynamic_Model, config, build=True):
+    def __init__(self, model: KinoDynamic_Model, config, build=True, use_complementary=False):
         """
         Initializes the hopping MPC solver using CasADi Opti.
         
@@ -23,10 +23,12 @@ class HoppingMPCOpti:
             model: KinoDynamic_Model instance
             config: Configuration object with MPC parameters
             build: Whether to build the solver (kept for compatibility)
+            use_complementary: Whether to use complementary constraints for contact dynamics
         """
         self.horizon = config.mpc_params["horizon"]
         self.config = config
         self.kindyn_model = model
+        self.use_complementary = use_complementary
         
         # Get dimensions from the kinodynamic model
         acados_model = self.kindyn_model.export_robot_model()
@@ -49,6 +51,13 @@ class HoppingMPCOpti:
         
         # Input trajectory: (horizon, inputs_dim) 
         self.U = self.opti.variable(self.inputs_dim, self.horizon)
+        
+        # Complementary constraint variables (if enabled)
+        if self.use_complementary:
+            # Slack variables for foot heights (gap functions)
+            self.foot_height_slack = self.opti.variable(4, self.horizon)
+            # Binary variables for contact status (relaxed as continuous [0,1])
+            self.contact_binary = self.opti.variable(4, self.horizon)
         
         # Parameters that can be set at runtime
         self.P_contact = self.opti.parameter(4, self.horizon)  # Contact sequence
@@ -108,6 +117,22 @@ class HoppingMPCOpti:
             cost += cs.mtimes([state_error_joint.T, q_joint, state_error_joint])
             cost += cs.mtimes([input_error_vel.T, r_joint_vel, input_error_vel])
             cost += cs.mtimes([input_error_forces.T, r_forces, input_error_forces])
+            
+            # Complementary constraint penalties
+            if self.use_complementary:
+                # Penalize slack variables to encourage exact complementarity
+                slack_penalty = 1e3  # High penalty for slack
+                for foot_idx in range(4):
+                    slack = self.foot_height_slack[foot_idx, k]
+                    cost += slack_penalty * slack**2
+                
+                # Small penalty to encourage binary variables to be close to 0 or 1
+                binary_penalty = 0.1
+                for foot_idx in range(4):
+                    binary_var = self.contact_binary[foot_idx, k]
+                    # Penalty term: penalty * binary_var * (1 - binary_var)
+                    # This is 0 when binary_var is 0 or 1, maximum at 0.5
+                    cost += binary_penalty * binary_var * (1 - binary_var)
             
         # Terminal cost
         terminal_error_base = self.X[0:12, self.horizon] - self.P_ref_state[0:12]
@@ -169,14 +194,19 @@ class HoppingMPCOpti:
             u_k = self.U[:, k]
             x_k = self.X[:, k]
             
-            # Friction cone constraints
-            self._add_friction_cone_constraints(u_k, contact_k, k)
-            
-            # Foot height constraints
-            self._add_foot_height_constraints(x_k, contact_k, k)
-            
-            # Foot velocity constraints  
-            self._add_foot_velocity_constraints(x_k, u_k, contact_k, k)
+            if self.use_complementary:
+                # Use complementary constraints
+                self._add_complementary_constraints(x_k, u_k, contact_k, k)
+            else:
+                # Use standard constraints
+                # Friction cone constraints
+                self._add_friction_cone_constraints(u_k, contact_k, k)
+                
+                # Foot height constraints
+                self._add_foot_height_constraints(x_k, contact_k, k)
+                
+                # Foot velocity constraints  
+                self._add_foot_velocity_constraints(x_k, u_k, contact_k, k)
             
             # Add joint limits to prevent broken configurations
             joint_positions = x_k[12:24]  # 12 joint angles
@@ -345,6 +375,141 @@ class HoppingMPCOpti:
                 self.opti.subject_to(vel_component >= lower_bound)
                 self.opti.subject_to(vel_component <= upper_bound)
 
+    def _add_complementary_constraints(self, x_k, u_k, contact_k, k):
+        """
+        Add complementary constraints for contact dynamics.
+        
+        Complementary constraints enforce:
+        1. φ ≥ 0 (foot height non-negative - no penetration)
+        2. λ ≥ 0 (contact forces non-negative) 
+        3. φ ⊥ λ (complementarity: φ * λ = 0)
+        
+        We reformulate using slack variables and smooth approximations for differentiability.
+        """
+        # Get foot heights (gap functions φ)
+        foot_heights = self._compute_foot_heights(x_k)
+        
+        # Extract contact forces λ (normal components only for simplicity)
+        forces = u_k[12:24]  # All foot forces
+        
+        for foot_idx in range(4):
+            foot_height = foot_heights[foot_idx]  # φ
+            
+            # Extract all force components for this foot
+            f_x = forces[foot_idx * 3]
+            f_y = forces[foot_idx * 3 + 1] 
+            f_z = forces[foot_idx * 3 + 2]  # Normal force λ
+            
+            # Slack variable for complementarity
+            slack = self.foot_height_slack[foot_idx, k]
+            binary_var = self.contact_binary[foot_idx, k]
+            
+            # 1. Non-penetration constraint: φ ≥ 0
+            self.opti.subject_to(foot_height >= 0)
+            
+            # 2. Force constraints: λ ≥ 0 
+            self.opti.subject_to(f_z >= 0)
+            
+            # 3. Binary variable bounds: 0 ≤ binary_var ≤ 1
+            self.opti.subject_to(self.opti.bounded(0, binary_var, 1))
+            
+            # 4. Big-M constraints for complementarity
+            M_height = 0.5  # Maximum expected foot height during swing
+            M_force = self.P_grf_max  # Maximum force
+            
+            # If binary_var = 1 (contact), then foot_height ≈ 0
+            # If binary_var = 0 (no contact), then f_z ≈ 0
+            self.opti.subject_to(foot_height <= M_height * (1 - binary_var))
+            self.opti.subject_to(f_z <= M_force * binary_var)
+            
+            # 5. Friction cone constraints (only when in contact)
+            mu_term = self.P_mu * f_z
+            large_bound = 1e6
+            relaxation = large_bound * (1 - binary_var)
+            
+            # Friction constraints become very loose when binary_var = 0
+            self.opti.subject_to(f_x <= mu_term + relaxation)
+            self.opti.subject_to(f_x >= -mu_term - relaxation)
+            self.opti.subject_to(f_y <= mu_term + relaxation)
+            self.opti.subject_to(f_y >= -mu_term - relaxation)
+            
+            # 6. Foot velocity constraints (only when in contact)
+            foot_velocities = self._compute_foot_velocities(x_k, u_k)
+            foot_vel = foot_velocities[foot_idx]
+            
+            stance_tolerance = 1.0
+            for axis in range(3):
+                vel_component = foot_vel[axis]
+                lower_bound = -stance_tolerance * binary_var - large_bound * (1 - binary_var)
+                upper_bound = stance_tolerance * binary_var + large_bound * (1 - binary_var)
+                
+                self.opti.subject_to(vel_component >= lower_bound)
+                self.opti.subject_to(vel_component <= upper_bound)
+            
+            # 7. Slack variable for smooth complementarity
+            # Instead of φ * λ = 0, we use φ * λ ≤ slack and minimize slack
+            self.opti.subject_to(foot_height * f_z <= slack)
+            self.opti.subject_to(slack >= 0)
+    
+    def _compute_foot_heights(self, x_k):
+        """Compute foot heights for all feet given the current state."""
+        com_position = x_k[0:3]
+        roll = x_k[6]
+        pitch = x_k[7]
+        yaw = x_k[8]
+        joint_positions = x_k[12:24]
+        
+        w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
+        b_R_w = w_R_b.T
+        H = cs.MX.eye(4)
+        H[0:3, 0:3] = b_R_w.T
+        H[0:3, 3] = com_position
+        
+        foot_height_fl = self.kindyn_model.forward_kinematics_FL_fun(H, joint_positions)[2, 3]
+        foot_height_fr = self.kindyn_model.forward_kinematics_FR_fun(H, joint_positions)[2, 3]
+        foot_height_rl = self.kindyn_model.forward_kinematics_RL_fun(H, joint_positions)[2, 3]
+        foot_height_rr = self.kindyn_model.forward_kinematics_RR_fun(H, joint_positions)[2, 3]
+        
+        return [foot_height_fl, foot_height_fr, foot_height_rl, foot_height_rr]
+    
+    def _compute_foot_velocities(self, x_k, u_k):
+        """Compute foot velocities for all feet given current state and input."""
+        com_position = x_k[0:3]
+        com_velocity = x_k[3:6] 
+        roll = x_k[6]
+        pitch = x_k[7]
+        yaw = x_k[8]
+        com_angular_velocity = x_k[9:12]
+        joint_positions = x_k[12:24]
+        
+        qvel_joints_FL = u_k[0:3]
+        qvel_joints_FR = u_k[3:6]
+        qvel_joints_RL = u_k[6:9]
+        qvel_joints_RR = u_k[9:12]
+        
+        # Create homogeneous transformation matrix
+        w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
+        b_R_w = w_R_b.T
+        H = cs.MX.eye(4)
+        H[0:3, 0:3] = b_R_w.T
+        H[0:3, 3] = com_position
+        
+        qvel = cs.vertcat(
+            com_velocity,        
+            com_angular_velocity, 
+            qvel_joints_FL,      
+            qvel_joints_FR,      
+            qvel_joints_RL,      
+            qvel_joints_RR       
+        )
+        
+        foot_vel_FL = self.kindyn_model.jacobian_FL_fun(H, joint_positions)[0:3, :] @ qvel
+        foot_vel_FR = self.kindyn_model.jacobian_FR_fun(H, joint_positions)[0:3, :] @ qvel
+        foot_vel_RL = self.kindyn_model.jacobian_RL_fun(H, joint_positions)[0:3, :] @ qvel
+        foot_vel_RR = self.kindyn_model.jacobian_RR_fun(H, joint_positions)[0:3, :] @ qvel
+        
+        return [foot_vel_FL, foot_vel_FR, foot_vel_RL, foot_vel_RR]
+
     def _setup_solver(self):
         """Setup the solver options."""
         # Use IPOPT solver with valid settings
@@ -427,6 +592,19 @@ class HoppingMPCOpti:
                     U_init[12 + foot*3:12 + foot*3 + 3, i] = 0.0
                     
         self.opti.set_initial(self.U, U_init)
+        
+        # Initialize complementary constraint variables if used
+        if self.use_complementary:
+            # Initialize slack variables (small positive values)
+            slack_init = np.ones((4, self.horizon)) * 1e-6
+            self.opti.set_initial(self.foot_height_slack, slack_init)
+            
+            # Initialize binary variables based on contact sequence
+            binary_init = np.zeros((4, self.horizon))
+            for i in range(self.horizon):
+                contact_i = contact_sequence[:, i] if i < contact_sequence.shape[1] else contact_sequence[:, -1]
+                binary_init[:, i] = contact_i  # Start with the expected contact pattern
+            self.opti.set_initial(self.contact_binary, binary_init)
         
         try:
             # Solve the optimization problem
