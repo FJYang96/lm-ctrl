@@ -1,10 +1,27 @@
+import time
 import casadi as cs
 import matplotlib.pyplot as plt
 import numpy as np
+from gym_quadruped import quadruped_env
+from tqdm import tqdm
 from liecasadi import SO3
 
+import config
+from examples.model import KinoDynamic_Model
+
 # ============================================================
-# Standardized State Indexing Constants (like forward dynamics)
+# Config
+# ============================================================
+robot_name = "go2"
+terrain_type = "flat"
+sim_dt = 0.01
+sim_duration = 2.0
+if_render = False
+
+print(f"Testing robot {robot_name} on terrain {terrain_type}")
+
+# ============================================================
+# Index conventions (standardized like forward dynamics)
 # ============================================================
 QP_BASE_POS = slice(0, 3)
 QP_BASE_QUAT = slice(3, 7)
@@ -24,10 +41,9 @@ MP_U_QD        = slice(0, 12)
 MP_U_CONTACT_F = slice(12, 24)
 
 # ============================================================
-# Utilities for state conversions and FK
+# Utilities (copied from forward dynamics)
 # ============================================================
 def quat_wxyz_to_rotmat(q):
-    """Convert quaternion [w,x,y,z] to rotation matrix"""
     w, x, y, z = q
     R = np.array([
         [1-2*(y*y+z*z),   2*(x*y - z*w),   2*(x*z + y*w)],
@@ -36,8 +52,16 @@ def quat_wxyz_to_rotmat(q):
     ])
     return R
 
+def quat_wxyz_to_euler_xyz(q):
+    R = quat_wxyz_to_rotmat(q)
+    sy = -R[2,0]
+    sy = np.clip(sy, -1.0, 1.0)
+    roll  = np.arctan2(R[2,1], R[2,2])
+    pitch = np.arcsin(sy)
+    yaw   = np.arctan2(R[1,0], R[0,0])
+    return np.array([roll, pitch, yaw])
+
 def euler_xyz_to_quat_wxyz(euler):
-    """Convert Euler angles [roll,pitch,yaw] to quaternion [w,x,y,z]"""
     roll, pitch, yaw = euler
     cy = np.cos(yaw * 0.5)
     sy = np.sin(yaw * 0.5)
@@ -54,10 +78,10 @@ def euler_xyz_to_quat_wxyz(euler):
     return np.array([w, x, y, z])
 
 # ============================================================
-# Forward Kinematics for Foot Position Validation
+# Simple Unitree Go2 FK (for foot position tracking)
 # ============================================================
 HIP_OFFSET_X = 0.183   # forward/back from COM
-HIP_OFFSET_Y = 0.0838  # lateral offset  
+HIP_OFFSET_Y = 0.0838  # lateral offset
 HIP_LINK = 0.2
 UPPER_LINK = 0.2
 LOWER_LINK = 0.2
@@ -71,7 +95,7 @@ LEG_OFFSETS = {
 }
 
 def foot_fk_local(joints):
-    """Return foot position in base frame for given [abd, hip, knee]"""
+    """Return foot pos in base frame for given [abd, hip, knee]"""
     abd, hip, knee = joints
     # Lateral offset from abduction
     y = HIP_OFFSET_Y * np.sign(abd if abd!=0 else 1)
@@ -99,16 +123,14 @@ def feet_positions_world_from_qpos(qpos):
     return np.array(feet)
 
 # ============================================================
-# Improved Numerical Methods for Acceleration
+# Improved numerical methods for acceleration computation
 # ============================================================
-def compute_accelerations_improved(state_traj, input_traj, contact_traj, dt, kinodynamic_model):
-    """Compute accelerations using forward dynamics for better stability"""
-    import config
-    
+def compute_accelerations_rk4_based(state_traj, input_traj, contact_traj, dt, kinodynamic_model):
+    """Compute accelerations using RK4-based finite differences for better stability"""
     num_steps = len(state_traj) - 1
     ddq_traj = np.zeros((num_steps, 18))
     
-    # Forward dynamics parameters template
+    # Forward dynamics parameters
     param_template = np.concatenate([
         np.ones(4),  # contact state
         np.array([config.mu_friction]),
@@ -121,23 +143,23 @@ def compute_accelerations_improved(state_traj, input_traj, contact_traj, dt, kin
     ])
     
     for i in range(num_steps):
-        # Use forward dynamics to get accurate accelerations
+        # Use forward dynamics to compute current acceleration
         param = param_template.copy()
-        param[0:4] = contact_traj[:, i].astype(float)
+        param[0:4] = contact_traj[i].astype(float)
         param[9:12] = state_traj[i][MP_X_BASE_POS]
         param[12] = state_traj[i][MP_X_BASE_EUL][2]  # yaw
         
-        # Get state derivative from forward dynamics
+        # Get state derivative
         xdot = kinodynamic_model.forward_dynamics(
             state_traj[i][:, None], input_traj[i][:, None], param[:, None]
         )
         xdot_array = cs.DM(xdot).toarray()[:, 0]
         
         # Extract accelerations from state derivative
-        ddq_traj[i, QV_BASE_LIN] = xdot_array[MP_X_BASE_VEL]
-        ddq_traj[i, QV_BASE_ANG] = xdot_array[MP_X_BASE_ANG]
+        ddq_traj[i, QV_BASE_LIN] = xdot_array[MP_X_BASE_VEL]  # base linear acceleration
+        ddq_traj[i, QV_BASE_ANG] = xdot_array[MP_X_BASE_ANG]  # base angular acceleration
         
-        # Joint accelerations from central difference for stability
+        # Joint accelerations from second finite difference (more stable than first)
         if i < num_steps - 1:
             ddq_traj[i, QV_JOINTS] = (input_traj[i+1][MP_U_QD] - input_traj[i][MP_U_QD]) / dt
         else:
@@ -145,8 +167,10 @@ def compute_accelerations_improved(state_traj, input_traj, contact_traj, dt, kin
     
     return ddq_traj
 
-
-def compute_joint_torques(
+# ============================================================
+# Fixed inverse dynamics computation with standardized indexing
+# ============================================================
+def compute_joint_torques_fixed(
     kindyn_model,
     state_traj: np.ndarray,
     input_traj: np.ndarray,
@@ -156,36 +180,17 @@ def compute_joint_torques(
     """
     Fixed inverse dynamics computation with systematic improvements:
     - Standardized state indexing using QP_*, QV_*, MP_* constants
-    - Forward kinematics for foot position validation  
+    - Forward kinematics for foot position validation
     - Improved numerical methods for acceleration computation
-    - Ground contact validation using FK-based foot positions
-
-    This function implements the inverse dynamics equation:
-    tau = M(q) * ddq + C(q, dq) + g(q) - J_contact^T * F_contact
-
-    Args:
-        kindyn_model (KinoDynamic_Model): An instance of the kinodynamic model
-            which contains the KinDynComputations object from the 'adam' library.
-        state_traj (np.ndarray): The full state trajectory from the optimizer.
-            Shape: (num_steps + 1, num_states).
-        input_traj (np.ndarray): The input trajectory of the kinodynamic model (qvel, grf)
-            Shape: (num_steps, 24).
-        contact_sequence (np.ndarray): Array of contact flags (1 for stance, 0 for swing).
-            Shape: (4, num_steps) - NOTE: Transposed from old version.
-        dt (float): The time step duration.
-
-    Returns:
-        np.ndarray: The computed joint torque trajectory.
-        Shape: (num_steps, 12).
+    - Ground contact validation
     """
-    # Initialize output array
     num_steps = input_traj.shape[0]
-    num_joints = 12  # 4 legs * 3 joints
+    num_joints = 12
     joint_torques_traj = np.zeros((num_steps, num_joints))
 
     print("Building state representations with standardized indexing...")
     
-    # Build full qpos trajectory using standardized indexing  
+    # Build full qpos trajectory using standardized indexing
     q_traj = np.zeros((num_steps + 1, 19))
     q_traj[:, QP_BASE_POS] = state_traj[:, MP_X_BASE_POS]
     
@@ -202,13 +207,15 @@ def compute_joint_torques(
     dq_traj[:, QV_BASE_LIN] = state_traj[:, MP_X_BASE_VEL]
     dq_traj[:, QV_BASE_ANG] = state_traj[:, MP_X_BASE_ANG]
     dq_traj[:-1, QV_JOINTS] = input_traj[:, MP_U_QD]
-    dq_traj[-1, QV_JOINTS] = input_traj[-1, MP_U_QD]  # extend for final step
+    dq_traj[-1, QV_JOINTS] = input_traj[-1, MP_U_QD]
 
     print("Computing accelerations using improved numerical methods...")
-    # Use improved acceleration computation instead of naive finite differences
-    ddq_traj = compute_accelerations_improved(state_traj, input_traj, contact_sequence, dt, kindyn_model)
+    # Use improved acceleration computation
+    ddq_traj = compute_accelerations_rk4_based(
+        state_traj, input_traj, contact_sequence.T, dt, kindyn_model
+    )
     
-    # Extend for final step  
+    # Extend for final step
     ddq_traj_extended = np.zeros((num_steps + 1, 18))
     ddq_traj_extended[:-1] = ddq_traj
     ddq_traj_extended[-1] = ddq_traj[-1]  # extrapolate
@@ -273,32 +280,29 @@ def compute_joint_torques(
     grf_traj = input_traj[:, MP_U_CONTACT_F]
     
     for i in range(num_steps):
-        # Apply contact forces only for legs in contact using standardized indexing
+        # Apply contact forces only for legs in contact
         grfs_vec = grf_traj[i, :].copy()
         for leg_idx in range(4):
             contact_state = contact_sequence[leg_idx, i]
             grfs_vec[3*leg_idx:3*(leg_idx+1)] *= contact_state
             
-            # Validate foot position for contact (ground contact validation)
+            # Validate foot position for contact
             feet_world = feet_positions_world_from_qpos(q_traj[i])
             foot_height = feet_world[leg_idx, 2]
             
-            # Issue warnings for contact/foot position mismatches
             if contact_state == 1 and foot_height > 0.02:  # Contact claimed but foot in air
-                if i % 50 == 0:  # Limit warning frequency
-                    print(f"Warning: Step {i}, Leg {leg_idx} contact mismatch - foot at {foot_height:.3f}m")
-            elif contact_state == 0 and foot_height < -0.01:  # No contact but foot underground  
-                if i % 50 == 0:
-                    print(f"Warning: Step {i}, Leg {leg_idx} penetration - foot at {foot_height:.3f}m")
+                print(f"Warning: Step {i}, Leg {leg_idx} contact mismatch - foot at height {foot_height:.3f}m")
+            elif contact_state == 0 and foot_height < -0.01:  # No contact but foot underground
+                print(f"Warning: Step {i}, Leg {leg_idx} penetration - foot at height {foot_height:.3f}m")
 
-        # Compute inverse dynamics using standardized indexing
+        # Compute inverse dynamics
         tau_full = inverse_dynamics_fun(
             q_traj[i, QP_BASE_POS],
             q_traj[i, QP_BASE_QUAT],
             q_traj[i, QP_JOINTS],
-            np.concatenate([dq_traj[i, QV_BASE_LIN], dq_traj[i, QV_BASE_ANG]]),  # Concatenate base lin+ang vel
+            np.concatenate([dq_traj[i, QV_BASE_LIN], dq_traj[i, QV_BASE_ANG]]),
             dq_traj[i, QV_JOINTS],
-            np.concatenate([ddq_traj_extended[i, QV_BASE_LIN], ddq_traj_extended[i, QV_BASE_ANG]]),  # Concatenate base lin+ang acc
+            np.concatenate([ddq_traj_extended[i, QV_BASE_LIN], ddq_traj_extended[i, QV_BASE_ANG]]),
             ddq_traj_extended[i, QV_JOINTS],
             grfs_vec,
         )
@@ -308,3 +312,135 @@ def compute_joint_torques(
 
     print("Inverse dynamics computation completed!")
     return joint_torques_traj
+
+# ============================================================
+# Environment setup
+# ============================================================
+state_obs_names = quadruped_env.QuadrupedEnv._DEFAULT_OBS + (
+    "base_ori_euler_xyz", "contact_state", "contact_forces"
+)
+
+env = quadruped_env.QuadrupedEnv(
+    robot=robot_name,
+    scene=terrain_type,
+    ref_base_lin_vel=(0.5, 1.0),
+    ground_friction_coeff=config.mu_friction,
+    base_vel_command_type="forward",
+    state_obs_names=state_obs_names,
+    sim_dt=sim_dt,
+)
+
+# Use standardized indexing for initial conditions
+initial_qpos = np.zeros(19)
+initial_qpos[QP_BASE_POS] = [0.0, 0.0, 0.23]
+initial_qpos[QP_BASE_QUAT] = [1.0, 0.0, 0.0, 0.0]
+initial_qpos[QP_JOINTS] = [0.0, 1.0, -2.1] * 4
+initial_qvel = np.zeros(18)
+state = env.reset(qpos=initial_qpos, qvel=initial_qvel)
+
+# ============================================================
+# Simulate and render
+# ============================================================
+print("-" * 20, "Simulating", "-" * 20)
+state_traj = [state]
+torque_traj = []
+for i in tqdm(range(int(sim_duration / sim_dt))):
+    action = np.ones(12) * 1.1
+    state, _, _, _, _ = env.step(action=action)
+    state_traj.append(state)
+    torque_traj.append(action)
+env.close()
+
+# ============================================================
+# Convert to standardized MPC format
+# ============================================================
+qpos_traj = np.array([state["qpos"] for state in state_traj])
+qvel_traj = np.array([state["qvel"] for state in state_traj])
+base_ori_euler_xyz_traj = np.array([state["base_ori_euler_xyz"] for state in state_traj])
+contact_state_traj = np.array([state["contact_state"] for state in state_traj])
+contact_forces_traj = np.array([state["contact_forces"] for state in state_traj])
+
+# Build MPC state trajectory using standardized indexing
+mpc_state_traj = np.concatenate(
+    (
+        qpos_traj[:, QP_BASE_POS],     # MP_X_BASE_POS
+        qvel_traj[:, QV_BASE_LIN],     # MP_X_BASE_VEL
+        base_ori_euler_xyz_traj,       # MP_X_BASE_EUL
+        qvel_traj[:, QV_BASE_ANG],     # MP_X_BASE_ANG
+        qpos_traj[:, QP_JOINTS],       # MP_X_Q
+        np.zeros((qpos_traj.shape[0], 6)),  # zero integral states
+    ),
+    axis=1,
+)
+
+mpc_input_traj = np.concatenate(
+    (
+        qvel_traj[:, QV_JOINTS],       # MP_U_QD
+        contact_forces_traj,           # MP_U_CONTACT_F
+    ),
+    axis=1,
+)
+
+# ============================================================
+# Test fixed inverse dynamics
+# ============================================================
+kinodynamic_model = KinoDynamic_Model(config)
+kinodynamic_model.export_robot_model()
+
+print("Testing fixed inverse dynamics computation...")
+computed_torques = compute_joint_torques_fixed(
+    kinodynamic_model,
+    mpc_state_traj,
+    mpc_input_traj[:-1],
+    contact_state_traj[:-1].T,
+    sim_dt,
+)
+
+torque_traj = np.array(torque_traj)
+
+# ============================================================
+# Plot comparison
+# ============================================================
+plt.figure(figsize=(15, 10))
+for i in range(12):
+    plt.subplot(3, 4, i + 1)
+    plt.plot(computed_torques[:, i], label="computed (fixed)", linewidth=2)
+    plt.plot(torque_traj[:, i], label="true", linewidth=2)
+    plt.legend()
+    plt.title(f"Joint {i+1}")
+    plt.grid(True, alpha=0.3)
+
+plt.suptitle("Fixed Inverse Dynamics: Computed vs True Torques", fontsize=16)
+plt.tight_layout()
+plt.savefig("results/id_debug_fixed.png", dpi=150)
+plt.show()
+
+# ============================================================
+# Compute and print validation metrics
+# ============================================================
+print("\n" + "="*60)
+print("INVERSE DYNAMICS VALIDATION RESULTS")
+print("="*60)
+
+skip = 20  # Skip initial transient
+rmse_per_joint = []
+for i in range(12):
+    rmse = np.sqrt(np.mean((computed_torques[skip:, i] - torque_traj[skip:, i])**2))
+    rmse_per_joint.append(rmse)
+    print(f"Joint {i+1:2d}: RMSE = {rmse:.4f} Nm")
+
+overall_rmse = np.sqrt(np.mean((computed_torques[skip:] - torque_traj[skip:])**2))
+print(f"\nOverall RMSE: {overall_rmse:.4f} Nm")
+
+max_error = np.max(np.abs(computed_torques[skip:] - torque_traj[skip:]))
+print(f"Max absolute error: {max_error:.4f} Nm")
+
+# Success criteria
+success = overall_rmse < 2.0 and max_error < 10.0
+print(f"\nValidation {'PASSED' if success else 'FAILED'}")
+if success:
+    print("✅ Inverse dynamics model is working correctly!")
+else:
+    print("❌ Inverse dynamics model needs further debugging")
+
+print("\nSaved results to: results/id_debug_fixed.png")
