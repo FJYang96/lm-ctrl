@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 import config
 from mpc.dynamics.model import KinoDynamic_Model
+from mpc.mpc_opti import QuadrupedMPCOpti
 from utils.inv_dyn import compute_joint_torques
 from utils.visualization import render_planned_trajectory
 
@@ -42,17 +43,8 @@ def main():
     # Create the model
     kinodynamic_model = KinoDynamic_Model(config)
 
-    # Create MPC based on solver choice
-    if args.solver == "acados":
-        from mpc.mpc import HoppingMPC
-
-        mpc = HoppingMPC(model=kinodynamic_model, config=config, build=True)
-        suffix = ""  # No suffix for original files
-    else:  # opti
-        from mpc.mpc_opti import HoppingMPCOpti
-
-        mpc = HoppingMPCOpti(model=kinodynamic_model, config=config, build=True)
-        suffix = "_opti"  # Add suffix for opti files
+    mpc = QuadrupedMPCOpti(model=kinodynamic_model, config=config, build=True)
+    suffix = "_opti"  # Add suffix for opti files
 
     env = QuadrupedEnv(
         robot=config.robot,
