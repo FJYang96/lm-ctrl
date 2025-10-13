@@ -64,24 +64,24 @@ def main():
 
     # Set up the initial state and reference for the hopping motion
     initial_state = {
-        "position": config.initial_qpos[0:3],
+        "position": config.experiment.initial_qpos[0:3],
         "linear_velocity": np.zeros(3),
         "orientation": np.zeros(3),
         "angular_velocity": np.zeros(3),
-        "joint_FL": config.initial_qpos[7:10],
-        "joint_FR": config.initial_qpos[10:13],
-        "joint_RL": config.initial_qpos[13:16],
-        "joint_RR": config.initial_qpos[16:19],
+        "joint_FL": config.experiment.initial_qpos[7:10],
+        "joint_FR": config.experiment.initial_qpos[10:13],
+        "joint_RL": config.experiment.initial_qpos[13:16],
+        "joint_RR": config.experiment.initial_qpos[16:19],
     }
 
     target_jump_height = 0.15  # Target 15cm jump height
     reference = {
-        "ref_position": config.initial_qpos[0:3]
+        "ref_position": config.experiment.initial_qpos[0:3]
         + np.array([0.1, 0.0, target_jump_height]),
         "ref_linear_velocity": np.array([0.0, 0.0, 0.0]),
         "ref_orientation": np.zeros(3),
         "ref_angular_velocity": np.zeros(3),
-        "ref_joints": config.initial_qpos[7:19],
+        "ref_joints": config.experiment.initial_qpos[7:19],
     }
 
     if args.solver == "acados":
@@ -111,7 +111,7 @@ def main():
         )
 
     state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
-        initial_state, ref, config.contact_sequence
+        initial_state, ref, config.mpc_config.contact_sequence
     )
 
     if status != 0:
@@ -123,7 +123,7 @@ def main():
     np.save(f"results/state_traj{suffix}.npy", state_traj)
     np.save(f"results/joint_vel_traj{suffix}.npy", joint_vel_traj)
     np.save(f"results/grf_traj{suffix}.npy", grf_traj)
-    np.save("results/contact_sequence.npy", config.contact_sequence)
+    np.save("results/contact_sequence.npy", config.mpc_config.contact_sequence)
 
     print("Rendering planned trajectory...")
     planned_traj_images = render_planned_trajectory(state_traj, joint_vel_traj, env)
@@ -137,7 +137,11 @@ def main():
     print_orange("--- Stage 2: Computing Joint Torques via Inverse Dynamics ---")
 
     joint_torques_traj = compute_joint_torques(
-        kinodynamic_model, state_traj, grf_traj, config.contact_sequence, config.mpc_dt
+        kinodynamic_model,
+        state_traj,
+        grf_traj,
+        config.mpc_config.contact_sequence,
+        config.mpc_dt,
     )
     np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
 
@@ -146,7 +150,7 @@ def main():
     # ----------------------------------------------------------------------------------------------------------------
     print_orange("--- Stage 3: Simulating the trajectory ---")
     # simulate the trajectory
-    env.reset(qpos=config.initial_qpos, qvel=config.initial_qvel)
+    env.reset(qpos=config.experiment.initial_qpos, qvel=config.experiment.initial_qvel)
     images = []
     action_index = 0
     for i in tqdm(range(int(config.duration / config.sim_dt))):

@@ -2,8 +2,8 @@ import casadi as cs
 import numpy as np
 from liecasadi import SO3
 
-from .dynamics.model import KinoDynamic_Model
 from .constraints import constraints as constr
+from .dynamics.model import KinoDynamic_Model
 
 
 class QuadrupedMPCOpti:
@@ -174,7 +174,9 @@ class QuadrupedMPCOpti:
             x_k = self.X[:, k]
 
             for constraint in self.config.path_constraints:
-                constraint_expr, constraint_l, constraint_u = constraint(x_k, u_k, self.kindyn_model, self.config, contact_k)
+                constraint_expr, constraint_l, constraint_u = constraint(
+                    x_k, u_k, self.kindyn_model, self.config, contact_k
+                )
                 self.opti.subject_to(constraint_expr >= constraint_l)
                 self.opti.subject_to(constraint_expr <= constraint_u)
 
@@ -233,8 +235,8 @@ class QuadrupedMPCOpti:
         self.opti.set_value(self.P_mu, self.config.mpc_params["mu"])
         self.opti.set_value(self.P_grf_min, self.config.mpc_params["grf_min"])
         self.opti.set_value(self.P_grf_max, self.config.mpc_params["grf_max"])
-        self.opti.set_value(self.P_mass, self.config.mass)
-        self.opti.set_value(self.P_inertia, self.config.inertia.flatten())
+        self.opti.set_value(self.P_mass, self.config.robot_data.mass)
+        self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
 
         # Better initial guess for joint positions
         # Start with the initial configuration and keep it reasonable
@@ -264,7 +266,7 @@ class QuadrupedMPCOpti:
                 if contact_i[foot] > 0.5:  # In stance
                     # More conservative force distribution
                     U_init[12 + foot * 3 + 2, i] = (
-                        self.config.mass * 9.81 / 4 * 0.8
+                        self.config.robot_data.mass * 9.81 / 4 * 0.8
                     )  # 80% of weight
                 else:
                     # No forces during flight

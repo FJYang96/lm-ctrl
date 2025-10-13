@@ -29,12 +29,13 @@ def friction_cone_constraints(x_k, u_k, kindyn_model, config, contact_k):
         expr_list.append(f_z)
         min_list.append(0)
         max_list.append(
-            config.grf_limits * contact_flag + SWING_GRF_EPS * (1 - contact_flag)
+            config.robot_data.grf_limits * contact_flag
+            + SWING_GRF_EPS * (1 - contact_flag)
         )  # grf <= EPS when not in contact
 
         # Friction cone constraints
         # Previously was not active for swing feet, but now is to enforce that swing feet should have zero GRF.
-        mu_term = config.mpc_params["mu"] * f_z
+        mu_term = config.experiment.mu_ground * f_z
 
         expr_list.append(f_x)
         min_list.append(-mu_term)
@@ -130,14 +131,24 @@ def foot_velocity_constraints(x_k, u_k, kindyn_model, config, contact_k):
 def joint_limits_constraints(x_k, u_k, kindyn_model, config, contact_k):
     # Add joint limits to prevent broken configurations
     joint_positions = x_k[12:24]  # 12 joint angles
-    return joint_positions, config.joint_limits_lower, config.joint_limits_upper
+    return (
+        joint_positions,
+        config.robot_data.joint_limits_lower,
+        config.robot_data.joint_limits_upper,
+    )
 
 
 def input_limits_constraints(x_k, u_k, kindyn_model, config, contact_k):
     lb = np.concatenate(
-        (np.ones(12) * -config.joint_velocity_limits, np.ones(12) * -config.grf_limits)
+        (
+            np.ones(12) * -config.robot_data.joint_velocity_limits,
+            np.ones(12) * -config.robot_data.grf_limits,
+        )
     )
     ub = np.concatenate(
-        (np.ones(12) * config.joint_velocity_limits, np.ones(12) * config.grf_limits)
+        (
+            np.ones(12) * config.robot_data.joint_velocity_limits,
+            np.ones(12) * config.robot_data.grf_limits,
+        )
     )
     return u_k, lb, ub
