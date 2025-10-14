@@ -182,19 +182,7 @@ class QuadrupedMPCOpti:
 
     def _setup_solver(self):
         """Setup the solver options."""
-        # Use IPOPT solver with valid settings
-        opts = {
-            "ipopt.print_level": 5,
-            "print_time": True,
-            "ipopt.max_iter": 1000,
-            "ipopt.tol": 1e-4,
-            "ipopt.acceptable_tol": 1e-3,
-            "ipopt.mu_init": 1e-2,
-            "ipopt.mu_strategy": "adaptive",
-            "ipopt.alpha_for_y": "primal",
-            "ipopt.recalc_y": "yes",
-        }
-        self.opti.solver("ipopt", opts)
+        self.opti.solver("ipopt", self.config.solver_config)
 
     def solve_trajectory(
         self, initial_state: dict, ref: np.ndarray, contact_sequence: np.ndarray
@@ -233,8 +221,6 @@ class QuadrupedMPCOpti:
 
         # Robot parameters
         self.opti.set_value(self.P_mu, self.config.experiment.mu_ground)
-        # self.opti.set_value(self.P_grf_min, self.config.mpc_config.grf_min)
-        # self.opti.set_value(self.P_grf_max, self.config.mpc_config.grf_max)
         self.opti.set_value(self.P_mass, self.config.robot_data.mass)
         self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
 
@@ -266,10 +252,7 @@ class QuadrupedMPCOpti:
                 if contact_i[foot] > 0.5:  # In stance
                     # More conservative force distribution
                     U_init[12 + foot * 3 + 2, i] = (
-                        self.config.robot_data.mass
-                        * self.config.experiment.gravity_constant
-                        / 4
-                        * 0.8
+                        self.config.robot_data.mass * 9.81 / 4 * 0.8
                     )  # 80% of weight
                 else:
                     # No forces during flight
