@@ -24,7 +24,7 @@ class QuadrupedMPCOpti:
             config: Configuration object with MPC parameters
             build: Whether to build the solver (kept for compatibility)
         """
-        self.horizon = config.mpc_params["horizon"]
+        self.horizon = int(config.mpc_config.duration / config.mpc_config.mpc_dt)
         self.config = config
         self.kindyn_model = model
 
@@ -106,7 +106,7 @@ class QuadrupedMPCOpti:
             )
 
             # Dynamics constraint: x_{k+1} = x_k + dt * f(x_k, u_k, p_k)
-            dt = self.config.mpc_params["dt"]
+            dt = self.config.mpc_config.mpc_dt
             f_k = self._dynamics_fun(x_k, u_k, param_k)
 
             # Integration constraint (explicit Euler for now)
@@ -128,12 +128,12 @@ class QuadrupedMPCOpti:
     def _setup_cost_function(self):
         """Setup the quadratic tracking cost function."""
         # Cost weights from config
-        q_base = self.config.mpc_params["q_base"]
-        q_joint = self.config.mpc_params["q_joint"]
-        r_joint_vel = self.config.mpc_params["r_joint_vel"]
-        r_forces = self.config.mpc_params["r_forces"]
-        q_terminal_base = self.config.mpc_params["q_terminal_base"]
-        q_terminal_joint = self.config.mpc_params["q_terminal_joint"]
+        q_base = self.config.mpc_config.q_base
+        q_joint = self.config.mpc_config.q_joint
+        r_joint_vel = self.config.mpc_config.r_joint_vel
+        r_forces = self.config.mpc_config.r_forces
+        q_terminal_base = self.config.mpc_config.q_terminal_base
+        q_terminal_joint = self.config.mpc_config.q_terminal_joint
 
         # Initialize cost
         cost = 0
@@ -173,7 +173,7 @@ class QuadrupedMPCOpti:
             u_k = self.U[:, k]
             x_k = self.X[:, k]
 
-            for constraint in self.config.path_constraints:
+            for constraint in self.config.mpc_config.path_constraints:
                 constraint_expr, constraint_l, constraint_u = constraint(
                     x_k, u_k, self.kindyn_model, self.config, contact_k
                 )
@@ -232,9 +232,9 @@ class QuadrupedMPCOpti:
         self.opti.set_value(self.P_contact, contact_sequence)
 
         # Robot parameters
-        self.opti.set_value(self.P_mu, self.config.mpc_params["mu"])
-        self.opti.set_value(self.P_grf_min, self.config.mpc_params["grf_min"])
-        self.opti.set_value(self.P_grf_max, self.config.mpc_params["grf_max"])
+        self.opti.set_value(self.P_mu, self.config.experiment.mu_ground)
+        # self.opti.set_value(self.P_grf_min, self.config.mpc_config.grf_min)
+        # self.opti.set_value(self.P_grf_max, self.config.mpc_config.grf_max)
         self.opti.set_value(self.P_mass, self.config.robot_data.mass)
         self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
 
@@ -266,7 +266,10 @@ class QuadrupedMPCOpti:
                 if contact_i[foot] > 0.5:  # In stance
                     # More conservative force distribution
                     U_init[12 + foot * 3 + 2, i] = (
-                        self.config.robot_data.mass * 9.81 / 4 * 0.8
+                        self.config.robot_data.mass
+                        * self.config.experiment.gravity_constant
+                        / 4
+                        * 0.8
                     )  # 80% of weight
                 else:
                     # No forces during flight

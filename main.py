@@ -49,10 +49,8 @@ def main():
     env = QuadrupedEnv(
         robot=config.robot,
         scene="flat",
-        ground_friction_coeff=config.sim_params[
-            "ground_friction_coeff"
-        ],  # pass a float for a fixed value
-        sim_dt=config.sim_params["sim_dt"],
+        ground_friction_coeff=config.experiment.mu_ground,
+        sim_dt=config.experiment.sim_dt,
     )
 
     # ----------------------------------------------------------------------------------------------------------------
@@ -128,7 +126,9 @@ def main():
     print("Rendering planned trajectory...")
     planned_traj_images = render_planned_trajectory(state_traj, joint_vel_traj, env)
     imageio.mimsave(
-        f"results/planned_traj{suffix}.mp4", planned_traj_images, fps=1 / config.mpc_dt
+        f"results/planned_traj{suffix}.mp4",
+        planned_traj_images,
+        fps=1 / config.mpc_config.mpc_dt,
     )
 
     # ----------------------------------------------------------------------------------------------------------------
@@ -141,7 +141,7 @@ def main():
         state_traj,
         grf_traj,
         config.mpc_config.contact_sequence,
-        config.mpc_dt,
+        config.mpc_config.mpc_dt,
     )
     np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
 
@@ -153,10 +153,10 @@ def main():
     env.reset(qpos=config.experiment.initial_qpos, qvel=config.experiment.initial_qvel)
     images = []
     action_index = 0
-    for i in tqdm(range(int(config.duration / config.sim_dt))):
+    for i in tqdm(range(int(config.experiment.duration / config.experiment.sim_dt))):
         # Step forward in the simulation
         action = joint_torques_traj[action_index, :]
-        if (i + 1) % int(config.mpc_dt / config.sim_dt) == 0:
+        if (i + 1) % int(config.mpc_config.mpc_dt / config.experiment.sim_dt) == 0:
             action_index += 1
         state, reward, is_terminated, is_truncated, info = env.step(action=action)
 
@@ -167,7 +167,7 @@ def main():
         )
         images.append(overplotted_image)
 
-    fps = 1 / config.sim_dt
+    fps = 1 / config.experiment.sim_dt
     imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
     env.close()
 
