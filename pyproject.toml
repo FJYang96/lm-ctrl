@@ -1,0 +1,9 @@
+# pyproject.toml
+[tool.ruff]
+select = ["E", "F","W", "I", "UP", "B"] # Select rules to check
+line-length = 88
+ignore = ["E501"] # Ignore "line too long" (let the formatter handle it)
+
+[tool.mypy]
+ignore_missing_imports = true
+pretty = true

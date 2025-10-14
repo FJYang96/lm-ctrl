@@ -2,7 +2,7 @@ import casadi as cs
 import numpy as np
 from liecasadi import SO3
 
-SWING_GRF_EPS = 1e-3
+SWING_GRF_EPS = 0.0
 STANCE_HEIGHT_EPS = 0.04
 NO_SLIP_EPS = 0.01
 INF = 1e6
