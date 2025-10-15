@@ -1,6 +1,10 @@
+from typing import Any
+
 import casadi as cs
 import numpy as np
 from liecasadi import SO3
+
+from .dynamics.model import KinoDynamic_Model
 
 SWING_GRF_EPS = 0.0
 STANCE_HEIGHT_EPS = 0.04
@@ -8,7 +12,13 @@ NO_SLIP_EPS = 0.01
 INF = 1e6
 
 
-def friction_cone_constraints(x_k, u_k, kindyn_model, config, contact_k):
+def friction_cone_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
     """Add friction cone constraints exactly like working Acados version."""
     # Key insight: The working version uses contact_sequence to DISABLE constraints
     # When contact_flag = 0, ALL force constraints become [-1e6, 1e6] (no constraint) <== this is not correct
@@ -48,7 +58,13 @@ def friction_cone_constraints(x_k, u_k, kindyn_model, config, contact_k):
     return cs.vertcat(*expr_list), cs.vertcat(*min_list), cs.vertcat(*max_list)
 
 
-def foot_height_constraints(x_k, u_k, kindyn_model, config, contact_k):
+def foot_height_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
     """
     Add foot height constraints based on the contact schedule.
     - Stance feet: Constrain vertical position to be slightly above zero.
@@ -80,7 +96,13 @@ def foot_height_constraints(x_k, u_k, kindyn_model, config, contact_k):
     return foot_heights, foot_height_min, foot_height_max
 
 
-def foot_velocity_constraints(x_k, u_k, kindyn_model, config, contact_k):
+def foot_velocity_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
     com_position = x_k[0:3]
     com_velocity = x_k[3:6]
     roll = x_k[6]
@@ -128,7 +150,13 @@ def foot_velocity_constraints(x_k, u_k, kindyn_model, config, contact_k):
     return foot_velocities, foot_velocity_min, foot_velocity_max
 
 
-def joint_limits_constraints(x_k, u_k, kindyn_model, config, contact_k):
+def joint_limits_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
     # Add joint limits to prevent broken configurations
     joint_positions = x_k[12:24]  # 12 joint angles
     return (
@@ -138,7 +166,13 @@ def joint_limits_constraints(x_k, u_k, kindyn_model, config, contact_k):
     )
 
 
-def input_limits_constraints(x_k, u_k, kindyn_model, config, contact_k):
+def input_limits_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
     lb = np.concatenate(
         (
             np.ones(12) * -config.robot_data.joint_velocity_limits,
