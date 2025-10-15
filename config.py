@@ -2,9 +2,9 @@ from typing import Any
 
 import numpy as np
 
+import mpc.constraints as constr
 from configs.experiments import BaseExperiment
 from configs.robots import RobotData, get_robot_data
-from mpc.constraints import constraints as constr
 from mpc.mpc_config import HoppingMPCConfig, MPCConfig
 
 robot: str = "go2"

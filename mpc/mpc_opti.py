@@ -1,8 +1,6 @@
 import casadi as cs
 import numpy as np
-from liecasadi import SO3
 
-from .constraints import constraints as constr
 from .dynamics.model import KinoDynamic_Model
 
 

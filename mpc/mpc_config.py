@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -26,7 +27,7 @@ class MPCConfig:
     warmstart_input: np.ndarray | None
 
     # Path constraints
-    path_constraints: list[callable]
+    path_constraints: list[Callable]
 
     # Contact sequence
     _contact_sequence: np.ndarray | None
