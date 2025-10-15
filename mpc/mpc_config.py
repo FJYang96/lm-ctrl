@@ -73,8 +73,8 @@ class HoppingMPCConfig(MPCConfig):
     path_constraint_params: dict[str, float] = field(
         default_factory=lambda: {
             "SWING_GRF_EPS": 0.0,
-            "STANCE_HEIGHT_EPS": 0.04,
-            "NO_SLIP_EPS": 0.01,
+            "STANCE_HEIGHT_EPS": 0.02,
+            "NO_SLIP_EPS": 0.005,
         }
     )
 

@@ -1,5 +1,3 @@
-import argparse
-
 import imageio
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
@@ -8,28 +6,19 @@ from tqdm import tqdm
 import config
 from mpc.dynamics.model import KinoDynamic_Model
 from mpc.mpc_opti import QuadrupedMPCOpti
+from utils import conversion
 from utils.inv_dyn import compute_joint_torques
 from utils.logging import color_print
 from utils.visualization import render_planned_trajectory
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Quadruped Hopping MPC")
-    parser.add_argument(
-        "--solver",
-        choices=["acados", "opti"],
-        default="opti",
-        help="Choose solver: acados (original) or opti (new)",
-    )
-    args = parser.parse_args()
-
     # ----------------------------------------------------------------------------------------------------------------
     # STAGE 0: Create the model and the simulation environment
     # ----------------------------------------------------------------------------------------------------------------
     color_print(
         "orange", "--- Stage 0: Creating the model and the simulation environment ---"
     )
-    print(f"Using solver: {args.solver}")
 
     # Create the model
     kinodynamic_model = KinoDynamic_Model(config)
@@ -49,20 +38,13 @@ def main() -> None:
     # ----------------------------------------------------------------------------------------------------------------
     color_print(
         "orange",
-        f"--- Stage 1: Solving Kinodynamic Trajectory Optimization with {args.solver.upper()} ---",
+        "--- Stage 1: Solving Kinodynamic Trajectory Optimization with Opti ---",
     )
 
     # Set up the initial state and reference for the hopping motion
-    initial_state = {
-        "position": config.experiment.initial_qpos[0:3],
-        "linear_velocity": np.zeros(3),
-        "orientation": np.zeros(3),
-        "angular_velocity": np.zeros(3),
-        "joint_FL": config.experiment.initial_qpos[7:10],
-        "joint_FR": config.experiment.initial_qpos[10:13],
-        "joint_RL": config.experiment.initial_qpos[13:16],
-        "joint_RR": config.experiment.initial_qpos[16:19],
-    }
+    initial_state, _ = conversion.sim_to_mpc(
+        config.experiment.initial_qpos, config.experiment.initial_qvel
+    )
 
     target_jump_height = 0.15  # Target 15cm jump height
     reference = {
@@ -74,35 +56,24 @@ def main() -> None:
         "ref_joints": config.experiment.initial_qpos[7:19],
     }
 
-    if args.solver == "acados":
-        # Original Acados format
-        ref = np.concatenate(
-            [
-                reference["ref_position"],
-                reference["ref_linear_velocity"],
-                reference["ref_orientation"],
-                reference["ref_angular_velocity"],
-                reference["ref_joints"],
-                np.zeros(24),  # Reference for inputs
-            ]
-        )
-    else:
-        # Opti format with integral states
-        ref = np.concatenate(
-            [
-                reference["ref_position"],
-                reference["ref_linear_velocity"],
-                reference["ref_orientation"],
-                reference["ref_angular_velocity"],
-                reference["ref_joints"],
-                np.zeros(6),  # Reference for integral states
-                np.zeros(24),  # Reference for inputs (joint velocities + forces)
-            ]
-        )
+    # Opti format with integral states
+    ref = np.concatenate(
+        [
+            reference["ref_position"],
+            reference["ref_linear_velocity"],
+            reference["ref_orientation"],
+            reference["ref_angular_velocity"],
+            reference["ref_joints"],
+            np.zeros(6),  # Reference for integral states
+            np.zeros(24),  # Reference for inputs (joint velocities + forces)
+        ]
+    )
 
     state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
         initial_state, ref, config.mpc_config.contact_sequence
     )
+    input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
+    color_print("red", f"Input trajectory shape: {input_traj.shape}")
 
     if status != 0:
         color_print("red", f"Optimization failed with status: {status}")
@@ -117,13 +88,14 @@ def main() -> None:
     np.save(f"results/grf_traj{suffix}.npy", grf_traj)
     np.save("results/contact_sequence.npy", config.mpc_config.contact_sequence)
 
-    print("Rendering planned trajectory...")
-    planned_traj_images = render_planned_trajectory(state_traj, joint_vel_traj, env)
-    imageio.mimsave(
-        f"results/planned_traj{suffix}.mp4",
-        planned_traj_images,
-        fps=1 / config.mpc_config.mpc_dt,
-    )
+    if config.experiment.render:
+        print("Rendering planned trajectory...")
+        planned_traj_images = render_planned_trajectory(state_traj, input_traj, env)
+        imageio.mimsave(
+            f"results/planned_traj{suffix}.mp4",
+            planned_traj_images,
+            fps=1 / config.mpc_config.mpc_dt,
+        )
 
     # ----------------------------------------------------------------------------------------------------------------
     # STAGE 2: Inverse Dynamics to find Joint Torques
@@ -157,15 +129,17 @@ def main() -> None:
         state, reward, is_terminated, is_truncated, info = env.step(action=action)
 
         # Render the environment into an image
-        image = env.render(mode="rgb_array", tint_robot=True)
-        overplotted_image = np.uint8(
-            0.7 * image + 0.3 * planned_traj_images[action_index]
-        )
-        images.append(overplotted_image)
+        if config.experiment.render:
+            image = env.render(mode="rgb_array", tint_robot=True)
+            overplotted_image = np.uint8(
+                0.7 * image + 0.3 * planned_traj_images[action_index]
+            )
+            images.append(overplotted_image)
 
-    fps = 1 / config.experiment.sim_dt
-    imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
     env.close()
+    if config.experiment.render:
+        fps = 1 / config.experiment.sim_dt
+        imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
 
     color_print(
         "green",

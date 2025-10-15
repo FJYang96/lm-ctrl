@@ -20,6 +20,7 @@ experiment: BaseExperiment = BaseExperiment(
     terrain="flat",
     initial_qpos=robot_data.initial_qpos,
     initial_qvel=robot_data.initial_qvel,
+    render=True,
 )
 
 mpc_config: MPCConfig = HoppingMPCConfig(

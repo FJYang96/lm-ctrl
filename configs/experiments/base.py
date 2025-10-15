@@ -17,6 +17,7 @@ class BaseExperiment:
     # Simulation parameters
     duration: float = 1.0
     sim_dt: float = 0.01
+    render: bool = True
 
     @property
     def contact_sequence(self) -> np.ndarray:

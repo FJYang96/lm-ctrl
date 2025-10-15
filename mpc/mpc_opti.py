@@ -188,7 +188,7 @@ class QuadrupedMPCOpti:
 
     def solve_trajectory(
         self,
-        initial_state: dict[str, np.ndarray],
+        initial_state: np.ndarray,
         ref: np.ndarray,
         contact_sequence: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
@@ -203,23 +203,8 @@ class QuadrupedMPCOpti:
         Returns:
             Tuple of (state_traj, grf_traj, joint_vel_traj, status)
         """
-        # Set initial state
-        state_acados = np.concatenate(
-            [
-                initial_state["position"],
-                initial_state["linear_velocity"],
-                initial_state["orientation"],
-                initial_state["angular_velocity"],
-                initial_state["joint_FL"],
-                initial_state["joint_FR"],
-                initial_state["joint_RL"],
-                initial_state["joint_RR"],
-                np.zeros(6),  # Integral states
-            ]
-        )
-
         # Set parameter values
-        self.opti.set_value(self.P_initial_state, state_acados)
+        self.opti.set_value(self.P_initial_state, initial_state)
         self.opti.set_value(self.P_ref_state, ref[: self.states_dim])
         self.opti.set_value(self.P_ref_input, ref[self.states_dim :])
         self.opti.set_value(self.P_contact, contact_sequence)
@@ -233,9 +218,9 @@ class QuadrupedMPCOpti:
         # Start with the initial configuration and keep it reasonable
         X_init = np.zeros((self.states_dim, self.horizon + 1))
         for i in range(self.horizon + 1):
-            X_init[:, i] = state_acados.copy()
+            X_init[:, i] = initial_state.copy()
             # Ensure joint angles stay in reasonable ranges
-            X_init[12:24, i] = state_acados[12:24]  # Keep initial joint configuration
+            X_init[12:24, i] = initial_state[12:24]  # Keep initial joint configuration
 
         self.opti.set_initial(self.X, X_init)
 
