@@ -8,7 +8,7 @@ on:
 
 jobs:
   pre-commit:
-    name: Run Pre-Commit Hooks
+    name: Lint and Type Check
     runs-on: ubuntu-latest
 
     steps:
