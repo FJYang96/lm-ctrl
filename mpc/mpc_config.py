@@ -1,7 +1,11 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
+import casadi as cs
 import numpy as np
+
+from .dynamics.model import KinoDynamic_Model
 
 
 @dataclass
@@ -27,7 +31,11 @@ class MPCConfig:
     warmstart_input: np.ndarray | None
 
     # Path constraints
-    path_constraints: list[Callable]
+    path_constraints: list[
+        Callable[
+            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX], tuple[cs.MX, cs.MX, cs.MX]
+        ]
+    ]
 
     # Contact sequence
     _contact_sequence: np.ndarray | None
@@ -36,7 +44,7 @@ class MPCConfig:
 @dataclass
 class HoppingMPCConfig(MPCConfig):
     pre_flight_stance_duration: float = 0.3
-    flight_duration: float = 0.3
+    flight_duration: float = 0.4
 
     @property
     def contact_sequence(self) -> np.ndarray:

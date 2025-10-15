@@ -19,4 +19,11 @@ repos:
     rev: v1.10.0
     hooks:
     -   id: mypy
-        args: [--config-file=pyproject.toml]
+        name: mypy type checker
+        args:
+          - --strict
+          - --ignore-missing-imports
+          - --pretty
+        additional_dependencies:
+          - types-requests  # Example: add type stubs you rely on
+          - types-PyYAML

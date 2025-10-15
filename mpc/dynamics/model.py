@@ -4,6 +4,7 @@
 # Authors: Giulio Turrisi
 
 import os
+from typing import Any
 
 import casadi as cs
 import gym_quadruped
@@ -29,7 +30,7 @@ else:
 
 # Class that defines the prediction model of the NMPC
 class KinoDynamic_Model:
-    def __init__(self, config) -> None:
+    def __init__(self, config: Any) -> None:
         urdf_filename = config.robot_data.urdf_filename
 
         joint_list = [
