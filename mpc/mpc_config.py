@@ -3,9 +3,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import casadi as cs
-import constraints as constr
 import numpy as np
 
+from .constraints import (
+    foot_height_constraints,
+    foot_velocity_constraints,
+    friction_cone_constraints,
+    input_limits_constraints,
+    joint_limits_constraints,
+)
 from .dynamics.model import KinoDynamic_Model
 
 
@@ -57,11 +63,11 @@ class HoppingMPCConfig(MPCConfig):
         ]
     ] = field(
         default_factory=lambda: [
-            constr.friction_cone_constraints,
-            constr.foot_height_constraints,
-            constr.foot_velocity_constraints,
-            constr.joint_limits_constraints,
-            constr.input_limits_constraints,
+            friction_cone_constraints,
+            foot_height_constraints,
+            foot_velocity_constraints,
+            joint_limits_constraints,
+            input_limits_constraints,
         ]
     )
     path_constraint_params: dict[str, float] = field(
