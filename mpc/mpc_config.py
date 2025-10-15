@@ -1,8 +1,9 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import casadi as cs
+import constraints as constr
 import numpy as np
 
 from .dynamics.model import KinoDynamic_Model
@@ -38,7 +39,7 @@ class MPCConfig:
     ]
 
     # Contact sequence
-    _contact_sequence: np.ndarray | None  # Stored in this field for caching
+    _contact_sequence: np.ndarray | None = None
 
     @property
     def contact_sequence(self) -> np.ndarray:
@@ -50,6 +51,26 @@ class MPCConfig:
 class HoppingMPCConfig(MPCConfig):
     pre_flight_stance_duration: float = 0.3
     flight_duration: float = 0.4
+    path_constraints: list[
+        Callable[
+            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX], tuple[cs.MX, cs.MX, cs.MX]
+        ]
+    ] = field(
+        default_factory=lambda: [
+            constr.friction_cone_constraints,
+            constr.foot_height_constraints,
+            constr.foot_velocity_constraints,
+            constr.joint_limits_constraints,
+            constr.input_limits_constraints,
+        ]
+    )
+    path_constraint_params: dict[str, float] = field(
+        default_factory=lambda: {
+            "SWING_GRF_EPS": 0.0,
+            "STANCE_HEIGHT_EPS": 0.04,
+            "NO_SLIP_EPS": 0.01,
+        }
+    )
 
     @property
     def contact_sequence(self) -> np.ndarray:

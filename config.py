@@ -42,6 +42,11 @@ mpc_config: MPCConfig = HoppingMPCConfig(
         constr.joint_limits_constraints,
         constr.input_limits_constraints,
     ],
+    path_constraint_params={
+        "SWING_GRF_EPS": 0.0,
+        "STANCE_HEIGHT_EPS": 0.04,
+        "NO_SLIP_EPS": 0.01,
+    },
     warmstart_state=None,
     warmstart_input=None,
     _contact_sequence=None,

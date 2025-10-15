@@ -6,9 +6,6 @@ from liecasadi import SO3
 
 from .dynamics.model import KinoDynamic_Model
 
-SWING_GRF_EPS = 0.0
-STANCE_HEIGHT_EPS = 0.04
-NO_SLIP_EPS = 0.01
 INF = 1e6
 
 
@@ -40,7 +37,7 @@ def friction_cone_constraints(
         min_list.append(0)
         max_list.append(
             config.robot_data.grf_limits * contact_flag
-            + SWING_GRF_EPS * (1 - contact_flag)
+            + config.path_constraint_params["SWING_GRF_EPS"] * (1 - contact_flag)
         )  # grf <= EPS when not in contact
 
         # Friction cone constraints
@@ -90,7 +87,9 @@ def foot_height_constraints(
     foot_heights = cs.vertcat(
         foot_height_fl, foot_height_fr, foot_height_rl, foot_height_rr
     )
-    foot_height_max = STANCE_HEIGHT_EPS * contact_k + INF * (1 - contact_k)
+    foot_height_max = config.path_constraint_params[
+        "STANCE_HEIGHT_EPS"
+    ] * contact_k + INF * (1 - contact_k)
     foot_height_min = np.zeros(4)
 
     return foot_heights, foot_height_min, foot_height_max
@@ -141,11 +140,17 @@ def foot_velocity_constraints(
         foot_vel_FL, foot_vel_FR, foot_vel_RL, foot_vel_RR
     )  # Dimension: 4 x 3 = 12
     foot_velocity_min = cs.repmat(
-        -NO_SLIP_EPS * contact_k - INF * (1 - contact_k), 3, 1
-    ).reshape((-1, 1))  # Repeat for each xyz component
+        -config.path_constraint_params["NO_SLIP_EPS"] * contact_k
+        - INF * (1 - contact_k),
+        3,
+        1,
+    ).reshape((-1, 1))
     foot_velocity_max = cs.repmat(
-        NO_SLIP_EPS * contact_k + INF * (1 - contact_k), 3, 1
-    ).reshape((-1, 1))  # Repeat for each xyz component
+        config.path_constraint_params["NO_SLIP_EPS"] * contact_k
+        + INF * (1 - contact_k),
+        3,
+        1,
+    ).reshape((-1, 1))
 
     return foot_velocities, foot_velocity_min, foot_velocity_max
 
