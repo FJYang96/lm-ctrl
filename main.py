@@ -9,22 +9,11 @@ import config
 from mpc.dynamics.model import KinoDynamic_Model
 from mpc.mpc_opti import QuadrupedMPCOpti
 from utils.inv_dyn import compute_joint_torques
+from utils.logging import color_print
 from utils.visualization import render_planned_trajectory
 
 
-def print_orange(text):
-    print("\033[1m\033[38;5;208m" + text + "\033[0m")
-
-
-def print_red(text):
-    print("\033[1m\033[38;5;196m" + text + "\033[0m")
-
-
-def print_green(text):
-    print("\033[1m\033[38;5;46m" + text + "\033[0m")
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Quadruped Hopping MPC")
     parser.add_argument(
         "--solver",
@@ -37,7 +26,9 @@ def main():
     # ----------------------------------------------------------------------------------------------------------------
     # STAGE 0: Create the model and the simulation environment
     # ----------------------------------------------------------------------------------------------------------------
-    print_orange("--- Stage 0: Creating the model and the simulation environment ---")
+    color_print(
+        "orange", "--- Stage 0: Creating the model and the simulation environment ---"
+    )
     print(f"Using solver: {args.solver}")
 
     # Create the model
@@ -56,8 +47,9 @@ def main():
     # ----------------------------------------------------------------------------------------------------------------
     # STAGE 1: Trajectory Optimization
     # ----------------------------------------------------------------------------------------------------------------
-    print_orange(
-        f"--- Stage 1: Solving Kinodynamic Trajectory Optimization with {args.solver.upper()} ---"
+    color_print(
+        "orange",
+        f"--- Stage 1: Solving Kinodynamic Trajectory Optimization with {args.solver.upper()} ---",
     )
 
     # Set up the initial state and reference for the hopping motion
@@ -113,9 +105,11 @@ def main():
     )
 
     if status != 0:
-        print_red(f"Optimization failed with status: {status}")
+        color_print("red", f"Optimization failed with status: {status}")
     else:
-        print_green("Optimization successful. Extracted trajectory of states and GRFs.")
+        color_print(
+            "green", "Optimization successful. Extracted trajectory of states and GRFs."
+        )
 
     # Save results with appropriate suffix
     np.save(f"results/state_traj{suffix}.npy", state_traj)
@@ -134,7 +128,9 @@ def main():
     # ----------------------------------------------------------------------------------------------------------------
     # STAGE 2: Inverse Dynamics to find Joint Torques
     # ----------------------------------------------------------------------------------------------------------------
-    print_orange("--- Stage 2: Computing Joint Torques via Inverse Dynamics ---")
+    color_print(
+        "orange", "--- Stage 2: Computing Joint Torques via Inverse Dynamics ---"
+    )
 
     joint_torques_traj = compute_joint_torques(
         kinodynamic_model,
@@ -148,7 +144,7 @@ def main():
     # ----------------------------------------------------------------------------------------------------------------
     # STAGE 3: Simulate the trajectory
     # ----------------------------------------------------------------------------------------------------------------
-    print_orange("--- Stage 3: Simulating the trajectory ---")
+    color_print("orange", "--- Stage 3: Simulating the trajectory ---")
     # simulate the trajectory
     env.reset(qpos=config.experiment.initial_qpos, qvel=config.experiment.initial_qvel)
     images = []
@@ -171,8 +167,9 @@ def main():
     imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
     env.close()
 
-    print_green(
-        f"✅ Complete! Generated files with suffix '{suffix}' in results/ directory"
+    color_print(
+        "green",
+        f"✅ Complete! Generated files with suffix '{suffix}' in results/ directory",
     )
 
 

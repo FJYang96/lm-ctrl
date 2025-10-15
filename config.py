@@ -4,7 +4,8 @@ import numpy as np
 
 import mpc.constraints as constr
 from configs.experiments import BaseExperiment
-from configs.robots import RobotData, get_robot_data
+from configs.robots import get_robot_data
+from configs.robots.robot_data import RobotData
 from mpc.mpc_config import HoppingMPCConfig, MPCConfig
 
 robot: str = "go2"

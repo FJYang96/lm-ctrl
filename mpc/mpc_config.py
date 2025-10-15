@@ -38,7 +38,12 @@ class MPCConfig:
     ]
 
     # Contact sequence
-    _contact_sequence: np.ndarray | None
+    _contact_sequence: np.ndarray | None  # Stored in this field for caching
+
+    @property
+    def contact_sequence(self) -> np.ndarray:
+        # generates the contact sequence based on other configuration parameters
+        raise NotImplementedError
 
 
 @dataclass

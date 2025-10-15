@@ -1,3 +1,5 @@
+from typing import Any
+
 import casadi as cs
 import numpy as np
 
@@ -13,7 +15,9 @@ class QuadrupedMPCOpti:
     of the optimization problem directly.
     """
 
-    def __init__(self, model: KinoDynamic_Model, config, build=True):
+    def __init__(
+        self, model: KinoDynamic_Model, config: Any, build: bool = True
+    ) -> None:
         """
         Initializes the hopping MPC solver using CasADi Opti.
 
@@ -40,7 +44,7 @@ class QuadrupedMPCOpti:
         # Setup the optimization problem structure
         self._setup_optimization_problem()
 
-    def _create_decision_variables(self):
+    def _create_decision_variables(self) -> None:
         """Create the decision variables for the trajectory optimization."""
         # State trajectory: (horizon+1, states_dim)
         self.X = self.opti.variable(self.states_dim, self.horizon + 1)
@@ -61,7 +65,7 @@ class QuadrupedMPCOpti:
         self.P_mass = self.opti.parameter()  # Robot mass
         self.P_inertia = self.opti.parameter(9)  # Flattened inertia matrix
 
-    def _setup_optimization_problem(self):
+    def _setup_optimization_problem(self) -> None:
         """Setup the complete optimization problem structure."""
         # Set initial state constraint
         self.opti.subject_to(self.X[:, 0] == self.P_initial_state)
@@ -78,7 +82,7 @@ class QuadrupedMPCOpti:
         # Setup solver options
         self._setup_solver()
 
-    def _setup_dynamics_constraints(self):
+    def _setup_dynamics_constraints(self) -> None:
         """Setup dynamics constraints using the kinodynamic model."""
         # Create a CasADi function for dynamics that works with MX
         if not hasattr(self, "_dynamics_fun"):
@@ -110,7 +114,7 @@ class QuadrupedMPCOpti:
             # Integration constraint (explicit Euler for now)
             self.opti.subject_to(x_next == x_k + dt * f_k)
 
-    def _create_dynamics_function(self):
+    def _create_dynamics_function(self) -> cs.Function:
         """Create a CasADi function for dynamics that works with MX variables."""
         # Get the symbolic expressions from the kinodynamic model
         acados_model = self.kindyn_model.export_robot_model()
@@ -123,7 +127,7 @@ class QuadrupedMPCOpti:
             [acados_model.f_expl_expr],
         )
 
-    def _setup_cost_function(self):
+    def _setup_cost_function(self) -> None:
         """Setup the quadratic tracking cost function."""
         # Cost weights from config
         q_base = self.config.mpc_config.q_base
@@ -164,7 +168,7 @@ class QuadrupedMPCOpti:
         # Set objective
         self.opti.minimize(cost)
 
-    def _setup_path_constraints(self):
+    def _setup_path_constraints(self) -> None:
         """Setup path constraints including friction cone, foot height, etc."""
         for k in range(self.horizon):
             contact_k = self.P_contact[:, k]
@@ -178,13 +182,16 @@ class QuadrupedMPCOpti:
                 self.opti.subject_to(constraint_expr >= constraint_l)
                 self.opti.subject_to(constraint_expr <= constraint_u)
 
-    def _setup_solver(self):
+    def _setup_solver(self) -> None:
         """Setup the solver options."""
         self.opti.solver("ipopt", self.config.solver_config)
 
     def solve_trajectory(
-        self, initial_state: dict, ref: np.ndarray, contact_sequence: np.ndarray
-    ) -> tuple:
+        self,
+        initial_state: dict[str, np.ndarray],
+        ref: np.ndarray,
+        contact_sequence: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """
         Solve the trajectory optimization problem.
 

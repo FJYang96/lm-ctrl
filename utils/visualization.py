@@ -1,4 +1,5 @@
 import numpy as np
+from gym_quadruped.quadruped_env import QuadrupedEnv
 
 
 def euler_to_quaternion(
@@ -34,8 +35,8 @@ def euler_to_quaternion(
 
 
 def render_planned_trajectory(
-    state_traj: np.ndarray, joint_vel_traj: np.ndarray, env
-) -> None:
+    state_traj: np.ndarray, joint_vel_traj: np.ndarray, env: QuadrupedEnv
+) -> list[np.ndarray]:
     """
     Renders the planned trajectory.
     Args:
