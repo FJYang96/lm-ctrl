@@ -2,8 +2,6 @@
 Simulation utilities for trajectory execution and data collection.
 """
 
-from typing import List, Optional, Tuple
-
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
 from tqdm import tqdm
@@ -72,9 +70,9 @@ def save_trajectory_results(
 def simulate_trajectory(
     env: QuadrupedEnv,
     joint_torques_traj: np.ndarray,
-    planned_traj_images: Optional[List[np.ndarray]] = None,
+    planned_traj_images: list[np.ndarray] | None = None,
     suffix: str = "",
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
     """
     Simulate the computed trajectory and optionally render/save video.
 
@@ -100,7 +98,7 @@ def simulate_trajectory(
 
 def _run_simulation_without_rendering(
     env: QuadrupedEnv, joint_torques_traj: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
     """
     Run simulation without rendering for performance.
 
@@ -134,7 +132,7 @@ def _run_simulation_with_rendering(
     joint_torques_traj: np.ndarray,
     planned_traj_images: list[np.ndarray] | None,
     suffix: str,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
     """
     Run simulation with rendering and video generation.
 
