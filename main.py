@@ -1,7 +1,6 @@
 import imageio
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
-from tqdm import tqdm
 
 import config
 from mpc.dynamics.model import KinoDynamic_Model
@@ -9,101 +8,68 @@ from mpc.mpc_opti import QuadrupedMPCOpti
 from utils import conversion
 from utils.inv_dyn import compute_joint_torques
 from utils.logging import color_print
-from utils.visualization import render_planned_trajectory
+from utils.simulation import (
+    create_reference_trajectory,
+    save_trajectory_results,
+    simulate_trajectory,
+)
+from utils.visualization import (
+    plot_trajectory_comparison,
+    render_and_save_planned_trajectory,
+)
 
 
 def main() -> None:
-    # ----------------------------------------------------------------------------------------------------------------
-    # STAGE 0: Create the model and the simulation environment
-    # ----------------------------------------------------------------------------------------------------------------
-    color_print(
-        "orange", "--- Stage 0: Creating the model and the simulation environment ---"
-    )
-
-    # Create the model
+    # ========================================================
+    # Stage 0: Setup
+    # ========================================================
+    color_print("orange", "Stage 0: Setup")
     kinodynamic_model = KinoDynamic_Model(config)
-
     mpc = QuadrupedMPCOpti(model=kinodynamic_model, config=config, build=True)
-    suffix = "_opti"  # Add suffix for opti files
-
     env = QuadrupedEnv(
         robot=config.robot,
         scene="flat",
         ground_friction_coeff=config.experiment.mu_ground,
         sim_dt=config.experiment.sim_dt,
     )
+    suffix = "_opti"
 
-    # ----------------------------------------------------------------------------------------------------------------
-    # STAGE 1: Trajectory Optimization
-    # ----------------------------------------------------------------------------------------------------------------
-    color_print(
-        "orange",
-        "--- Stage 1: Solving Kinodynamic Trajectory Optimization with Opti ---",
-    )
-
-    # Set up the initial state and reference for the hopping motion
+    # ========================================================
+    # Stage 1: Trajectory Optimization
+    # ========================================================
+    color_print("orange", "Stage 1: Trajectory Optimization")
     initial_state, _ = conversion.sim_to_mpc(
         config.experiment.initial_qpos, config.experiment.initial_qvel
     )
 
-    target_jump_height = 0.15  # Target 15cm jump height
-    reference = {
-        "ref_position": config.experiment.initial_qpos[0:3]
-        + np.array([0.1, 0.0, target_jump_height]),
-        "ref_linear_velocity": np.array([0.0, 0.0, 0.0]),
-        "ref_orientation": np.zeros(3),
-        "ref_angular_velocity": np.zeros(3),
-        "ref_joints": config.experiment.initial_qpos[7:19],
-    }
-
-    # Opti format with integral states
-    ref = np.concatenate(
-        [
-            reference["ref_position"],
-            reference["ref_linear_velocity"],
-            reference["ref_orientation"],
-            reference["ref_angular_velocity"],
-            reference["ref_joints"],
-            np.zeros(6),  # Reference for integral states
-            np.zeros(24),  # Reference for inputs (joint velocities + forces)
-        ]
-    )
+    ref = create_reference_trajectory(config.experiment.initial_qpos)
 
     state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
         initial_state, ref, config.mpc_config.contact_sequence
     )
     input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
-    color_print("red", f"Input trajectory shape: {input_traj.shape}")
 
     if status != 0:
         color_print("red", f"Optimization failed with status: {status}")
     else:
-        color_print(
-            "green", "Optimization successful. Extracted trajectory of states and GRFs."
-        )
+        color_print("green", "Optimization successful.")
 
-    # Save results with appropriate suffix
-    np.save(f"results/state_traj{suffix}.npy", state_traj)
-    np.save(f"results/joint_vel_traj{suffix}.npy", joint_vel_traj)
-    np.save(f"results/grf_traj{suffix}.npy", grf_traj)
-    np.save("results/contact_sequence.npy", config.mpc_config.contact_sequence)
-
-    if config.experiment.render:
-        print("Rendering planned trajectory...")
-        planned_traj_images = render_planned_trajectory(state_traj, input_traj, env)
-        imageio.mimsave(
-            f"results/planned_traj{suffix}.mp4",
-            planned_traj_images,
-            fps=1 / config.mpc_config.mpc_dt,
-        )
-
-    # ----------------------------------------------------------------------------------------------------------------
-    # STAGE 2: Inverse Dynamics to find Joint Torques
-    # ----------------------------------------------------------------------------------------------------------------
-    color_print(
-        "orange", "--- Stage 2: Computing Joint Torques via Inverse Dynamics ---"
+    # Save trajectory results
+    save_trajectory_results(
+        state_traj, joint_vel_traj, grf_traj, config.mpc_config.contact_sequence, suffix
     )
 
+    # Render planned trajectory if rendering is enabled
+    planned_traj_images = None
+    if config.experiment.render:
+        planned_traj_images = render_and_save_planned_trajectory(
+            state_traj, input_traj, env, suffix
+        )
+
+    # ========================================================
+    # Stage 2: Inverse Dynamics + Simulation
+    # ========================================================
+    color_print("orange", "Stage 2: Inverse Dynamics + Simulation")
     joint_torques_traj = compute_joint_torques(
         kinodynamic_model,
         state_traj,
@@ -113,38 +79,26 @@ def main() -> None:
     )
     np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
 
-    # ----------------------------------------------------------------------------------------------------------------
-    # STAGE 3: Simulate the trajectory
-    # ----------------------------------------------------------------------------------------------------------------
-    color_print("orange", "--- Stage 3: Simulating the trajectory ---")
-    # simulate the trajectory
-    env.reset(qpos=config.experiment.initial_qpos, qvel=config.experiment.initial_qvel)
-    images = []
-    action_index = 0
-    for i in tqdm(range(int(config.experiment.duration / config.experiment.sim_dt))):
-        # Step forward in the simulation
-        action = joint_torques_traj[action_index, :]
-        if (i + 1) % int(config.mpc_config.mpc_dt / config.experiment.sim_dt) == 0:
-            action_index += 1
-        state, reward, is_terminated, is_truncated, info = env.step(action=action)
-
-        # Render the environment into an image
-        if config.experiment.render:
-            image = env.render(mode="rgb_array", tint_robot=True)
-            overplotted_image = np.uint8(
-                0.7 * image + 0.3 * planned_traj_images[action_index]
-            )
-            images.append(overplotted_image)
-
-    env.close()
-    if config.experiment.render:
-        fps = 1 / config.experiment.sim_dt
-        imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
-
-    color_print(
-        "green",
-        f"✅ Complete! Generated files with suffix '{suffix}' in results/ directory",
+    qpos_traj, qvel_traj, images = simulate_trajectory(
+        env, joint_torques_traj, planned_traj_images
     )
+
+    # Plot comparison between planned and simulated trajectories
+    plot_trajectory_comparison(
+        state_traj,
+        input_traj,
+        qpos_traj,
+        qvel_traj,
+        quantities=["base_position", "base_orientation", "joint_positions"],
+        mpc_dt=config.mpc_config.mpc_dt,
+        sim_dt=config.experiment.sim_dt,
+        save_path="results/trajectory_comparison.png",
+        show_plot=False,
+    )
+
+    # Save simulation video
+    fps = 1 / config.experiment.sim_dt
+    imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
 
 
 if __name__ == "__main__":

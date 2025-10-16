@@ -20,7 +20,7 @@ experiment: BaseExperiment = BaseExperiment(
     terrain="flat",
     initial_qpos=robot_data.initial_qpos,
     initial_qvel=robot_data.initial_qvel,
-    render=True,
+    render=False,
 )
 
 mpc_config: MPCConfig = HoppingMPCConfig(
@@ -64,3 +64,5 @@ solver_config: dict[str, Any] = {
     "ipopt.alpha_for_y": "primal",
     "ipopt.recalc_y": "yes",
 }
+
+# Simulation and logging parameters
