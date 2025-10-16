@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CONDA_DIR=/opt/conda \
     PATH=/opt/conda/bin:$PATH
 
-    
+
 # Install tkinter, pip, and gedit
 RUN apt-get update && apt-get install -y python3-tk
 RUN apt-get update && apt-get install -y python3-pip
