@@ -228,15 +228,20 @@ def plot_trajectory_comparison(
         print("Warning: No valid quantities specified for plotting")
         return
 
-    # Create subplots
+    # Create subplots with 2 columns
     n_plots = len(quantities_to_plot)
-    fig, axes = plt.subplots(n_plots, 1, figsize=figsize, sharex=True)
+    n_rows = (n_plots + 1) // 2  # Ceiling division to handle odd number of plots
+    fig, axes = plt.subplots(n_rows, 2, figsize=figsize)
 
-    if n_plots == 1:
-        axes = [axes]
+    # Convert axes to 2D array if n_rows == 1
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+
+    # Flatten axes for easier indexing
+    axes_flat = axes.flatten()
 
     for i, quantity in enumerate(quantities_to_plot):
-        ax = axes[i]
+        ax = axes_flat[i]
         mpc_data = available_quantities[quantity]["mpc_data"]
         sim_data = available_quantities[quantity]["sim_data"]
         labels = available_quantities[quantity]["labels"]
@@ -252,7 +257,9 @@ def plot_trajectory_comparison(
                 label=f"Planned {labels[j]}",
                 linewidth=2,
                 linestyle="--",
+                marker="^",
                 alpha=0.8,
+                color=f"C{j}",
             )
             ax.plot(
                 sim_time_q,
@@ -260,15 +267,18 @@ def plot_trajectory_comparison(
                 label=f"Simulated {labels[j]}",
                 linewidth=1.5,
                 linestyle="-",
+                color=f"C{j}",
             )
 
         ax.set_title(title, fontsize=12, fontweight="bold")
         ax.set_ylabel("Value", fontsize=10)
+        ax.set_xlabel("Time (s)", fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8)
 
-    # Set x-axis label only on the bottom plot
-    axes[-1].set_xlabel("Time (s)", fontsize=10)
+    # Hide empty subplots if odd number of quantities
+    for i in range(n_plots, len(axes_flat)):
+        axes_flat[i].set_visible(False)
 
     plt.tight_layout()
 

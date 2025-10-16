@@ -20,12 +20,12 @@ experiment: BaseExperiment = BaseExperiment(
     terrain="flat",
     initial_qpos=robot_data.initial_qpos,
     initial_qvel=robot_data.initial_qvel,
-    render=False,
+    render=True,
 )
 
 mpc_config: MPCConfig = HoppingMPCConfig(
     duration=duration,
-    mpc_dt=0.1,
+    mpc_dt=0.02,
     pre_flight_stance_duration=0.3,  # Used for finding contact sequence
     flight_duration=0.4,  # Used for finding contact sequence
     q_base=np.diag([10, 10, 50, 1, 1, 1, 1, 1, 1, 1, 1, 1]) * 1.0,
@@ -66,3 +66,9 @@ solver_config: dict[str, Any] = {
 }
 
 # Simulation and logging parameters
+plot_quantities = [
+    "base_position",
+    "base_linear_velocity",
+    "base_orientation",
+    "base_angular_velocity",
+]

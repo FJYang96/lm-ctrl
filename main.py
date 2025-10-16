@@ -89,7 +89,7 @@ def main() -> None:
         input_traj,
         qpos_traj,
         qvel_traj,
-        quantities=["base_position", "base_orientation", "joint_positions"],
+        quantities=config.plot_quantities,
         mpc_dt=config.mpc_config.mpc_dt,
         sim_dt=config.experiment.sim_dt,
         save_path="results/trajectory_comparison.png",
