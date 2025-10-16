@@ -71,4 +71,5 @@ plot_quantities = [
     "base_linear_velocity",
     "base_orientation",
     "base_angular_velocity",
+    "ground_reaction_forces",
 ]

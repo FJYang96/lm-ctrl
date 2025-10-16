@@ -74,7 +74,7 @@ def simulate_trajectory(
     joint_torques_traj: np.ndarray,
     planned_traj_images: Optional[List[np.ndarray]] = None,
     suffix: str = "",
-) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray]]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[np.ndarray]]:
     """
     Simulate the computed trajectory and optionally render/save video.
 
@@ -85,7 +85,8 @@ def simulate_trajectory(
         suffix: File suffix for saving results
 
     Returns:
-        Tuple of (qpos_traj, qvel_traj, images) - position, velocity trajectories, and rendered images
+        Tuple of (qpos_traj, qvel_traj, grf_traj, images) -
+        position, velocity, ground reaction force, and rendered images
     """
     env.reset(qpos=config.experiment.initial_qpos, qvel=config.experiment.initial_qvel)
 
@@ -99,7 +100,7 @@ def simulate_trajectory(
 
 def _run_simulation_without_rendering(
     env: QuadrupedEnv, joint_torques_traj: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray]]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[np.ndarray]]:
     """
     Run simulation without rendering for performance.
 
@@ -113,6 +114,7 @@ def _run_simulation_without_rendering(
     num_steps = int(config.experiment.duration / config.experiment.sim_dt)
     qpos_traj = []
     qvel_traj = []
+    grf_traj = []
     action_index = 0
 
     for i in tqdm(range(num_steps)):
@@ -123,8 +125,8 @@ def _run_simulation_without_rendering(
         state, reward, is_terminated, is_truncated, info = env.step(action=action)
         qpos_traj.append(state["qpos"].copy())
         qvel_traj.append(state["qvel"].copy())
-
-    return np.array(qpos_traj), np.array(qvel_traj), []
+        grf_traj.append(state["contact_forces:base"].copy())
+    return np.array(qpos_traj), np.array(qvel_traj), np.array(grf_traj), []
 
 
 def _run_simulation_with_rendering(
@@ -132,7 +134,7 @@ def _run_simulation_with_rendering(
     joint_torques_traj: np.ndarray,
     planned_traj_images: Optional[List[np.ndarray]],
     suffix: str,
-) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray]]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[np.ndarray]]:
     """
     Run simulation with rendering and video generation.
 
@@ -150,6 +152,7 @@ def _run_simulation_with_rendering(
     images = []
     qpos_traj = []
     qvel_traj = []
+    grf_traj = []
     action_index = 0
 
     for i in tqdm(range(num_steps)):
@@ -160,7 +163,7 @@ def _run_simulation_with_rendering(
         state, reward, is_terminated, is_truncated, info = env.step(action=action)
         qpos_traj.append(state["qpos"].copy())
         qvel_traj.append(state["qvel"].copy())
-
+        grf_traj.append(state["contact_forces:base"].copy())
         # Render and composite images
         image = env.render(mode="rgb_array", tint_robot=True)
         overplotted_image = np.uint8(
@@ -174,4 +177,4 @@ def _run_simulation_with_rendering(
         )
         images.append(overplotted_image)
 
-    return np.array(qpos_traj), np.array(qvel_traj), images
+    return np.array(qpos_traj), np.array(qvel_traj), np.array(grf_traj), images

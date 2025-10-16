@@ -30,9 +30,10 @@ def main() -> None:
         robot=config.robot,
         scene="flat",
         ground_friction_coeff=config.experiment.mu_ground,
+        state_obs_names=QuadrupedEnv._DEFAULT_OBS + ("contact_forces:base",),
         sim_dt=config.experiment.sim_dt,
     )
-    suffix = "_opti"
+    suffix = ""
 
     # ========================================================
     # Stage 1: Trajectory Optimization
@@ -79,7 +80,7 @@ def main() -> None:
     )
     np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
 
-    qpos_traj, qvel_traj, images = simulate_trajectory(
+    qpos_traj, qvel_traj, grf_traj, images = simulate_trajectory(
         env, joint_torques_traj, planned_traj_images
     )
 
@@ -89,6 +90,7 @@ def main() -> None:
         input_traj,
         qpos_traj,
         qvel_traj,
+        grf_traj,
         quantities=config.plot_quantities,
         mpc_dt=config.mpc_config.mpc_dt,
         sim_dt=config.experiment.sim_dt,
@@ -97,8 +99,9 @@ def main() -> None:
     )
 
     # Save simulation video
-    fps = 1 / config.experiment.sim_dt
-    imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
+    if config.experiment.render:
+        fps = 1 / config.experiment.sim_dt
+        imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
 
 
 if __name__ == "__main__":

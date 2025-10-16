@@ -5,6 +5,7 @@ import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
 
 from .conversion import mpc_to_sim
+from .logging import color_print
 
 
 def render_planned_trajectory(
@@ -72,11 +73,64 @@ def render_and_save_planned_trajectory(
     return planned_traj_images
 
 
+# Compute Mean Squared Error for all available quantities using aligned timesteps
+def compute_aligned_mse(
+    mpc_time_arr: np.ndarray,
+    sim_time_arr: np.ndarray,
+    mpc_arr: np.ndarray,
+    sim_arr: np.ndarray,
+) -> float | None:
+    """
+    Compute MSE between MPC and simulation arrays by comparing only aligned timesteps.
+
+    Alignment strategy: for each MPC time t, pick the nearest simulation index via rounding
+    assuming uniform sampling. A small tolerance guards against floating point drift.
+    """
+    if mpc_arr.ndim == 1:
+        mpc_arr = mpc_arr[:, None]
+    if sim_arr.ndim == 1:
+        sim_arr = sim_arr[:, None]
+
+    if len(mpc_time_arr) == 0 or len(sim_time_arr) < 2:
+        return None
+
+    # Estimate dt from provided time arrays to avoid reliance on function args
+    sim_dt_local = (
+        float(np.median(np.diff(sim_time_arr))) if len(sim_time_arr) > 1 else 0.0
+    )
+    if sim_dt_local <= 0.0:
+        return None
+
+    aligned_mpc = []
+    aligned_sim = []
+    # Tolerance scales slightly with time to accommodate accumulated fp error
+    for i, t in enumerate(mpc_time_arr):
+        j = int(round(t / sim_dt_local))
+        if 0 <= j < len(sim_time_arr):
+            if abs(sim_time_arr[j] - t) <= max(1e-9, 1e-6 * max(1.0, t)):
+                aligned_mpc.append(mpc_arr[i])
+                aligned_sim.append(sim_arr[j])
+
+    if not aligned_mpc:
+        return None
+
+    mpc_stack = np.vstack(aligned_mpc)
+    sim_stack = np.vstack(aligned_sim)
+
+    num_cols = min(mpc_stack.shape[1], sim_stack.shape[1])
+    if num_cols == 0:
+        return None
+
+    diff = mpc_stack[:, :num_cols] - sim_stack[:, :num_cols]
+    return float(np.sqrt(np.mean(diff**2)))
+
+
 def plot_trajectory_comparison(
     mpc_x_traj: np.ndarray,
     mpc_u_traj: np.ndarray,
     sim_qpos_traj: np.ndarray,
     sim_qvel_traj: np.ndarray,
+    sim_grf_traj: np.ndarray,
     quantities: Optional[List[str]] = None,
     mpc_dt: float = 0.01,
     sim_dt: float = 0.001,
@@ -99,6 +153,7 @@ def plot_trajectory_comparison(
             - 'base_angular_velocity': Base angular velocity
             - 'joint_positions': Joint positions
             - 'joint_velocities': Joint velocities
+            - 'ground_reaction_forces': Ground reaction forces
             - 'all': Plot all available quantities
         mpc_dt: MPC time step duration
         sim_dt: Simulation time step duration
@@ -123,6 +178,9 @@ def plot_trajectory_comparison(
     # Create time axes for both trajectories
     mpc_time = np.arange(mpc_x_traj.shape[0]) * mpc_dt
     sim_time = np.arange(sim_qpos_traj.shape[0]) * sim_dt
+    # Inputs (u) are typically defined for N-1 intervals when there are N states
+    # Use a dedicated time vector for inputs to avoid length mismatch in plots
+    mpc_u_time = np.arange(mpc_u_traj.shape[0]) * mpc_dt
 
     # Convert MPC trajectory to simulation format for comparison
     mpc_qpos_list = []
@@ -203,7 +261,7 @@ def plot_trajectory_comparison(
         "joint_positions": {
             "mpc_data": mpc_qpos_traj[:, 7:19],
             "sim_data": sim_qpos_traj[:, 7:19],
-            "labels": [f"Joint {i+1} (rad)" for i in range(12)],
+            "labels": [f"Joint {i + 1} (rad)" for i in range(12)],
             "title": "Joint Positions Comparison",
             "mpc_time": mpc_time,
             "sim_time": sim_time,
@@ -211,18 +269,48 @@ def plot_trajectory_comparison(
         "joint_velocities": {
             "mpc_data": mpc_qvel_traj[:, 6:18],
             "sim_data": sim_qvel_traj[:, 6:18],
-            "labels": [f"Joint {i+1} Vel (rad/s)" for i in range(12)],
+            "labels": [f"Joint {i + 1} Vel (rad/s)" for i in range(12)],
             "title": "Joint Velocities Comparison",
             "mpc_time": mpc_time,
             "sim_time": sim_time,
         },
+        "ground_reaction_forces": {
+            "mpc_data": mpc_u_traj[:, 12:24],
+            "sim_data": sim_grf_traj,
+            "labels": [f"Force {i + 1} (N)" for i in range(12)],
+            "title": "Ground Reaction Forces Comparison",
+            "mpc_time": mpc_u_time,
+            "sim_time": sim_time,
+        },
     }
+
+    # Add per-limb GRF entries (FL, FR, RL, RR), each with Fx, Fy, Fz
+    leg_names = ["FL", "FR", "RL", "RR"]
+    leg_slices = [(0, 3), (3, 6), (6, 9), (9, 12)]
+    for leg_index, (start, end) in enumerate(leg_slices):
+        leg = leg_names[leg_index]
+        available_quantities[f"ground_reaction_forces_{leg}"] = {
+            "mpc_data": mpc_u_traj[:, 12 + start : 12 + end],
+            "sim_data": sim_grf_traj[:, start:end],
+            "labels": ["Fx (N)", "Fy (N)", "Fz (N)"],
+            "title": f"Ground Reaction Forces - {leg}",
+            "mpc_time": mpc_u_time,
+            "sim_time": sim_time,
+        }
 
     # Determine which quantities to plot
     if "all" in quantities:
         quantities_to_plot = list(available_quantities.keys())
     else:
         quantities_to_plot = [q for q in quantities if q in available_quantities]
+
+    # If overall GRF was requested, replace it with per-limb GRF plots
+    if "ground_reaction_forces" in quantities_to_plot:
+        insert_index = quantities_to_plot.index("ground_reaction_forces")
+        quantities_to_plot.pop(insert_index)
+        quantities_to_plot[insert_index:insert_index] = [
+            f"ground_reaction_forces_{leg}" for leg in leg_names
+        ]
 
     if not quantities_to_plot:
         print("Warning: No valid quantities specified for plotting")
@@ -290,3 +378,20 @@ def plot_trajectory_comparison(
         plt.show()
     else:
         plt.close()
+
+    mse_results: dict[str, float] = {}
+    for q_name, meta in available_quantities.items():
+        mse_val = compute_aligned_mse(
+            meta["mpc_time"], meta["sim_time"], meta["mpc_data"], meta["sim_data"]
+        )
+        if mse_val is not None and np.isfinite(mse_val):
+            mse_results[q_name] = mse_val
+    if mse_results:
+        color_print(
+            "orange",
+            "RMSE between planned and simulated trajectories (aligned timesteps):",
+        )
+        # Calculate max width for name column for alignment
+        col_width = max(len(q) for q in mse_results.keys())
+        for q_name in sorted(mse_results.keys()):
+            print(f" - {q_name:<{col_width}} : {mse_results[q_name]:.6g}")
