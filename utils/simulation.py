@@ -132,7 +132,7 @@ def _run_simulation_without_rendering(
 def _run_simulation_with_rendering(
     env: QuadrupedEnv,
     joint_torques_traj: np.ndarray,
-    planned_traj_images: Optional[List[np.ndarray]],
+    planned_traj_images: list[np.ndarray] | None,
     suffix: str,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[np.ndarray]]:
     """
