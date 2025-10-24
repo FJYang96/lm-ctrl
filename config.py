@@ -25,7 +25,7 @@ experiment: BaseExperiment = BaseExperiment(
 
 mpc_config: MPCConfig = HoppingMPCConfig(
     duration=duration,
-    mpc_dt=0.02,
+    mpc_dt=0.1,
     pre_flight_stance_duration=0.3,  # Used for finding contact sequence
     flight_duration=0.4,  # Used for finding contact sequence
     q_base=np.diag([10, 10, 50, 1, 1, 1, 1, 1, 1, 1, 1, 1]) * 1.0,
@@ -45,8 +45,8 @@ mpc_config: MPCConfig = HoppingMPCConfig(
     ],
     path_constraint_params={
         "SWING_GRF_EPS": 0.0,
-        "STANCE_HEIGHT_EPS": 0.04,
-        "NO_SLIP_EPS": 0.01,
+        "STANCE_HEIGHT_EPS": 0.0,
+        "NO_SLIP_EPS": 0.0,
     },
     warmstart_state=None,
     warmstart_input=None,

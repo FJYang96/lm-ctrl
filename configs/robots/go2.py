@@ -7,7 +7,7 @@ from gym_quadruped.robot_cfgs import get_robot_config
 from .robot_data import RobotData
 
 go2_stand_qpos = np.zeros(19)
-go2_stand_qpos[0:3] = [0.0, 0.0, 0.23]
+go2_stand_qpos[0:3] = [0.0, 0.0, 0.2117]
 go2_stand_qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
 go2_stand_qpos[7:19] = [
     0.0,
