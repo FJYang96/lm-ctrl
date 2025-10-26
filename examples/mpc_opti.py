@@ -29,8 +29,13 @@ class HoppingMPCOpti:
         
         # Get dimensions from the kinodynamic model
         acados_model = self.kindyn_model.export_robot_model()
-        self.states_dim = acados_model.x.size()[0]
-        self.inputs_dim = acados_model.u.size()[0]
+        if acados_model is not None:
+            self.states_dim = acados_model.x.size()[0]
+            self.inputs_dim = acados_model.u.size()[0]
+        else:
+            # Fallback when acados is not available
+            self.states_dim = self.kindyn_model.get_state_dim()
+            self.inputs_dim = self.kindyn_model.get_input_dim()
         
         # Initialize the Opti optimization environment
         self.opti = cs.Opti()
@@ -155,11 +160,29 @@ class HoppingMPCOpti:
         # Get the symbolic expressions from the kinodynamic model
         acados_model = self.kindyn_model.export_robot_model()
         
-        # Create the function directly from the SX expression
-        # This automatically handles the conversion to work with different variable types
-        return cs.Function('dynamics', 
-                          [acados_model.x, acados_model.u, acados_model.p], 
-                          [acados_model.f_expl_expr])
+        if acados_model is not None:
+            # Create the function directly from the SX expression
+            # This automatically handles the conversion to work with different variable types
+            return cs.Function('dynamics', 
+                              [acados_model.x, acados_model.u, acados_model.p], 
+                              [acados_model.f_expl_expr])
+        else:
+            # Fallback: create function using model's symbolic variables directly
+            # Build the parameter vector the same way as in export_robot_model
+            param = cs.vertcat(
+                self.kindyn_model.stance_param,
+                self.kindyn_model.mu_friction,
+                self.kindyn_model.stance_proximity,
+                self.kindyn_model.base_position,
+                self.kindyn_model.base_yaw,
+                self.kindyn_model.external_wrench,
+                self.kindyn_model.inertia,
+                self.kindyn_model.mass,
+            )
+            f_expl = self.kindyn_model.forward_dynamics(self.kindyn_model.states, self.kindyn_model.inputs, param)
+            return cs.Function('dynamics', 
+                              [self.kindyn_model.states, self.kindyn_model.inputs, param], 
+                              [f_expl])
             
     def _setup_path_constraints(self):
         """Setup path constraints including friction cone, foot height, etc."""

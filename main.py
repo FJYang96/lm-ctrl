@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 import config
 from examples.model import KinoDynamic_Model
-from utils.inv_dyn import compute_joint_torques
+from utils.inv_dyn import compute_joint_torques, compute_joint_torques_improved
 from utils.visualization import render_planned_trajectory
 
 
@@ -119,16 +119,22 @@ def main():
     np.save("results/contact_sequence.npy", config.contact_sequence)
 
     print("Rendering planned trajectory...")
-    planned_traj_images = render_planned_trajectory(state_traj, joint_vel_traj, env)
-    imageio.mimsave(f"results/planned_traj{suffix}.mp4", planned_traj_images, fps=1 / config.mpc_dt)
+    # Temporarily disable rendering to test inverse dynamics
+    # planned_traj_images = render_planned_trajectory(state_traj, joint_vel_traj, env)
+    # imageio.mimsave(f"results/planned_traj{suffix}.mp4", planned_traj_images, fps=1 / config.mpc_dt)
+    planned_traj_images = [np.zeros((100, 100, 3), dtype=np.uint8)] * len(state_traj)  # Dummy images
+    print("Rendering skipped for testing")
 
     # ----------------------------------------------------------------------------------------------------------------
     # STAGE 2: Inverse Dynamics to find Joint Torques
     # ----------------------------------------------------------------------------------------------------------------
     print_orange("--- Stage 2: Computing Joint Torques via Inverse Dynamics ---")
 
-    joint_torques_traj = compute_joint_torques(
-        kinodynamic_model, state_traj, grf_traj, config.contact_sequence, config.mpc_dt
+    # Use improved inverse dynamics computation with better numerical stability
+    # Create proper input trajectory that combines joint velocities and GRFs
+    input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
+    joint_torques_traj = compute_joint_torques_improved(
+        kinodynamic_model, state_traj, input_traj, config.contact_sequence, config.mpc_dt
     )
     np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
 
@@ -148,9 +154,10 @@ def main():
         state, reward, is_terminated, is_truncated, info = env.step(action=action)
 
         # Render the environment into an image
-        image = env.render(mode="rgb_array", tint_robot=True)
-        overplotted_image = np.uint8(0.7 * image + 0.3 * planned_traj_images[action_index])
-        images.append(overplotted_image)
+        # image = env.render(mode="rgb_array", tint_robot=True)
+        # overplotted_image = np.uint8(0.7 * image + 0.3 * planned_traj_images[action_index])
+        # images.append(overplotted_image)
+        images.append(np.zeros((100, 100, 3), dtype=np.uint8))  # Dummy image
 
     fps = 1 / config.sim_dt
     imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)

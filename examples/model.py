@@ -8,7 +8,12 @@ import os
 import casadi as cs
 import gym_quadruped
 import numpy as np
-from acados_template import AcadosModel
+try:
+    from acados_template import AcadosModel
+    ACADOS_AVAILABLE = True
+except ImportError:
+    ACADOS_AVAILABLE = False
+    print("Warning: acados_template not available. Some functionality may be limited.")
 from liecasadi import SO3
 
 gym_quadruped_path = os.path.dirname(gym_quadruped.__file__)
@@ -488,7 +493,15 @@ class KinoDynamic_Model:
             integral_states,
         )
 
-    def export_robot_model(self) -> AcadosModel:
+    def get_state_dim(self):
+        """Get the dimension of the state vector"""
+        return self.states.size()[0]
+    
+    def get_input_dim(self):
+        """Get the dimension of the input vector"""
+        return self.inputs.size()[0]
+
+    def export_robot_model(self):
         """
         This method set some general properties of the NMPC, such as the params,
         prediction mode, etc...! It will be called in centroidal_nmpc.py
@@ -508,6 +521,10 @@ class KinoDynamic_Model:
         f_expl = self.forward_dynamics(self.states, self.inputs, self.param)
         f_impl = self.states_dot - f_expl
 
+        if not ACADOS_AVAILABLE:
+            print("Warning: AcadosModel not available. Returning None.")
+            return None
+            
         acados_model = AcadosModel()
         acados_model.f_impl_expr = f_impl
         acados_model.f_expl_expr = f_expl
