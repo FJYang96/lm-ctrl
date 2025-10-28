@@ -117,7 +117,7 @@ self.opti.set_value(self.P_contact, contact_sequence)
 The Opti framework enables several future improvements:
 
 1. **Complementarity Constraints** - For automatic contact detection
-2. **Variable Contact Sequences** - Optimization over gait patterns  
+2. **Variable Contact Sequences** - Optimization over gait patterns
 3. **Multi-Contact Scenarios** - Complex terrain interactions
 4. **Real-time Capabilities** - With warm-starting and reduced horizons
 

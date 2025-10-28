@@ -62,7 +62,7 @@ print("-" * 20, "Simulating and rendering", "-" * 13)
 images = []
 sim_times, render_times = [], []
 action_index = 0
-for i in tqdm(range(int(sim_duration / sim_dt))):
+for _ in tqdm(range(int(sim_duration / sim_dt))):
     import imageio
 
     # Step forward in the simulation

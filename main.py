@@ -2,168 +2,121 @@ import argparse
 import imageio
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
-from tqdm import tqdm
 
 import config
-from examples.model import KinoDynamic_Model
+from mpc.dynamics.model import KinoDynamic_Model
+from mpc.mpc_opti import QuadrupedMPCOpti
+from utils import conversion
 from utils.inv_dyn import compute_joint_torques, compute_joint_torques_improved
-from utils.visualization import render_planned_trajectory
+from utils.logging import color_print
+from utils.simulation import (
+    create_reference_trajectory,
+    save_trajectory_results,
+    simulate_trajectory,
+)
+from utils.visualization import (
+    plot_trajectory_comparison,
+    render_and_save_planned_trajectory,
+)
 
 
-def print_orange(text):
-    print("\033[1m\033[38;5;208m" + text + "\033[0m")
-
-
-def print_red(text):
-    print("\033[1m\033[38;5;196m" + text + "\033[0m")
-
-
-def print_green(text):
-    print("\033[1m\033[38;5;46m" + text + "\033[0m")
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description='Quadruped Hopping MPC')
-    parser.add_argument('--solver', choices=['acados', 'opti'], default='opti',
-                        help='Choose solver: acados (original) or opti (new)')
+    parser.add_argument('--inverse-dynamics', choices=['original', 'improved'], default='improved',
+                        help='Choose inverse dynamics implementation: original or improved')
     args = parser.parse_args()
 
-    # ----------------------------------------------------------------------------------------------------------------
-    # STAGE 0: Create the model and the simulation environment
-    # ----------------------------------------------------------------------------------------------------------------
-    print_orange("--- Stage 0: Creating the model and the simulation environment ---")
-    print(f"Using solver: {args.solver}")
-
-    # Create the model
+    # ========================================================
+    # Stage 0: Setup
+    # ========================================================
+    color_print("orange", "Stage 0: Setup")
     kinodynamic_model = KinoDynamic_Model(config)
-
-    # Create MPC based on solver choice
-    if args.solver == 'acados':
-        from examples.mpc import HoppingMPC
-        mpc = HoppingMPC(model=kinodynamic_model, config=config, build=True)
-        suffix = ""  # No suffix for original files
-    else:  # opti
-        from examples.mpc_opti import HoppingMPCOpti
-        mpc = HoppingMPCOpti(model=kinodynamic_model, config=config, build=True)
-        suffix = "_opti"  # Add suffix for opti files
-
+    mpc = QuadrupedMPCOpti(model=kinodynamic_model, config=config, build=True)
     env = QuadrupedEnv(
         robot=config.robot,
         scene="flat",
-        ground_friction_coeff=config.sim_params[
-            "ground_friction_coeff"
-        ],  # pass a float for a fixed value
-        sim_dt=config.sim_params["sim_dt"],
+        ground_friction_coeff=config.experiment.mu_ground,
+        state_obs_names=QuadrupedEnv._DEFAULT_OBS + ("contact_forces:base",),
+        sim_dt=config.experiment.sim_dt,
+    )
+    suffix = ""
+
+    # ========================================================
+    # Stage 1: Trajectory Optimization
+    # ========================================================
+    color_print("orange", "Stage 1: Trajectory Optimization")
+    initial_state, _ = conversion.sim_to_mpc(
+        config.experiment.initial_qpos, config.experiment.initial_qvel
     )
 
-    # ----------------------------------------------------------------------------------------------------------------
-    # STAGE 1: Trajectory Optimization
-    # ----------------------------------------------------------------------------------------------------------------
-    print_orange(f"--- Stage 1: Solving Kinodynamic Trajectory Optimization with {args.solver.upper()} ---")
-
-    # Set up the initial state and reference for the hopping motion
-    initial_state = {
-        "position": config.initial_qpos[0:3],
-        "linear_velocity": np.zeros(3),
-        "orientation": np.zeros(3),
-        "angular_velocity": np.zeros(3),
-        "joint_FL": config.initial_qpos[7:10],
-        "joint_FR": config.initial_qpos[10:13],
-        "joint_RL": config.initial_qpos[13:16],
-        "joint_RR": config.initial_qpos[16:19],
-    }
-
-    reference = {
-        "ref_position": config.initial_qpos[0:3] + np.array([0.1, 0.0, 0.0]),
-        "ref_linear_velocity": np.array([0.0, 0.0, 0.0]),
-        "ref_orientation": np.zeros(3),
-        "ref_angular_velocity": np.zeros(3),
-        "ref_joints": config.initial_qpos[7:19],
-    }
-
-    if args.solver == 'acados':
-        # Original Acados format
-        ref = np.concatenate([
-            reference["ref_position"],
-            reference["ref_linear_velocity"],
-            reference["ref_orientation"],
-            reference["ref_angular_velocity"],
-            reference["ref_joints"],
-            np.zeros(24),  # Reference for inputs
-        ])
-    else:
-        # Opti format with integral states
-        ref = np.concatenate([
-            reference["ref_position"],
-            reference["ref_linear_velocity"],
-            reference["ref_orientation"],
-            reference["ref_angular_velocity"],
-            reference["ref_joints"],
-            np.zeros(6),   # Reference for integral states
-            np.zeros(24),  # Reference for inputs (joint velocities + forces)
-        ])
+    ref = create_reference_trajectory(config.experiment.initial_qpos)
 
     state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
-        initial_state, ref, config.contact_sequence
+        initial_state, ref, config.mpc_config.contact_sequence
     )
+    input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
 
     if status != 0:
-        print_red(f"Optimization failed with status: {status}")
+        color_print("red", f"Optimization failed with status: {status}")
     else:
-        print_green("Optimization successful. Extracted trajectory of states and GRFs.")
+        color_print("green", "Optimization successful.")
 
-    # Save results with appropriate suffix
-    np.save(f"results/state_traj{suffix}.npy", state_traj)
-    np.save(f"results/joint_vel_traj{suffix}.npy", joint_vel_traj)
-    np.save(f"results/grf_traj{suffix}.npy", grf_traj)
-    np.save("results/contact_sequence.npy", config.contact_sequence)
-
-    print("Rendering planned trajectory...")
-    # Temporarily disable rendering to test inverse dynamics
-    # planned_traj_images = render_planned_trajectory(state_traj, joint_vel_traj, env)
-    # imageio.mimsave(f"results/planned_traj{suffix}.mp4", planned_traj_images, fps=1 / config.mpc_dt)
-    planned_traj_images = [np.zeros((100, 100, 3), dtype=np.uint8)] * len(state_traj)  # Dummy images
-    print("Rendering skipped for testing")
-
-    # ----------------------------------------------------------------------------------------------------------------
-    # STAGE 2: Inverse Dynamics to find Joint Torques
-    # ----------------------------------------------------------------------------------------------------------------
-    print_orange("--- Stage 2: Computing Joint Torques via Inverse Dynamics ---")
-
-    # Use improved inverse dynamics computation with better numerical stability
-    # Create proper input trajectory that combines joint velocities and GRFs
-    input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
-    joint_torques_traj = compute_joint_torques_improved(
-        kinodynamic_model, state_traj, input_traj, config.contact_sequence, config.mpc_dt
+    # Save trajectory results
+    save_trajectory_results(
+        state_traj, joint_vel_traj, grf_traj, config.mpc_config.contact_sequence, suffix
     )
+
+    # Render planned trajectory if rendering is enabled
+    planned_traj_images = None
+    if config.experiment.render:
+        planned_traj_images = render_and_save_planned_trajectory(
+            state_traj, input_traj, env, suffix
+        )
+
+    # ========================================================
+    # Stage 2: Inverse Dynamics + Simulation
+    # ========================================================
+    color_print("orange", "Stage 2: Inverse Dynamics + Simulation")
+    
+    # Choose inverse dynamics implementation based on argument
+    if args.inverse_dynamics == 'improved':
+        color_print("green", "Using IMPROVED inverse dynamics implementation")
+        joint_torques_traj = compute_joint_torques_improved(
+            kinodynamic_model, state_traj, input_traj, config.mpc_config.contact_sequence, config.mpc_config.mpc_dt
+        )
+    else:
+        color_print("green", "Using ORIGINAL inverse dynamics implementation")
+        joint_torques_traj = compute_joint_torques(
+            kinodynamic_model,
+            state_traj,
+            grf_traj,
+            config.mpc_config.contact_sequence,
+            config.mpc_config.mpc_dt,
+        )
     np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
 
-    # ----------------------------------------------------------------------------------------------------------------
-    # STAGE 3: Simulate the trajectory
-    # ----------------------------------------------------------------------------------------------------------------
-    print_orange("--- Stage 3: Simulating the trajectory ---")
-    # simulate the trajectory
-    env.reset(qpos=config.initial_qpos, qvel=config.initial_qvel)
-    images = []
-    action_index = 0
-    for i in tqdm(range(int(config.duration / config.sim_dt))):
-        # Step forward in the simulation
-        action = joint_torques_traj[action_index, :]
-        if (i + 1) % int(config.mpc_dt / config.sim_dt) == 0:
-            action_index += 1
-        state, reward, is_terminated, is_truncated, info = env.step(action=action)
+    qpos_traj, qvel_traj, grf_traj, images = simulate_trajectory(
+        env, joint_torques_traj, planned_traj_images
+    )
 
-        # Render the environment into an image
-        # image = env.render(mode="rgb_array", tint_robot=True)
-        # overplotted_image = np.uint8(0.7 * image + 0.3 * planned_traj_images[action_index])
-        # images.append(overplotted_image)
-        images.append(np.zeros((100, 100, 3), dtype=np.uint8))  # Dummy image
+    # Plot comparison between planned and simulated trajectories
+    plot_trajectory_comparison(
+        state_traj,
+        input_traj,
+        qpos_traj,
+        qvel_traj,
+        grf_traj,
+        quantities=config.plot_quantities,
+        mpc_dt=config.mpc_config.mpc_dt,
+        sim_dt=config.experiment.sim_dt,
+        save_path="results/trajectory_comparison.png",
+        show_plot=False,
+    )
 
-    fps = 1 / config.sim_dt
-    imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
-    env.close()
-
-    print_green(f"✅ Complete! Generated files with suffix '{suffix}' in results/ directory")
+    # Save simulation video
+    if config.experiment.render:
+        fps = 1 / config.experiment.sim_dt
+        imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
 
 
 if __name__ == "__main__":
