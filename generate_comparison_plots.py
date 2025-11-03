@@ -7,6 +7,7 @@ Similar to the style of plots in results/ folder
 import argparse
 import os
 import time
+from typing import Any, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,7 +18,9 @@ from mpc.mpc_opti import QuadrupedMPCOpti
 from utils.inv_dyn import compute_joint_torques, compute_joint_torques_improved
 
 
-def run_trajectory_optimization():
+def run_trajectory_optimization() -> (
+    Optional[Tuple[Any, np.ndarray, np.ndarray, np.ndarray]]
+):
     """Run trajectory optimization and return results"""
     print("Setting up kinodynamic model and MPC...")
     kinodynamic_model = KinoDynamic_Model(config)
@@ -69,8 +72,11 @@ def run_trajectory_optimization():
 
 
 def compute_both_implementations(
-    kinodynamic_model, state_traj, grf_traj, joint_vel_traj
-):
+    kinodynamic_model: Any,
+    state_traj: np.ndarray,
+    grf_traj: np.ndarray,
+    joint_vel_traj: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, float, float]:
     """Compute joint torques using both implementations"""
     print("\nComputing joint torques with both implementations...")
 
@@ -106,10 +112,10 @@ def compute_both_implementations(
 
 
 def create_comparison_plot(
-    torques_original,
-    torques_improved,
-    save_path="results/inverse_dynamics_comparison.png",
-):
+    torques_original: np.ndarray,
+    torques_improved: np.ndarray,
+    save_path: str = "results/inverse_dynamics_comparison.png",
+) -> str:
     """Create comparison plot in the style of existing debug plots"""
 
     # Create figure with 3x4 subplots (12 joints)
@@ -166,10 +172,10 @@ def create_comparison_plot(
 
 
 def create_difference_plot(
-    torques_original,
-    torques_improved,
-    save_path="results/inverse_dynamics_differences.png",
-):
+    torques_original: np.ndarray,
+    torques_improved: np.ndarray,
+    save_path: str = "results/inverse_dynamics_differences.png",
+) -> str:
     """Create plot showing the differences between implementations"""
 
     differences = torques_improved - torques_original
@@ -218,12 +224,12 @@ def create_difference_plot(
 
 
 def create_statistics_plot(
-    torques_original,
-    torques_improved,
-    time_original,
-    time_improved,
-    save_path="results/inverse_dynamics_statistics.png",
-):
+    torques_original: np.ndarray,
+    torques_improved: np.ndarray,
+    time_original: float,
+    time_improved: float,
+    save_path: str = "results/inverse_dynamics_statistics.png",
+) -> str:
     """Create statistical comparison plot"""
 
     differences = torques_improved - torques_original
@@ -297,8 +303,11 @@ def create_statistics_plot(
 
 
 def print_summary_statistics(
-    torques_original, torques_improved, time_original, time_improved
-):
+    torques_original: np.ndarray,
+    torques_improved: np.ndarray,
+    time_original: float,
+    time_improved: float,
+) -> None:
     """Print comprehensive summary statistics"""
     differences = torques_improved - torques_original
 
@@ -334,7 +343,7 @@ def print_summary_statistics(
         print(f"   Joint {i+1:2d}: {joint_rmse:.4f} Nm")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate comparison plots for inverse dynamics implementations"
     )

@@ -4,11 +4,13 @@ Debug script to investigate why original and improved inverse dynamics
 show opposite signs (mirror images)
 """
 
+from typing import Optional, Tuple
+
 import matplotlib.pyplot as plt
 import numpy as np
 
 
-def analyze_sign_patterns():
+def analyze_sign_patterns() -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Analyze the sign patterns between implementations"""
 
     # Load the comparison data
@@ -17,7 +19,7 @@ def analyze_sign_patterns():
         torques_improved = np.load("results/torques_improved_comparison.npy")
     except FileNotFoundError:
         print("❌ Comparison data not found. Run generate_comparison_plots.py first.")
-        return
+        return None
 
     print("🔍 ANALYZING SIGN PATTERNS")
     print("=" * 50)
@@ -73,7 +75,7 @@ def analyze_sign_patterns():
     return torques_orig, torques_improved
 
 
-def investigate_potential_causes():
+def investigate_potential_causes() -> None:
     """Investigate potential causes of sign differences"""
 
     print("\n🔍 POTENTIAL CAUSES OF SIGN DIFFERENCES")
@@ -110,7 +112,9 @@ def investigate_potential_causes():
         print(line)
 
 
-def create_sign_analysis_plot(torques_orig, torques_improved):
+def create_sign_analysis_plot(
+    torques_orig: np.ndarray, torques_improved: np.ndarray
+) -> str:
     """Create visualization of sign patterns"""
 
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
@@ -196,14 +200,16 @@ def create_sign_analysis_plot(torques_orig, torques_improved):
     plt.tight_layout()
     plt.savefig("results/sign_analysis.png", dpi=150, bbox_inches="tight")
     print("Sign analysis plot saved to: results/sign_analysis.png")
+    return "results/sign_analysis.png"
 
 
-def main():
+def main() -> None:
     """Run complete sign analysis"""
 
-    torques_orig, torques_improved = analyze_sign_patterns()
-    if torques_orig is None:
+    result = analyze_sign_patterns()
+    if result is None:
         return
+    torques_orig, torques_improved = result
 
     investigate_potential_causes()
     create_sign_analysis_plot(torques_orig, torques_improved)

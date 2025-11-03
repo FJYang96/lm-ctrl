@@ -3,10 +3,13 @@
 Detailed analysis of improvements in the new inverse dynamics implementation
 """
 
+import os
+from typing import Any, Optional, Tuple, cast
+
 import numpy as np
 
 
-def analyze_numerical_differences():
+def analyze_numerical_differences() -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Load and analyze the numerical differences between implementations"""
     try:
         # Load saved results if they exist
@@ -25,7 +28,7 @@ def analyze_numerical_differences():
             print(
                 "⚠️  Saved torque data not found. Run test_both_versions.py first with --save-results"
             )
-            return
+            return None
 
         return torques_orig, torques_improved
 
@@ -34,7 +37,7 @@ def analyze_numerical_differences():
         return None, None
 
 
-def improvement_summary():
+def improvement_summary() -> Tuple[Any, float]:
     """Provide a comprehensive summary of improvements"""
 
     print("🔍 COMPREHENSIVE IMPROVEMENT ANALYSIS")
@@ -89,7 +92,7 @@ def improvement_summary():
     max_score = 0
 
     for feature, details in improvements.items():
-        score = details["score"]
+        score = cast(int, details["score"])  # Type cast for MyPy
         total_score += score
         max_score += 10
 
@@ -118,7 +121,7 @@ def improvement_summary():
     return improvements, overall_score
 
 
-def performance_tradeoffs():
+def performance_tradeoffs() -> None:
     """Analyze performance trade-offs"""
     print("\n💡 PERFORMANCE TRADE-OFFS")
     print("=" * 60)
@@ -142,7 +145,7 @@ def performance_tradeoffs():
     print("   • Verdict: ✅ WORTH IT for production systems")
 
 
-def when_to_use_which():
+def when_to_use_which() -> None:
     """Recommendations for when to use each version"""
     print("\n🤔 WHEN TO USE WHICH VERSION")
     print("=" * 60)
@@ -162,7 +165,7 @@ def when_to_use_which():
     print("   • You're developing/tuning the system")
 
 
-def main():
+def main() -> None:
     """Run the complete improvement analysis"""
 
     improvements, score = improvement_summary()
