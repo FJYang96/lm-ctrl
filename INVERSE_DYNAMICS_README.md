@@ -76,7 +76,7 @@ python test_both_versions.py --test both
 # Test only original implementation
 python test_both_versions.py --test original
 
-# Test only improved implementation  
+# Test only improved implementation
 python test_both_versions.py --test improved
 ```
 
@@ -153,7 +153,7 @@ input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
 
 # Compute joint torques with enhanced features
 joint_torques = compute_joint_torques_improved(
-    kinodynamic_model, state_traj, input_traj, 
+    kinodynamic_model, state_traj, input_traj,
     contact_sequence, dt
 )
 ```
@@ -198,7 +198,7 @@ joint_torques = compute_joint_torques_improved(...)  # Enhanced
 The `generate_comparison_plots.py` script creates three comprehensive visualization files:
 
 #### 1. **`inverse_dynamics_comparison.png`**
-- **Format**: 3×4 grid showing all 12 joints 
+- **Format**: 3×4 grid showing all 12 joints
 - **Style**: Similar to existing debug plots in `results/` folder
 - **Content**: Direct side-by-side comparison (blue = original, red = improved)
 - **Purpose**: Visual comparison of torque trajectories
@@ -210,7 +210,7 @@ The `generate_comparison_plots.py` script creates three comprehensive visualizat
 
 #### 3. **`inverse_dynamics_statistics.png`**
 - **Format**: 2×2 statistical dashboard
-- **Content**: 
+- **Content**:
   - RMSE per joint (bar chart)
   - Distribution of all differences (histogram)
   - Maximum torque magnitudes comparison
@@ -249,7 +249,7 @@ TESTING ORIGINAL INVERSE DYNAMICS
 📈 Torque range: [-3.068, 8.070] Nm
 
 ============================================================
-TESTING IMPROVED INVERSE DYNAMICS  
+TESTING IMPROVED INVERSE DYNAMICS
 ============================================================
 ✅ Improved inverse dynamics completed successfully!
 ⏱️  Computation time: 0.185 seconds
@@ -269,14 +269,14 @@ Improved computation time: 0.138s
 
 📁 Generated files:
    - results/inverse_dynamics_comparison.png
-   - results/inverse_dynamics_differences.png  
+   - results/inverse_dynamics_differences.png
    - results/inverse_dynamics_statistics.png
    - results/torques_original_comparison.npy
    - results/torques_improved_comparison.npy
 
 🎯 Per-Joint RMSE:
    Joint  1: 3.7105 Nm    Joint  7: 3.6726 Nm
-   Joint  2: 1.2796 Nm    Joint  8: 1.1768 Nm  
+   Joint  2: 1.2796 Nm    Joint  8: 1.1768 Nm
    Joint  3: 11.5999 Nm   Joint  9: 11.5748 Nm
    [... continues for all 12 joints]
 ```

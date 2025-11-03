@@ -1,4 +1,5 @@
 import argparse
+
 import imageio
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
@@ -21,9 +22,13 @@ from utils.visualization import (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Quadruped Hopping MPC')
-    parser.add_argument('--inverse-dynamics', choices=['original', 'improved'], default='improved',
-                        help='Choose inverse dynamics implementation: original or improved')
+    parser = argparse.ArgumentParser(description="Quadruped Hopping MPC")
+    parser.add_argument(
+        "--inverse-dynamics",
+        choices=["original", "improved"],
+        default="improved",
+        help="Choose inverse dynamics implementation: original or improved",
+    )
     args = parser.parse_args()
 
     # ========================================================
@@ -77,12 +82,16 @@ def main() -> None:
     # Stage 2: Inverse Dynamics + Simulation
     # ========================================================
     color_print("orange", "Stage 2: Inverse Dynamics + Simulation")
-    
+
     # Choose inverse dynamics implementation based on argument
-    if args.inverse_dynamics == 'improved':
+    if args.inverse_dynamics == "improved":
         color_print("green", "Using IMPROVED inverse dynamics implementation")
         joint_torques_traj = compute_joint_torques_improved(
-            kinodynamic_model, state_traj, input_traj, config.mpc_config.contact_sequence, config.mpc_config.mpc_dt
+            kinodynamic_model,
+            state_traj,
+            input_traj,
+            config.mpc_config.contact_sequence,
+            config.mpc_config.mpc_dt,
         )
     else:
         color_print("green", "Using ORIGINAL inverse dynamics implementation")

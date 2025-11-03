@@ -10,7 +10,7 @@ Successfully integrated the updated inverse dynamics implementation from the `de
 - **Added Improved Function**: New `compute_joint_torques_improved()` function with systematic improvements:
   - Standardized state indexing using QP_*, QV_*, MP_* constants
   - Forward kinematics for foot position validation
-  - Improved numerical methods for acceleration computation  
+  - Improved numerical methods for acceleration computation
   - Ground contact validation using FK-based foot positions
   - Better quaternion handling and coordinate transformations
 
@@ -29,7 +29,7 @@ Successfully integrated the updated inverse dynamics implementation from the `de
 #### State Indexing Constants
 ```python
 QP_BASE_POS = slice(0, 3)
-QP_BASE_QUAT = slice(3, 7) 
+QP_BASE_QUAT = slice(3, 7)
 QP_JOINTS = slice(7, 19)
 
 QV_BASE_LIN = slice(0, 3)
@@ -61,7 +61,7 @@ MP_X_Q = slice(12, 24)
 ```python
 def compute_joint_torques(
     kindyn_model,
-    state_traj: np.ndarray,      # Shape: (num_steps + 1, num_states)  
+    state_traj: np.ndarray,      # Shape: (num_steps + 1, num_states)
     grf_traj: np.ndarray,        # Shape: (num_steps, 12)
     contact_sequence: np.ndarray, # Shape: (4, num_steps)
     dt: float
@@ -74,7 +74,7 @@ def compute_joint_torques_improved(
     kindyn_model,
     state_traj: np.ndarray,      # Shape: (num_steps + 1, num_states)
     input_traj: np.ndarray,      # Shape: (num_steps, 24) - includes joint velocities + GRFs
-    contact_sequence: np.ndarray, # Shape: (4, num_steps) 
+    contact_sequence: np.ndarray, # Shape: (4, num_steps)
     dt: float
 ) -> np.ndarray:                 # Shape: (num_steps, 12)
 ```

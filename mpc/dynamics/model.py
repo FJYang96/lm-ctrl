@@ -9,8 +9,10 @@ from typing import Any
 import casadi as cs
 import gym_quadruped
 import numpy as np
+
 try:
     from acados_template import AcadosModel
+
     ACADOS_AVAILABLE = True
 except ImportError:
     ACADOS_AVAILABLE = False
@@ -473,15 +475,15 @@ class KinoDynamic_Model:
             integral_states,
         )
 
-    def get_state_dim(self):
+    def get_state_dim(self) -> int:
         """Get the dimension of the state vector"""
-        return self.states.size()[0]
-    
-    def get_input_dim(self):
-        """Get the dimension of the input vector"""
-        return self.inputs.size()[0]
+        return int(self.states.size()[0])
 
-    def export_robot_model(self):
+    def get_input_dim(self) -> int:
+        """Get the dimension of the input vector"""
+        return int(self.inputs.size()[0])
+
+    def export_robot_model(self) -> Any:
         """
         This method set some general properties of the NMPC, such as the params,
         prediction mode, etc...! It will be called in centroidal_nmpc.py
@@ -504,7 +506,7 @@ class KinoDynamic_Model:
         if not ACADOS_AVAILABLE:
             print("Warning: AcadosModel not available. Returning None.")
             return None
-            
+
         acados_model = AcadosModel()
         acados_model.f_impl_expr = f_impl
         acados_model.f_expl_expr = f_expl
