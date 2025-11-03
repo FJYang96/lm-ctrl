@@ -43,7 +43,9 @@ def run_trajectory_optimization() -> tuple[Any, ...] | None:
     return kinodynamic_model, state_traj, grf_traj, joint_vel_traj
 
 
-def test_original_inverse_dynamics(kinodynamic_model: Any, state_traj: Any, grf_traj: Any) -> tuple[Any, Any] | tuple[None, None]:
+def test_original_inverse_dynamics(
+    kinodynamic_model: Any, state_traj: Any, grf_traj: Any
+) -> tuple[Any, Any] | tuple[None, None]:
     """Test the original inverse dynamics implementation"""
     print("\n" + "=" * 60)
     print("TESTING ORIGINAL INVERSE DYNAMICS")
@@ -108,7 +110,9 @@ def test_improved_inverse_dynamics(
         return None, None
 
 
-def compare_results(torques_orig: Any, torques_improved: Any, time_orig: Any, time_improved: Any) -> None:
+def compare_results(
+    torques_orig: Any, torques_improved: Any, time_orig: Any, time_improved: Any
+) -> None:
     """Compare the results from both implementations"""
     print("\n" + "=" * 60)
     print("COMPARISON RESULTS")
