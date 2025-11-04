@@ -1,5 +1,3 @@
-import argparse
-
 import imageio
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
@@ -8,7 +6,7 @@ import config
 from mpc.dynamics.model import KinoDynamic_Model
 from mpc.mpc_opti import QuadrupedMPCOpti
 from utils import conversion
-from utils.inv_dyn import compute_joint_torques, compute_joint_torques_improved
+from utils.inv_dyn import compute_joint_torques
 from utils.logging import color_print
 from utils.simulation import (
     create_reference_trajectory,
@@ -22,15 +20,6 @@ from utils.visualization import (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Quadruped Hopping MPC")
-    parser.add_argument(
-        "--inverse-dynamics",
-        choices=["original", "improved"],
-        default="improved",
-        help="Choose inverse dynamics implementation: original or improved",
-    )
-    args = parser.parse_args()
-
     # ========================================================
     # Stage 0: Setup
     # ========================================================
@@ -83,25 +72,15 @@ def main() -> None:
     # ========================================================
     color_print("orange", "Stage 2: Inverse Dynamics + Simulation")
 
-    # Choose inverse dynamics implementation based on argument
-    if args.inverse_dynamics == "improved":
-        color_print("green", "Using IMPROVED inverse dynamics implementation")
-        joint_torques_traj = compute_joint_torques_improved(
-            kinodynamic_model,
-            state_traj,
-            input_traj,
-            config.mpc_config.contact_sequence,
-            config.mpc_config.mpc_dt,
-        )
-    else:
-        color_print("green", "Using ORIGINAL inverse dynamics implementation")
-        joint_torques_traj = compute_joint_torques(
-            kinodynamic_model,
-            state_traj,
-            grf_traj,
-            config.mpc_config.contact_sequence,
-            config.mpc_config.mpc_dt,
-        )
+    # Compute joint torques using improved inverse dynamics
+    color_print("green", "Computing joint torques using inverse dynamics")
+    joint_torques_traj = compute_joint_torques(
+        kinodynamic_model,
+        state_traj,
+        input_traj,
+        config.mpc_config.contact_sequence,
+        config.mpc_config.mpc_dt,
+    )
     np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
 
     qpos_traj, qvel_traj, grf_traj, images = simulate_trajectory(
