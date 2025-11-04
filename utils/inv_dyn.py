@@ -349,3 +349,168 @@ def compute_joint_torques(
 
     print("Inverse dynamics computation completed!")
     return joint_torques_traj
+
+
+def compute_joint_torques_original(
+    kindyn_model: Any,
+    state_traj: np.ndarray,
+    grf_traj: np.ndarray,
+    contact_sequence: np.ndarray,
+    dt: float,
+) -> np.ndarray:
+    """
+    Original inverse dynamics computation using finite differences
+
+    This is the original implementation that:
+    - Uses finite differences to compute velocities and accelerations
+    - Uses manual state indexing
+    - Takes only GRF trajectory as input (not optimized joint velocities)
+
+    Kept for comparison with the improved implementation.
+
+    Args:
+        kindyn_model (KinoDynamic_Model): An instance of the kinodynamic model
+        state_traj (np.ndarray): The full state trajectory from the optimizer
+        grf_traj (np.ndarray): The GRF trajectory
+        contact_sequence (np.ndarray): Array of contact flags
+        dt (float): The time step duration
+
+    Returns:
+        np.ndarray: The computed joint torque trajectory
+    """
+    # Initialize output
+    num_steps = grf_traj.shape[0]
+    joint_torques_traj = np.zeros((num_steps, 12))
+
+    print("Building state representations with original manual indexing...")
+
+    # Build position trajectory using original manual indexing
+    pos_kindyn_traj = state_traj[:, [0, 1, 2, 6, 7, 8]]  # Base pos + RPY
+    pos_kindyn_traj = np.hstack([pos_kindyn_traj, state_traj[:, 12:24]])  # Add joints
+
+    # Compute velocities using finite differences (original method)
+    dq_traj = np.zeros((num_steps + 1, pos_kindyn_traj.shape[1]))
+    for i in range(num_steps):
+        dq_traj[i, :] = (pos_kindyn_traj[i + 1, :] - pos_kindyn_traj[i, :]) / dt
+    dq_traj[-1, :] = dq_traj[-2, :]  # Extrapolate last step
+
+    # Compute accelerations using finite differences (original method)
+    ddq_traj = np.zeros((num_steps + 1, pos_kindyn_traj.shape[1]))
+    for i in range(num_steps):
+        ddq_traj[i, :] = (dq_traj[i + 1, :] - dq_traj[i, :]) / dt
+    ddq_traj[-1, :] = ddq_traj[-2, :]  # Extrapolate last step
+
+    print("Computing velocities and accelerations using finite differences...")
+
+    # Convert to full qpos trajectory (19 DOF: 3 pos + 4 quat + 12 joints)
+    q_traj = np.zeros((num_steps + 1, 19))
+    q_traj[:, 0:3] = pos_kindyn_traj[:, 0:3]  # Base position
+
+    # Convert RPY to quaternion
+    for i in range(num_steps + 1):
+        euler = pos_kindyn_traj[i, 3:6]
+        quat_wxyz = euler_xyz_to_quat_wxyz(euler)
+        q_traj[i, 3:7] = quat_wxyz
+
+    q_traj[:, 7:19] = pos_kindyn_traj[:, 6:18]  # Joint positions
+
+    # Build velocity trajectory (18 DOF: 6 base + 12 joints)
+    dq_full_traj = np.zeros((num_steps + 1, 18))
+    dq_full_traj[:, 0:3] = dq_traj[:, 0:3]  # Base linear velocity
+    dq_full_traj[:, 3:6] = dq_traj[:, 3:6]  # Base angular velocity (RPY rates)
+    dq_full_traj[:, 6:18] = dq_traj[:, 6:18]  # Joint velocities
+
+    # Build acceleration trajectory
+    ddq_full_traj = np.zeros((num_steps + 1, 18))
+    ddq_full_traj[:, 0:3] = ddq_traj[:, 0:3]  # Base linear acceleration
+    ddq_full_traj[:, 3:6] = ddq_traj[:, 3:6]  # Base angular acceleration
+    ddq_full_traj[:, 6:18] = ddq_traj[:, 6:18]  # Joint accelerations
+
+    print("Setting up symbolic inverse dynamics...")
+
+    # Set up symbolic inverse dynamics (similar to improved version)
+    base_pos_sym = cs.SX.sym("base_pos", 3)
+    base_quat_sym = cs.SX.sym("base_quat", 4)  # x,y,z,w format
+    joint_pos_sym = cs.SX.sym("joint_pos", 12)
+    base_vel_sym = cs.SX.sym("base_vel", 6)
+    joint_vel_sym = cs.SX.sym("joint_vel", 12)
+    base_acc_sym = cs.SX.sym("base_acc", 6)
+    joint_acc_sym = cs.SX.sym("joint_acc", 12)
+    f_ext_sym = cs.SX.sym("f_ext", 12)
+
+    # Construct homogeneous transformation matrix
+    quat_wxyz_sym = cs.vertcat(base_quat_sym[3], base_quat_sym[0:3])
+    H = cs.SX.eye(4)
+    H[0:3, 0:3] = SO3.from_quat(quat_wxyz_sym).as_matrix()
+    H[0:3, 3] = base_pos_sym
+
+    # Create symbolic functions
+    mass_matrix_fun = kindyn_model.kindyn.mass_matrix_fun()
+    bias_force_fun = kindyn_model.kindyn.bias_force_fun()
+    gravity_fun = kindyn_model.kindyn.gravity_term_fun()
+
+    J_FL_fun = kindyn_model.kindyn.jacobian_fun("FL_foot")
+    J_FR_fun = kindyn_model.kindyn.jacobian_fun("FR_foot")
+    J_RL_fun = kindyn_model.kindyn.jacobian_fun("RL_foot")
+    J_RR_fun = kindyn_model.kindyn.jacobian_fun("RR_foot")
+
+    # Symbolic inverse dynamics computation
+    M_sym = mass_matrix_fun(H, joint_pos_sym)
+    C_sym = bias_force_fun(H, joint_pos_sym, base_vel_sym, joint_vel_sym)
+    g_sym = gravity_fun(H, joint_pos_sym)
+
+    # Split external forces by leg
+    F_FL, F_FR, F_RL, F_RR = cs.vertsplit(f_ext_sym, 3)
+    J_FL, J_FR, J_RL, J_RR = (
+        f(H, joint_pos_sym)[0:3, :] for f in [J_FL_fun, J_FR_fun, J_RL_fun, J_RR_fun]
+    )
+    wrench_ext = J_FL.T @ F_FL + J_FR.T @ F_FR + J_RL.T @ F_RL + J_RR.T @ F_RR
+
+    ddq_full_sym = cs.vertcat(base_acc_sym, joint_acc_sym)
+
+    # Inverse dynamics equation
+    tau_full_sym = M_sym @ ddq_full_sym + C_sym + g_sym - wrench_ext
+
+    # Create CasADi function
+    inverse_dynamics_fun = cs.Function(
+        "inverse_dynamics",
+        [
+            base_pos_sym,
+            base_quat_sym,
+            joint_pos_sym,
+            base_vel_sym,
+            joint_vel_sym,
+            base_acc_sym,
+            joint_acc_sym,
+            f_ext_sym,
+        ],
+        [tau_full_sym],
+    )
+
+    print("Evaluating inverse dynamics...")
+
+    # Evaluation loop
+    for i in range(num_steps):
+        # Apply contact forces
+        grfs_vec = grf_traj[i, :].copy()
+        for leg_idx in range(4):
+            contact_state = contact_sequence[leg_idx, i]
+            grfs_vec[3 * leg_idx : 3 * (leg_idx + 1)] *= contact_state
+
+        # Compute inverse dynamics
+        tau_full = inverse_dynamics_fun(
+            q_traj[i, 0:3],  # base position
+            q_traj[i, 3:7],  # base quaternion [w,x,y,z]
+            q_traj[i, 7:19],  # joint positions
+            dq_full_traj[i, 0:6],  # base velocity [lin, ang]
+            dq_full_traj[i, 6:18],  # joint velocities
+            ddq_full_traj[i, 0:6],  # base acceleration [lin, ang]
+            ddq_full_traj[i, 6:18],  # joint accelerations
+            grfs_vec,
+        )
+
+        # Extract joint torques (skip first 6 base wrench elements)
+        joint_torques_traj[i, :] = tau_full.full().flatten()[6:]
+
+    print("Original inverse dynamics computation completed!")
+    return joint_torques_traj
