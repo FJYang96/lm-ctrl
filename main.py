@@ -39,6 +39,8 @@ def main() -> None:
     # Stage 1: Trajectory Optimization
     # ========================================================
     color_print("orange", "Stage 1: Trajectory Optimization")
+    # print constraint mode
+    color_print("blue", f"Using constraint mode: {config.CONSTRAINT_MODE}")
     initial_state, _ = conversion.sim_to_mpc(
         config.experiment.initial_qpos, config.experiment.initial_qvel
     )
