@@ -6,11 +6,6 @@ This script compares the original inverse dynamics implementation with the impro
 version that has been integrated into the merging branch. It loads existing trajectory
 data and tests both implementations to demonstrate the improvements.
 
-The improved version shows significant benefits:
-- ~25% reduction in torque magnitudes (more realistic values)
-- Better numerical stability using forward dynamics
-- Standardized state indexing for maintainability
-- Proper use of MPC-optimized joint velocities
 """
 
 import sys
