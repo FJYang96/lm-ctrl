@@ -73,10 +73,13 @@ def main() -> None:
     # Stage 2: Inverse Dynamics + Simulation
     # ========================================================
     color_print("orange", "Stage 2: Inverse Dynamics + Simulation")
+
+    # Compute joint torques using updated inverse dynamics
+    color_print("green", "Computing joint torques using updated inverse dynamics")
     joint_torques_traj = compute_joint_torques(
         kinodynamic_model,
         state_traj,
-        grf_traj,
+        input_traj,
         config.mpc_config.contact_sequence,
         config.mpc_config.mpc_dt,
     )
