@@ -39,6 +39,8 @@ def main() -> None:
     # Stage 1: Trajectory Optimization
     # ========================================================
     color_print("orange", "Stage 1: Trajectory Optimization")
+    # print constraint mode
+    color_print("blue", f"Using constraint mode: {config.CONSTRAINT_MODE}")
     initial_state, _ = conversion.sim_to_mpc(
         config.experiment.initial_qpos, config.experiment.initial_qvel
     )
@@ -71,10 +73,13 @@ def main() -> None:
     # Stage 2: Inverse Dynamics + Simulation
     # ========================================================
     color_print("orange", "Stage 2: Inverse Dynamics + Simulation")
+
+    # Compute joint torques using updated inverse dynamics
+    color_print("green", "Computing joint torques using updated inverse dynamics")
     joint_torques_traj = compute_joint_torques(
         kinodynamic_model,
         state_traj,
-        grf_traj,
+        input_traj,
         config.mpc_config.contact_sequence,
         config.mpc_config.mpc_dt,
     )
