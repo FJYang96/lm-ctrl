@@ -47,6 +47,7 @@ if CONSTRAINT_MODE == "complementarity":
             "SWING_GRF_EPS": 0.0,
             "STANCE_HEIGHT_EPS": 0.04,
             "NO_SLIP_EPS": 0.01,
+            "BODY_CLEARANCE_MIN": 0.02,  # Minimum body clearance from ground (meters)
         },
         warmstart_state=None,
         warmstart_input=None,
@@ -72,11 +73,13 @@ else:  # standard mode
             constr.foot_velocity_constraints,
             constr.joint_limits_constraints,
             constr.input_limits_constraints,
+            constr.body_clearance_constraints,
         ],
         path_constraint_params={
             "SWING_GRF_EPS": 0.0,
             "STANCE_HEIGHT_EPS": 0.04,
             "NO_SLIP_EPS": 0.01,
+            "BODY_CLEARANCE_MIN": 0.02,  # Minimum body clearance from ground (meters)
         },
         warmstart_state=None,
         warmstart_input=None,

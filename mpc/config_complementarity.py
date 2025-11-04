@@ -16,6 +16,7 @@ import casadi as cs
 import numpy as np
 
 from .constraints import (
+    body_clearance_constraints,
     foot_height_constraints,
     friction_cone_constraints,
     input_limits_constraints,
@@ -141,6 +142,7 @@ class ComplementarityMPCConfig(MPCConfig):
             complementarity_constraints,  # Add complementarity
             joint_limits_constraints,
             input_limits_constraints,
+            body_clearance_constraints,  # Ensure body stays above ground
         ]
     )
     path_constraint_params: dict[str, float] = field(
