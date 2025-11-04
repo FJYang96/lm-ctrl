@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 import matplotlib.pyplot as plt
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
@@ -10,7 +8,7 @@ from .logging import color_print
 
 def render_planned_trajectory(
     state_traj: np.ndarray, joint_vel_traj: np.ndarray, env: QuadrupedEnv
-) -> List[np.ndarray]:
+) -> list[np.ndarray]:
     """
     Renders the planned trajectory.
     Args:
@@ -36,8 +34,8 @@ def render_and_save_planned_trajectory(
     input_traj: np.ndarray,
     env: QuadrupedEnv,
     suffix: str = "",
-    fps: Optional[float] = None,
-) -> Optional[List[np.ndarray]]:
+    fps: float | None = None,
+) -> list[np.ndarray] | None:
     """
     Render planned trajectory and save as video if rendering is enabled.
 
@@ -131,10 +129,10 @@ def plot_trajectory_comparison(
     sim_qpos_traj: np.ndarray,
     sim_qvel_traj: np.ndarray,
     sim_grf_traj: np.ndarray,
-    quantities: Optional[List[str]] = None,
+    quantities: list[str] | None = None,
     mpc_dt: float = 0.01,
     sim_dt: float = 0.001,
-    save_path: Optional[str] = None,
+    save_path: str | None = None,
     show_plot: bool = True,
     figsize: tuple[int, int] = (12, 8),
 ) -> None:
