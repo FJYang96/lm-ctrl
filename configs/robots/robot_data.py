@@ -15,9 +15,6 @@ class RobotData:
     joint_limits_upper: np.ndarray  # (12,) FL, FR, RL, RR
     robot_cfg: RobotConfig
     joint_velocity_limits: np.ndarray  # (12,) FL, FR, RL, RR
-    joint_torque_limits: (
-        np.ndarray
-    )  # (12,) FL, FR, RL, RR - max absolute torque per joint
     grf_limits: float
     initial_qpos: np.ndarray  # (19,)
     initial_qvel: np.ndarray  # (18,)

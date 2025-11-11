@@ -11,7 +11,6 @@ from .constraints import (
     friction_cone_constraints,
     input_limits_constraints,
     joint_limits_constraints,
-    torque_limits_constraints,
 )
 from .dynamics.model import KinoDynamic_Model
 
@@ -41,8 +40,7 @@ class MPCConfig:
     # Path constraints
     path_constraints: list[
         Callable[
-            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX, cs.MX, float, cs.MX],
-            tuple[cs.MX, cs.MX, cs.MX],
+            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX], tuple[cs.MX, cs.MX, cs.MX]
         ]
     ]
 
@@ -57,12 +55,11 @@ class MPCConfig:
 
 @dataclass
 class HoppingMPCConfig(MPCConfig):
-    pre_flight_stance_duration: float = 0.4
-    flight_duration: float = 0.3
+    pre_flight_stance_duration: float = 0.3
+    flight_duration: float = 0.4
     path_constraints: list[
         Callable[
-            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX, cs.MX, float, cs.MX],
-            tuple[cs.MX, cs.MX, cs.MX],
+            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX], tuple[cs.MX, cs.MX, cs.MX]
         ]
     ] = field(
         default_factory=lambda: [
@@ -71,14 +68,13 @@ class HoppingMPCConfig(MPCConfig):
             foot_velocity_constraints,
             joint_limits_constraints,
             input_limits_constraints,
-            torque_limits_constraints,
         ]
     )
     path_constraint_params: dict[str, float] = field(
         default_factory=lambda: {
             "SWING_GRF_EPS": 0.0,
-            "STANCE_HEIGHT_EPS": 0.00,
-            "NO_SLIP_EPS": 0.0,
+            "STANCE_HEIGHT_EPS": 0.02,
+            "NO_SLIP_EPS": 0.005,
         }
     )
 

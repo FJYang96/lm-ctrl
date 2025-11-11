@@ -250,7 +250,6 @@ def torque_limits_constraints(
         H, joint_positions, base_vel, joint_vel
     )
 
-    # Calculate accelerations using finite differences
     com_velocity_next = x_next[3:6]
     com_angular_velocity_next = x_next[9:12]
     base_vel_next = cs.vertcat(com_velocity_next, com_angular_velocity_next)
@@ -280,9 +279,53 @@ def torque_limits_constraints(
     q_acc = cs.vertcat(base_acc, joint_acc)
     tau_full = mass_matrix @ q_acc + bias_force - wrench_ext
     joint_torques = tau_full[6:]
-    torque_limit = config.robot_data.joint_torque_limits
+    torque_limit = np.ones(12) * 45.0
     return (
         joint_torques,
         -torque_limit,
         torque_limit,
     )
+
+
+def body_clearance_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    x_next: cs.MX = None,
+    dt: float | None = None,
+    u_next: cs.MX = None,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """
+    Add body clearance constraints to ensure all parts of the robot body remain above ground.
+
+    This constraint considers the COM height and the robot's body dimensions (roll, pitch)
+    to ensure that even when the body is tilted, the lowest point of the body remains
+    above a minimum clearance height.
+
+    We need to account for:
+    - COM position z-coordinate
+    - Body roll and pitch that could bring edges of the body closer to ground
+    - Half of the body height dimension to get the lowest point
+    """
+    com_position_z = x_k[2]  # z-coordinate of COM
+    roll = x_k[6]
+    pitch = x_k[7]
+
+    # Safety margin accounts for body dimensions and tilt
+    # For small angles: additional_clearance ≈ body_length/2 * |pitch| + body_width/2 * |roll|
+    body_half_length = 0.15
+    body_half_width = 0.10
+    body_half_height = 0.05
+
+    tilt_clearance = body_half_length * cs.fabs(pitch) + body_half_width * cs.fabs(roll)
+    body_clearance_margin = body_half_height + tilt_clearance
+    effective_clearance = com_position_z - body_clearance_margin
+
+    # Minimum clearance from config (e.g., 0.02m above ground)
+    min_clearance = config.mpc_config.path_constraint_params.get(
+        "BODY_CLEARANCE_MIN", 0.02
+    )
+
+    return effective_clearance, min_clearance, INF

@@ -45,7 +45,6 @@ go2 = RobotData(
     ),
     robot_cfg=get_robot_config(robot_name="go2"),
     joint_velocity_limits=np.ones(12) * 10.0,
-    joint_torque_limits=np.ones(12) * 45.0,
     grf_limits=500.0,
     initial_qpos=go2_stand_qpos,
     initial_qvel=go2_stand_qvel,
