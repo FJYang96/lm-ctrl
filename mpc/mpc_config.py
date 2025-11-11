@@ -41,7 +41,8 @@ class MPCConfig:
     # Path constraints
     path_constraints: list[
         Callable[
-            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX, cs.MX, float, cs.MX], tuple[cs.MX, cs.MX, cs.MX]
+            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX, cs.MX, float, cs.MX],
+            tuple[cs.MX, cs.MX, cs.MX],
         ]
     ]
 
@@ -60,7 +61,8 @@ class HoppingMPCConfig(MPCConfig):
     flight_duration: float = 0.3
     path_constraints: list[
         Callable[
-            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX, cs.MX, float, cs.MX], tuple[cs.MX, cs.MX, cs.MX]
+            [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX, cs.MX, float, cs.MX],
+            tuple[cs.MX, cs.MX, cs.MX],
         ]
     ] = field(
         default_factory=lambda: [

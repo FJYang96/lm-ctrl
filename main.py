@@ -80,17 +80,17 @@ def main() -> None:
     )
     np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
 
-    # print joint torque 
+    # print joint torque
     # print(f"\n{'='*80}")
     # print(f"JOINT TORQUES ANALYSIS")
     # print(f"{'='*80}")
     # print(f"Torque trajectory shape: {joint_torques_traj.shape}")
-    
-    # joint_names = ["FL_hip", "FL_thigh", "FL_calf", 
+
+    # joint_names = ["FL_hip", "FL_thigh", "FL_calf",
     #                "FR_hip", "FR_thigh", "FR_calf",
-    #                "RL_hip", "RL_thigh", "RL_calf", 
+    #                "RL_hip", "RL_thigh", "RL_calf",
     #                "RR_hip", "RR_thigh", "RR_calf"]
-    
+
     # print(f"\nPer-joint torque statistics (Nm):")
     # print(f"{'Joint':<12} {'Min':>10} {'Max':>10} {'Mean':>10} {'Std':>10} {'|Max|':>10}")
     # print(f"{'-'*72}")
@@ -102,19 +102,19 @@ def main() -> None:
     #     tau_std = np.std(tau_j)
     #     tau_abs_max = np.max(np.abs(tau_j))
     #     print(f"{joint_names[j]:<12} {tau_min:>10.3f} {tau_max:>10.3f} {tau_mean:>10.3f} {tau_std:>10.3f} {tau_abs_max:>10.3f}")
-    
+
     # print(f"\nOverall statistics:")
     # print(f"  Global max torque: {np.max(joint_torques_traj):.3f} Nm")
     # print(f"  Global min torque: {np.min(joint_torques_traj):.3f} Nm")
     # print(f"  Global |max| torque: {np.max(np.abs(joint_torques_traj)):.3f} Nm")
     # print(f"  Mean |torque|: {np.mean(np.abs(joint_torques_traj)):.3f} Nm")
-    
+
     # torque_limits = config.robot_data.joint_torque_limits
     # violations_per_joint = np.sum(
     #     np.abs(joint_torques_traj) > torque_limits[np.newaxis, :], axis=0
     # )
     # total_violations = np.sum(violations_per_joint)
-    
+
     # if total_violations > 0:
     #     color_print("red", f"\n Torque limit violations detected!")
     #     print(f"  Total violations: {total_violations} (out of {joint_torques_traj.size} values)")
@@ -124,7 +124,7 @@ def main() -> None:
     #             print(f"    {joint_names[j]:<12}: {violations_per_joint[j]:>3} violations (limit: ±{torque_limits[j]:.2f} Nm)")
     # else:
     #     color_print("green", f"\n All torques within limits!")
-    
+
     # print(f"{'='*80}\n")
 
     qpos_traj, qvel_traj, grf_traj, images = simulate_trajectory(
