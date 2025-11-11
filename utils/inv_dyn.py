@@ -2,9 +2,11 @@ import casadi as cs
 import numpy as np
 from liecasadi import SO3
 
+from mpc.dynamics.model import KinoDynamic_Model
+
 
 def compute_joint_torques(
-    kindyn_model,
+    kindyn_model: KinoDynamic_Model,
     state_traj: np.ndarray,
     grf_traj: np.ndarray,
     contact_sequence: np.ndarray,

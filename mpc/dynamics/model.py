@@ -4,6 +4,7 @@
 # Authors: Giulio Turrisi
 
 import os
+from typing import Any
 
 import casadi as cs
 import gym_quadruped
@@ -29,29 +30,8 @@ else:
 
 # Class that defines the prediction model of the NMPC
 class KinoDynamic_Model:
-    def __init__(self, config) -> None:
-        if config.robot == "go2":
-            urdf_filename = gym_quadruped_path + "/robot_model/go2/go2.urdf"
-            xml_filename = gym_quadruped_path + "/robot_model/go2/go2.xml"
-        if config.robot == "go1":
-            urdf_filename = gym_quadruped_path + "/robot_model/go1/go1.urdf"
-            xml_filename = gym_quadruped_path + "/robot_model/go1/go1.xml"
-        elif config.robot == "aliengo":
-            urdf_filename = gym_quadruped_path + "/robot_model/aliengo/aliengo.urdf"
-            xml_filename = gym_quadruped_path + "/robot_model/aliengo/aliengo.xml"
-        elif config.robot == "b2":
-            urdf_filename = gym_quadruped_path + "/robot_model/b2/b2.urdf"
-            xml_filename = gym_quadruped_path + "/robot_model/b2/b2.xml"
-        elif config.robot == "hyqreal":
-            urdf_filename = gym_quadruped_path + "/robot_model/hyqreal/hyqreal.urdf"
-            xml_filename = gym_quadruped_path + "/robot_model/hyqreal/hyqreal.xml"
-        elif config.robot == "mini_cheetah":
-            urdf_filename = (
-                gym_quadruped_path + "/robot_model/mini_cheetah/mini_cheetah.urdf"
-            )
-            xml_filename = (
-                gym_quadruped_path + "/robot_model/mini_cheetah/mini_cheetah.xml"
-            )
+    def __init__(self, config: Any) -> None:
+        urdf_filename = config.robot_data.urdf_filename
 
         joint_list = [
             "FL_hip_joint",
@@ -266,7 +246,7 @@ class KinoDynamic_Model:
 
         self.inertia = cs.SX.sym("inertia", 9, 1)
         self.mass = cs.SX.sym("mass", 1, 1)
-        self.gravity_constant = config.gravity_constant
+        self.gravity_constant = config.experiment.gravity_constant
 
     def compute_b_R_w(self, roll: float, pitch: float, yaw: float) -> np.ndarray:
         # Z Y X rotations!

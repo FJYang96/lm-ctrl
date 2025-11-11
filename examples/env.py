@@ -28,7 +28,7 @@ env = quadruped_env.QuadrupedEnv(
 ################################################################################
 print("-" * 20, "Observation space", "-" * 20)
 initial_qpos = np.zeros(19)
-initial_qpos[0:3] = [0.0, 0.0, 0.23]  # base position
+initial_qpos[0:3] = [0.0, 0.0, 0.2117]  # base position
 initial_qpos[3:7] = [1.0, 0.0, 0.0, 0.0]  # base orientation (quaternion)
 initial_qpos[7:19] = [  # joint angles
     0.0,
@@ -62,7 +62,7 @@ print("-" * 20, "Simulating and rendering", "-" * 13)
 images = []
 sim_times, render_times = [], []
 action_index = 0
-for i in tqdm(range(int(sim_duration / sim_dt))):
+for _ in tqdm(range(int(sim_duration / sim_dt))):
     import imageio
 
     # Step forward in the simulation
@@ -80,7 +80,7 @@ for i in tqdm(range(int(sim_duration / sim_dt))):
     images.append(image)
 
 fps = 1 / sim_dt
-imageio.mimsave("results/env_test.mp4", images, fps=fps)
+imageio.mimsave("env_test.mp4", images, fps=fps)
 env.close()
 
 print("-" * 20, "Performance", "-" * 20)
