@@ -79,9 +79,10 @@ def main() -> None:
     joint_torques_traj = compute_joint_torques(
         kinodynamic_model,
         state_traj,
-        input_traj,
+        grf_traj,
         config.mpc_config.contact_sequence,
         config.mpc_config.mpc_dt,
+        joint_vel_traj,
     )
     np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
 
