@@ -43,7 +43,7 @@ RUN cd Quadruped-PyMPC && sed -i 's|git+https://github.com/iit-DLSLab/gym-quadru
 # Create a conda environment with the specified name
 RUN cd Quadruped-PyMPC/installation/mamba/integrated_gpu/ && conda env create -f mamba_environment_ros2_jazzy.yml
 
-SHELL ["conda", "run", "-n", "quadruped_pympc_ros2_env", "/bin/bash", "-c"]
+SHELL ["conda", "run", "-n", "quadruped_pympc_ros2_jazzy_env", "/bin/bash", "-c"]
 
 # Install acados
 RUN cd Quadruped-PyMPC/quadruped_pympc/acados && mkdir -p build
@@ -58,13 +58,13 @@ RUN cd Quadruped-PyMPC && pip install -e .
 # Pre-install the correct ARM64 Tera renderer to avoid runtime architecture issues
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
     mkdir -p /Quadruped-PyMPC/quadruped_pympc/acados/bin && \
-    wget https://github.com/acados/tera_renderer/releases/download/v0.2.0/t_renderer-v0.2.0-linux-arm64 -O /Quadruped-PyMPC/quadruped_pympc/acados/bin/t_renderer && \
-    chmod +x /Quadruped-PyMPC/quadruped_pympc/acados/bin/t_renderer; \
+    (wget https://github.com/acados/tera_renderer/releases/download/v0.2.0/t_renderer-v0.2.0-linux-arm64 -O /Quadruped-PyMPC/quadruped_pympc/acados/bin/t_renderer && \
+    chmod +x /Quadruped-PyMPC/quadruped_pympc/acados/bin/t_renderer) || echo "Warning: Could not download t_renderer, continuing without it"; \
 fi
 
 # Set the shell to bash and configure the shell prompt and aliases
 RUN echo 'export PS1="\[\e]0;\u@\h: \w\a\]${debian_chroot:+($debian_chroot)}\[\033[01;37m\]\u\[\033[00m\]@\[\033[01;32m\]\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\] "'  >> /root/.bashrc
-RUN echo 'conda activate quadruped_pympc_ros2_env' >> /root/.bashrc
+RUN echo 'conda activate quadruped_pympc_ros2_jazzy_env' >> /root/.bashrc
 
 # Set the working directory and source the bashrc file
 WORKDIR /home
