@@ -363,7 +363,7 @@ class FeedbackPipeline:
         failure_stages = [
             attempt.get("failure_stage", "unknown") for attempt in attempts
         ]
-        common_errors = {}
+        common_errors: dict[str, int] = {}
         for attempt in attempts:
             error = attempt.get("error", "")[:100]  # First 100 chars
             common_errors[error] = common_errors.get(error, 0) + 1
@@ -814,7 +814,7 @@ class FeedbackPipeline:
                 if any(word in command for word in ["high", "up"]):
                     # Jump high: needs significant height gain
                     target_height = 0.4  # 40cm gain
-                    return (
+                    return float(
                         min(1.0, height_gain / target_height)
                         if height_gain > 0.1
                         else 0
@@ -832,15 +832,15 @@ class FeedbackPipeline:
                     displacement_score = (
                         min(1.0, displacement / 0.3) if displacement > 0.1 else 0
                     )
-                    return 0.5 * height_score + 0.5 * displacement_score
+                    return float(0.5 * height_score + 0.5 * displacement_score)
 
                 else:
                     # Generic jump: just needs height
-                    return min(1.0, height_gain / 0.2) if height_gain > 0.05 else 0
+                    return float(min(1.0, height_gain / 0.2) if height_gain > 0.05 else 0)
 
             elif any(word in command for word in ["squat", "crouch", "lower"]):
                 # Lowering motion: needs negative height change
-                return min(1.0, abs(height_gain) / 0.1) if height_gain < -0.05 else 0
+                return float(min(1.0, abs(height_gain) / 0.1) if height_gain < -0.05 else 0)
 
             else:
                 # Unknown command: give partial credit for any significant motion

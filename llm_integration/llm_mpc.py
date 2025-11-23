@@ -13,7 +13,7 @@ The LLM generates both the MPC configuration and constraints together,
 creating a cohesive optimization setup for each unique behavior.
 """
 
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -105,7 +105,7 @@ class LLMTaskMPC:
         """Set the contact sequence for this task."""
         self.contact_sequence = contact_sequence
 
-    def add_constraint(self, constraint_func: callable) -> None:
+    def add_constraint(self, constraint_func: Callable) -> None:
         """Add a constraint function to this task."""
         self.constraint_functions.append(constraint_func)
 
@@ -140,7 +140,7 @@ class LLMTaskMPC:
         }
 
     def _create_contact_sequence(
-        self, total_duration: float, dt: float, phases: dict[str, dict]
+        self, total_duration: float, dt: float, phases: dict[str, dict[str, Any]]
     ) -> np.ndarray:
         """
         Helper function to create contact sequence from phase descriptions.

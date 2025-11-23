@@ -448,7 +448,7 @@ class SafeConstraintExecutor:
 
             # Add main module references
             restricted_globals["cs"] = cs
-            restricted_globals["np"] = np  # type: ignore[assignment]
+            restricted_globals["np"] = np
             restricted_globals["math"] = math  # type: ignore[assignment]
             restricted_globals["SO3"] = SO3
 
@@ -490,7 +490,7 @@ class SafeConstraintExecutor:
 
             # Constants
             restricted_globals["inf"] = cs.inf
-            restricted_globals["pi"] = np.pi  # type: ignore[assignment]
+            restricted_globals["pi"] = np.pi
 
             # CasADi types
             restricted_globals["MX"] = cs.MX
