@@ -364,9 +364,8 @@ class FeedbackPipeline:
             attempt.get("failure_stage", "unknown") for attempt in attempts
         ]
         common_errors: dict[str, int] = {}
-        for attempt in attempts:
-            attempt: dict[str, Any] = attempt
-            error = attempt.get("error", "")[:100]  # First 100 chars
+        for attempt_dict in attempts:
+            error = attempt_dict.get("error", "")[:100]  # First 100 chars
             common_errors[error] = common_errors.get(error, 0) + 1
 
         print("Failure analysis:")
