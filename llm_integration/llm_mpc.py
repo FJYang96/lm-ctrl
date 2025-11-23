@@ -105,7 +105,7 @@ class LLMTaskMPC:
         """Set the contact sequence for this task."""
         self.contact_sequence = contact_sequence
 
-    def add_constraint(self, constraint_func: Callable) -> None:
+    def add_constraint(self, constraint_func: Callable[..., Any]) -> None:
         """Add a constraint function to this task."""
         self.constraint_functions.append(constraint_func)
 

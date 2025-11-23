@@ -365,6 +365,7 @@ class FeedbackPipeline:
         ]
         common_errors: dict[str, int] = {}
         for attempt in attempts:
+            attempt: dict[str, Any] = attempt
             error = attempt.get("error", "")[:100]  # First 100 chars
             common_errors[error] = common_errors.get(error, 0) + 1
 
@@ -836,11 +837,15 @@ class FeedbackPipeline:
 
                 else:
                     # Generic jump: just needs height
-                    return float(min(1.0, height_gain / 0.2) if height_gain > 0.05 else 0)
+                    return float(
+                        min(1.0, height_gain / 0.2) if height_gain > 0.05 else 0
+                    )
 
             elif any(word in command for word in ["squat", "crouch", "lower"]):
                 # Lowering motion: needs negative height change
-                return float(min(1.0, abs(height_gain) / 0.1) if height_gain < -0.05 else 0)
+                return float(
+                    min(1.0, abs(height_gain) / 0.1) if height_gain < -0.05 else 0
+                )
 
             else:
                 # Unknown command: give partial credit for any significant motion
