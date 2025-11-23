@@ -1,0 +1,329 @@
+"""
+LLM-Specific MPC System - Task-Aware Trajectory Optimization
+
+This is a separate MPC implementation specifically designed for LLM-generated 
+robot behaviors. Unlike the existing MPC system which assumes jumping motions,
+this system allows the LLM to specify:
+
+1. Contact sequences appropriate for each task
+2. Task-specific constraints 
+3. Custom MPC parameters (duration, phases, etc.)
+
+The LLM generates both the MPC configuration and constraints together,
+creating a cohesive optimization setup for each unique behavior.
+"""
+
+from typing import Any, Dict, List, Optional, Tuple
+
+import casadi as cs
+import numpy as np
+from pathlib import Path
+
+from mpc.dynamics.model import KinoDynamic_Model
+from mpc.mpc_opti import QuadrupedMPCOpti
+
+
+class LLMTaskMPC:
+    """
+    LLM-specific MPC that can be completely configured by LLM-generated code.
+    
+    This allows the LLM to specify contact sequences, constraints, and parameters
+    tailored to each specific robot behavior (jump, turn, squat, etc.).
+    """
+    
+    def __init__(self, kindyn_model: KinoDynamic_Model, base_config: Any):
+        """
+        Initialize LLM Task MPC.
+        
+        Args:
+            kindyn_model: Robot kinodynamic model
+            base_config: Base configuration (will be modified by LLM)
+        """
+        self.kindyn_model = kindyn_model
+        self.base_config = base_config
+        
+        # LLM-configurable parameters
+        self.task_name = "unknown"
+        self.contact_sequence: Optional[np.ndarray] = None
+        self.constraint_functions: List[Any] = []
+        self.mpc_duration = 1.0
+        self.mpc_dt = 0.02
+        self.phases: Dict[str, Dict[str, float]] = {}
+        
+        # MPC instance (created when configured)
+        self.mpc: Optional[QuadrupedMPCOpti] = None
+        self.is_configured = False
+        
+    def configure_from_llm(self, llm_config_code: str) -> Tuple[bool, str]:
+        """
+        Configure the MPC using LLM-generated configuration code.
+        
+        Args:
+            llm_config_code: Python code that configures this MPC instance
+            
+        Returns:
+            Tuple of (success, error_message)
+        """
+        try:
+            # Use SafeExecutor's comprehensive globals for consistent execution environment
+            from .safe_executor import SafeConstraintExecutor
+            safe_executor = SafeConstraintExecutor()
+            
+            # Extract any imports from LLM code for dynamic processing
+            imports_needed = safe_executor.extract_imports_from_code(llm_config_code)
+            exec_globals = safe_executor._create_restricted_globals(imports_needed)
+            
+            # Add MPC-specific objects to the execution environment
+            exec_globals['mpc'] = self
+            exec_globals['create_contact_sequence'] = self._create_contact_sequence
+            exec_globals['create_phase_sequence'] = self._create_phase_sequence
+            
+            # Execute LLM configuration code with full CasADi environment + dynamic imports
+            exec(llm_config_code, exec_globals)
+            
+            # Validate configuration
+            if self.contact_sequence is None:
+                return False, "No contact sequence specified. Use mpc.set_contact_sequence()"
+                
+            if not self.constraint_functions:
+                return False, "No constraints specified. Use mpc.add_constraint()"
+            
+            # Create MPC with LLM configuration
+            success, error = self._build_mpc()
+            if not success:
+                return False, f"MPC build failed: {error}"
+                
+            self.is_configured = True
+            return True, ""
+            
+        except Exception as e:
+            return False, f"Configuration execution failed: {str(e)}"
+    
+    def set_contact_sequence(self, contact_sequence: np.ndarray):
+        """Set the contact sequence for this task."""
+        self.contact_sequence = contact_sequence
+        
+    def add_constraint(self, constraint_func):
+        """Add a constraint function to this task."""
+        self.constraint_functions.append(constraint_func)
+        
+    def set_duration(self, duration: float):
+        """Set the MPC duration."""
+        self.mpc_duration = duration
+        
+    def set_time_step(self, dt: float):
+        """Set the MPC time step."""
+        self.mpc_dt = dt
+        
+    def set_task_name(self, name: str):
+        """Set the task name for this MPC."""
+        self.task_name = name
+        
+    def add_phase(self, name: str, start_time: float, duration: float, contact_pattern: List[int]):
+        """
+        Add a motion phase (e.g., stance, flight, landing).
+        
+        Args:
+            name: Phase name (e.g., "stance", "flight", "landing")
+            start_time: Start time of phase (seconds)
+            duration: Duration of phase (seconds) 
+            contact_pattern: Contact state for each foot [FL, FR, RL, RR] (1=contact, 0=flight)
+        """
+        self.phases[name] = {
+            'start_time': start_time,
+            'duration': duration,
+            'contact_pattern': contact_pattern
+        }
+        
+    def _create_contact_sequence(self, total_duration: float, dt: float, phases: Dict[str, Dict]) -> np.ndarray:
+        """
+        Helper function to create contact sequence from phase descriptions.
+        
+        Args:
+            total_duration: Total trajectory duration
+            dt: Time step
+            phases: Dictionary of phases with timing and contact patterns
+            
+        Returns:
+            Contact sequence array (4 x N) where N = total_duration/dt
+        """
+        horizon = int(total_duration / dt)
+        contact_sequence = np.ones((4, horizon))  # Default: all feet in contact
+        
+        for phase_name, phase_data in phases.items():
+            start_step = int(phase_data['start_time'] / dt)
+            duration_steps = int(phase_data['duration'] / dt)
+            end_step = min(start_step + duration_steps, horizon)
+            
+            for foot in range(4):
+                contact_sequence[foot, start_step:end_step] = phase_data['contact_pattern'][foot]
+        
+        return contact_sequence
+        
+    def _create_phase_sequence(self, phase_list: List[Tuple[str, float, List[int]]]) -> np.ndarray:
+        """
+        Helper to create contact sequence from a simple phase list.
+        
+        Args:
+            phase_list: List of (phase_name, duration, [FL,FR,RL,RR]) tuples
+            
+        Returns:
+            Contact sequence array
+        """
+        horizon = int(self.mpc_duration / self.mpc_dt)
+        contact_sequence = np.ones((4, horizon))
+        
+        current_step = 0
+        for phase_name, duration, contact_pattern in phase_list:
+            duration_steps = int(duration / self.mpc_dt)
+            end_step = min(current_step + duration_steps, horizon)
+            
+            for foot in range(4):
+                contact_sequence[foot, current_step:end_step] = contact_pattern[foot]
+            
+            current_step = end_step
+            if current_step >= horizon:
+                break
+                
+        return contact_sequence
+        
+    def _build_mpc(self) -> Tuple[bool, str]:
+        """
+        Build the MPC instance with LLM-specified configuration.
+        
+        Returns:
+            Tuple of (success, error_message)
+        """
+        try:
+            # Create modified config for this task
+            task_config = self._create_task_config()
+            
+            # Build MPC with task configuration
+            self.mpc = QuadrupedMPCOpti(
+                model=self.kindyn_model,
+                config=task_config,
+                build=True
+            )
+            
+            return True, ""
+            
+        except Exception as e:
+            return False, str(e)
+            
+    def _create_task_config(self):
+        """Create a config object tailored for this specific task."""
+        
+        # Instead of deep copying, create a new config with modified attributes
+        # This avoids the pickle issues with complex nested objects
+        task_config = self.base_config
+        
+        # Store original values to restore later if needed
+        original_duration = task_config.mpc_config.duration
+        original_dt = task_config.mpc_config.mpc_dt
+        original_contact_sequence = getattr(task_config.mpc_config, '_contact_sequence', None)
+        original_constraints = list(task_config.mpc_config.path_constraints)
+        
+        # Temporarily override with LLM-specified parameters
+        task_config.mpc_config.duration = self.mpc_duration
+        task_config.mpc_config.mpc_dt = self.mpc_dt
+        task_config.mpc_config._contact_sequence = self.contact_sequence
+        
+        # Add LLM constraints to path constraints (without modifying original)
+        task_config.mpc_config.path_constraints = original_constraints + self.constraint_functions
+        
+        return task_config
+        
+    def solve_trajectory(
+        self, 
+        initial_state: np.ndarray,
+        ref: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        """
+        Solve trajectory optimization with LLM-configured MPC.
+        
+        Args:
+            initial_state: Initial robot state
+            ref: Reference trajectory
+            
+        Returns:
+            Tuple of (state_traj, grf_traj, joint_vel_traj, status)
+        """
+        if not self.is_configured or self.mpc is None:
+            raise ValueError("MPC not configured. Call configure_from_llm() first.")
+            
+        # Use the LLM-specified contact sequence
+        return self.mpc.solve_trajectory(initial_state, ref, self.contact_sequence)
+        
+    def get_configuration_summary(self) -> Dict[str, Any]:
+        """Get a summary of the current LLM configuration."""
+        if self.contact_sequence is not None:
+            horizon = self.contact_sequence.shape[1]
+            contact_phases = self._analyze_contact_phases()
+        else:
+            horizon = 0
+            contact_phases = []
+            
+        return {
+            'task_name': self.task_name,
+            'duration': self.mpc_duration,
+            'time_step': self.mpc_dt,
+            'horizon': horizon,
+            'num_constraints': len(self.constraint_functions),
+            'contact_phases': contact_phases,
+            'phases': self.phases,
+            'is_configured': self.is_configured
+        }
+        
+    def _analyze_contact_phases(self) -> List[Dict[str, Any]]:
+        """Analyze the contact sequence to identify distinct phases."""
+        if self.contact_sequence is None:
+            return []
+            
+        phases = []
+        current_pattern = None
+        phase_start = 0
+        
+        for step in range(self.contact_sequence.shape[1]):
+            pattern = tuple(self.contact_sequence[:, step])
+            
+            if pattern != current_pattern:
+                if current_pattern is not None:
+                    phases.append({
+                        'start_time': phase_start * self.mpc_dt,
+                        'duration': (step - phase_start) * self.mpc_dt,
+                        'contact_pattern': list(current_pattern),
+                        'phase_type': self._classify_contact_pattern(current_pattern)
+                    })
+                current_pattern = pattern
+                phase_start = step
+                
+        # Add final phase
+        if current_pattern is not None:
+            phases.append({
+                'start_time': phase_start * self.mpc_dt,
+                'duration': (self.contact_sequence.shape[1] - phase_start) * self.mpc_dt,
+                'contact_pattern': list(current_pattern),
+                'phase_type': self._classify_contact_pattern(current_pattern)
+            })
+            
+        return phases
+        
+    def _classify_contact_pattern(self, pattern: Tuple[float, ...]) -> str:
+        """Classify a contact pattern into a phase type."""
+        num_contacts = sum(pattern)
+        
+        if num_contacts == 4:
+            return "stance"
+        elif num_contacts == 0:
+            return "flight"
+        elif num_contacts == 2:
+            if pattern[0] == pattern[1] and pattern[2] == pattern[3]:
+                return "trot" if pattern[0] != pattern[2] else "pace"
+            else:
+                return "diagonal"
+        elif num_contacts == 3:
+            return "tripod"
+        elif num_contacts == 1:
+            return "single_foot"
+        else:
+            return "unknown"

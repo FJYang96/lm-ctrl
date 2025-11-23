@@ -97,7 +97,7 @@ class LLMClient:
 
     def extract_raw_code(self, response: str) -> str:
         """
-        Extract code from LLM response, trying code blocks first, then raw content.
+        Enhanced code extraction from LLM response with better heuristics for repair iterations.
 
         Args:
             response: Raw LLM response text
@@ -108,29 +108,80 @@ class LLMClient:
         # First try to extract from code blocks
         code_blocks = self.extract_code_blocks(response)
         if code_blocks:
-            return code_blocks[0]
+            # Return the longest code block (likely the main function)
+            longest_block = max(code_blocks, key=len)
+            return longest_block
 
-        # If no code blocks, treat entire response as code (for cases where LLM outputs raw code)
-        # Clean up common non-code prefixes/suffixes
+        # If no code blocks, use enhanced raw extraction
         cleaned = response.strip()
-
-        # Remove common explanatory text
         lines = cleaned.split("\n")
-        start_idx = 0
+        
+        # Enhanced code detection - look for function definitions
+        start_idx = None
         end_idx = len(lines)
 
         # Find first line that looks like Python code
         for i, line in enumerate(lines):
             stripped = line.strip()
-            if (
-                stripped.startswith("def ")
-                or stripped.startswith("class ")
-                or stripped.startswith("import ")
-            ):
+            # Look for function definitions, not imports (since we don't allow imports)
+            if stripped.startswith("def "):
+                start_idx = i
+                break
+            # Also check for constraint-specific function names
+            if any(name in stripped for name in ["constraint", "jump", "backflip", "spin", "hop"]) and stripped.startswith("def "):
                 start_idx = i
                 break
 
-        # Take everything from the first def/class/import to the end
-        code_lines = lines[start_idx:end_idx]
+        # If we found a starting point, extract from there
+        if start_idx is not None:
+            code_lines = lines[start_idx:end_idx]
+            
+            # Clean up common suffixes
+            while code_lines and not code_lines[-1].strip():
+                code_lines.pop()  # Remove empty lines at end
+            
+            # Remove common explanatory text at the end
+            while code_lines:
+                last_line = code_lines[-1].strip()
+                if (last_line.startswith("#") or 
+                    "explanation" in last_line.lower() or
+                    "note:" in last_line.lower() or
+                    "this function" in last_line.lower()):
+                    code_lines.pop()
+                else:
+                    break
+            
+            return "\n".join(code_lines)
 
-        return "\n".join(code_lines)
+        # Fallback: if no function found, try to extract any Python-like content
+        python_lines = []
+        in_code_section = False
+        
+        for line in lines:
+            stripped = line.strip()
+            
+            # Skip obvious non-code lines
+            if (stripped.startswith("Here") or 
+                stripped.startswith("The") or 
+                stripped.startswith("This") or
+                stripped.startswith("Note") or
+                stripped.startswith("```")):
+                continue
+                
+            # Check if line looks like Python code
+            if (stripped.startswith("def ") or
+                stripped.startswith("return ") or
+                stripped.startswith("if ") or
+                stripped.startswith("for ") or
+                stripped.startswith("while ") or
+                "=" in stripped or
+                stripped.startswith("    ")):  # Indented line
+                in_code_section = True
+                python_lines.append(line)
+            elif in_code_section and not stripped:
+                python_lines.append(line)  # Keep empty lines within code
+            elif in_code_section and stripped:
+                # Non-Python line after code started - might be end of code
+                break
+
+        return "\n".join(python_lines) if python_lines else cleaned
