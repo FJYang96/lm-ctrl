@@ -1,7 +1,6 @@
 """LLM client for constraint generation using Anthropic's Claude."""
 
 import os
-from typing import List, Optional
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -28,7 +27,7 @@ class LLMClient:
         self.client = Anthropic(api_key=self.api_key)
 
     def generate_constraints(
-        self, system_prompt: str, user_message: str, context: Optional[str] = None
+        self, system_prompt: str, user_message: str, context: str | None = None
     ) -> str:
         """
         Generate optimization constraints using Claude.
@@ -79,7 +78,7 @@ class LLMClient:
         code_blocks = []
         lines = response.split("\n")
         in_code_block = False
-        current_block: List[str] = []
+        current_block: list[str] = []
 
         for line in lines:
             if line.strip().startswith("```python") or line.strip() == "```python":
@@ -115,7 +114,7 @@ class LLMClient:
         # If no code blocks, use enhanced raw extraction
         cleaned = response.strip()
         lines = cleaned.split("\n")
-        
+
         # Enhanced code detection - look for function definitions
         start_idx = None
         end_idx = len(lines)
@@ -128,54 +127,63 @@ class LLMClient:
                 start_idx = i
                 break
             # Also check for constraint-specific function names
-            if any(name in stripped for name in ["constraint", "jump", "backflip", "spin", "hop"]) and stripped.startswith("def "):
+            if any(
+                name in stripped
+                for name in ["constraint", "jump", "backflip", "spin", "hop"]
+            ) and stripped.startswith("def "):
                 start_idx = i
                 break
 
         # If we found a starting point, extract from there
         if start_idx is not None:
             code_lines = lines[start_idx:end_idx]
-            
+
             # Clean up common suffixes
             while code_lines and not code_lines[-1].strip():
                 code_lines.pop()  # Remove empty lines at end
-            
+
             # Remove common explanatory text at the end
             while code_lines:
                 last_line = code_lines[-1].strip()
-                if (last_line.startswith("#") or 
-                    "explanation" in last_line.lower() or
-                    "note:" in last_line.lower() or
-                    "this function" in last_line.lower()):
+                if (
+                    last_line.startswith("#")
+                    or "explanation" in last_line.lower()
+                    or "note:" in last_line.lower()
+                    or "this function" in last_line.lower()
+                ):
                     code_lines.pop()
                 else:
                     break
-            
+
             return "\n".join(code_lines)
 
         # Fallback: if no function found, try to extract any Python-like content
         python_lines = []
         in_code_section = False
-        
+
         for line in lines:
             stripped = line.strip()
-            
+
             # Skip obvious non-code lines
-            if (stripped.startswith("Here") or 
-                stripped.startswith("The") or 
-                stripped.startswith("This") or
-                stripped.startswith("Note") or
-                stripped.startswith("```")):
+            if (
+                stripped.startswith("Here")
+                or stripped.startswith("The")
+                or stripped.startswith("This")
+                or stripped.startswith("Note")
+                or stripped.startswith("```")
+            ):
                 continue
-                
+
             # Check if line looks like Python code
-            if (stripped.startswith("def ") or
-                stripped.startswith("return ") or
-                stripped.startswith("if ") or
-                stripped.startswith("for ") or
-                stripped.startswith("while ") or
-                "=" in stripped or
-                stripped.startswith("    ")):  # Indented line
+            if (
+                stripped.startswith("def ")
+                or stripped.startswith("return ")
+                or stripped.startswith("if ")
+                or stripped.startswith("for ")
+                or stripped.startswith("while ")
+                or "=" in stripped
+                or stripped.startswith("    ")
+            ):  # Indented line
                 in_code_section = True
                 python_lines.append(line)
             elif in_code_section and not stripped:

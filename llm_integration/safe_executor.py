@@ -3,10 +3,10 @@
 import ast
 import inspect
 import traceback
-from typing import Any, Callable, Dict, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import casadi as cs
-import numpy as np
 
 
 class SafeConstraintExecutor:
@@ -96,9 +96,9 @@ class SafeConstraintExecutor:
 
     def __init__(self) -> None:
         """Initialize the safe executor."""
-        self.constraint_functions: Dict[str, Callable[..., Any]] = {}
-        self.last_executed_code: Optional[str] = None
-        self.detected_entry_point: Optional[str] = None
+        self.constraint_functions: dict[str, Callable[..., Any]] = {}
+        self.last_executed_code: str | None = None
+        self.detected_entry_point: str | None = None
 
     def validate_code_safety(self, code: str) -> tuple[bool, str]:
         """
@@ -117,9 +117,17 @@ class SafeConstraintExecutor:
             return False, f"Syntax error: {e}"
 
         # Check for dangerous operations
-        dangerous_functions = ["exec", "eval", "open", "__import__", "compile", "globals", "locals"]
+        dangerous_functions = [
+            "exec",
+            "eval",
+            "open",
+            "__import__",
+            "compile",
+            "globals",
+            "locals",
+        ]
         dangerous_attributes = ["__class__", "__mro__", "__bases__", "__globals__"]
-        
+
         for node in ast.walk(tree):
             # Block dangerous built-ins
             if isinstance(node, ast.Call):
@@ -136,33 +144,48 @@ class SafeConstraintExecutor:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.name not in self.ALLOWED_IMPORTS:
-                        return False, f"Unauthorized import: {alias.name}. Allowed: {list(self.ALLOWED_IMPORTS.keys())}"
+                        return (
+                            False,
+                            f"Unauthorized import: {alias.name}. Allowed: {list(self.ALLOWED_IMPORTS.keys())}",
+                        )
 
             if isinstance(node, ast.ImportFrom):
                 if node.module and node.module not in self.ALLOWED_IMPORTS:
-                    return False, f"Unauthorized import from: {node.module}. Allowed: {list(self.ALLOWED_IMPORTS.keys())}"
+                    return (
+                        False,
+                        f"Unauthorized import from: {node.module}. Allowed: {list(self.ALLOWED_IMPORTS.keys())}",
+                    )
 
                 # Check specific imports from allowed modules
                 if node.names and node.module:
                     for alias in node.names:
                         if alias.name not in self.ALLOWED_IMPORTS[node.module]:
-                            return False, f"Unauthorized import: {alias.name} from {node.module}. Allowed from {node.module}: {self.ALLOWED_IMPORTS[node.module]}"
+                            return (
+                                False,
+                                f"Unauthorized import: {alias.name} from {node.module}. Allowed from {node.module}: {self.ALLOWED_IMPORTS[node.module]}",
+                            )
 
         # Check for proper function definition
         function_defs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
         if len(function_defs) == 0:
-            return False, "No function definition found. Must define a constraint function."
-        
+            return (
+                False,
+                "No function definition found. Must define a constraint function.",
+            )
+
         # Validate function signatures
         for func_def in function_defs:
             if len(func_def.args.args) != 5:
-                return False, f"Function '{func_def.name}' must have exactly 5 arguments: (x_k, u_k, kindyn_model, config, contact_k)"
+                return (
+                    False,
+                    f"Function '{func_def.name}' must have exactly 5 arguments: (x_k, u_k, kindyn_model, config, contact_k)",
+                )
 
         return True, ""
 
     def execute_mpc_configuration_code(
         self, code: str, llm_mpc: Any
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Safely execute LLM-generated MPC configuration code with dynamic imports.
 
@@ -181,30 +204,30 @@ class SafeConstraintExecutor:
         try:
             # The LLM MPC will handle dynamic import processing internally
             success, error = llm_mpc.configure_from_llm(code)
-            
+
             if not success:
                 return False, f"MPC configuration failed: {error}"
-                
+
             # Validate that MPC was properly configured
             config_summary = llm_mpc.get_configuration_summary()
-            
-            if not config_summary['is_configured']:
+
+            if not config_summary["is_configured"]:
                 return False, "MPC configuration incomplete"
-                
-            if config_summary['num_constraints'] == 0:
+
+            if config_summary["num_constraints"] == 0:
                 return False, "No constraints added to MPC"
-                
-            if config_summary['horizon'] == 0:
+
+            if config_summary["horizon"] == 0:
                 return False, "No valid contact sequence specified"
-                
+
             return True, ""
-            
+
         except Exception as e:
             return False, f"MPC configuration execution failed: {str(e)}"
 
     def execute_constraint_code(
-        self, code: str, preferred_function_name: Optional[str] = None
-    ) -> Tuple[bool, Optional[Callable[..., Any]], str, str]:
+        self, code: str, preferred_function_name: str | None = None
+    ) -> tuple[bool, Callable[..., Any] | None, str, str]:
         """
         Safely execute constraint code and extract the constraint function.
         (Legacy method for compatibility)
@@ -226,7 +249,7 @@ class SafeConstraintExecutor:
 
         # Create a restricted execution environment
         restricted_globals = self._create_restricted_globals()
-        restricted_locals: Dict[str, Any] = {}
+        restricted_locals: dict[str, Any] = {}
 
         try:
             # Execute the code in restricted environment
@@ -248,40 +271,64 @@ class SafeConstraintExecutor:
             try:
                 sig = inspect.signature(constraint_func)
                 if len(sig.parameters) != 5:
-                    return False, None, f"Function '{func_name}' must have exactly 5 parameters, got {len(sig.parameters)}", func_name
+                    return (
+                        False,
+                        None,
+                        f"Function '{func_name}' must have exactly 5 parameters, got {len(sig.parameters)}",
+                        func_name,
+                    )
             except Exception as e:
-                return False, None, f"Could not inspect function signature: {e}", func_name
+                return (
+                    False,
+                    None,
+                    f"Could not inspect function signature: {e}",
+                    func_name,
+                )
 
             # Test basic call with dummy arguments to catch early errors
             try:
                 test_x = cs.MX.sym("test_x", 24)
-                test_u = cs.MX.sym("test_u", 24) 
+                test_u = cs.MX.sym("test_u", 24)
                 test_contact = cs.MX.sym("test_contact", 4)
-                
+
                 # Mock objects for testing
                 class MockKindyn:
-                    def forward_kinematics_FL_fun(self, H, joint_pos):
+                    def forward_kinematics_FL_fun(
+                        self, H: cs.MX, joint_pos: cs.MX
+                    ) -> cs.MX:
                         return cs.MX.eye(4)
-                
+
                 class MockConfig:
-                    def __init__(self):
-                        self.mpc_config = type('obj', (object,), {'mpc_dt': 0.02})()
-                        self.experiment = type('obj', (object,), {'mu_ground': 0.8})()
-                        self.robot_data = type('obj', (object,), {'mass': 12.0})()
-                
-                result = constraint_func(test_x, test_u, MockKindyn(), MockConfig(), test_contact)
-                
+                    def __init__(self) -> None:
+                        self.mpc_config = type("obj", (object,), {"mpc_dt": 0.02})()
+                        self.experiment = type("obj", (object,), {"mu_ground": 0.8})()
+                        self.robot_data = type("obj", (object,), {"mass": 12.0})()
+
+                result = constraint_func(
+                    test_x, test_u, MockKindyn(), MockConfig(), test_contact
+                )
+
                 # Validate return format
                 if not isinstance(result, tuple) or len(result) != 3:
-                    return False, None, f"Function '{func_name}' must return tuple of 3 elements, got {type(result)} with {len(result) if hasattr(result, '__len__') else 'unknown'} elements", func_name
-                
+                    return (
+                        False,
+                        None,
+                        f"Function '{func_name}' must return tuple of 3 elements, got {type(result)} with {len(result) if hasattr(result, '__len__') else 'unknown'} elements",
+                        func_name,
+                    )
+
                 expr, lower, upper = result
-                
+
                 # Validate that returned values are CasADi expressions
                 if expr is not None:
-                    if not hasattr(expr, 'size'):
-                        return False, None, f"First return value must be a CasADi expression with .size() method, got {type(expr)}", func_name
-                    
+                    if not hasattr(expr, "size"):
+                        return (
+                            False,
+                            None,
+                            f"First return value must be a CasADi expression with .size() method, got {type(expr)}",
+                            func_name,
+                        )
+
                     # Check bounds have correct dimensions
                     try:
                         expr_size = expr.size()
@@ -289,26 +336,46 @@ class SafeConstraintExecutor:
                             expr_length = expr_size[0]
                         else:
                             expr_length = 1
-                            
+
                         # Check lower bound
-                        if hasattr(lower, 'size'):
+                        if hasattr(lower, "size"):
                             lower_size = lower.size()
                             lower_length = lower_size[0] if len(lower_size) > 1 else 1
                             if lower_length != expr_length:
-                                return False, None, f"Lower bound dimension ({lower_length}) must match constraint dimension ({expr_length})", func_name
-                        
-                        # Check upper bound  
-                        if hasattr(upper, 'size'):
+                                return (
+                                    False,
+                                    None,
+                                    f"Lower bound dimension ({lower_length}) must match constraint dimension ({expr_length})",
+                                    func_name,
+                                )
+
+                        # Check upper bound
+                        if hasattr(upper, "size"):
                             upper_size = upper.size()
                             upper_length = upper_size[0] if len(upper_size) > 1 else 1
                             if upper_length != expr_length:
-                                return False, None, f"Upper bound dimension ({upper_length}) must match constraint dimension ({expr_length})", func_name
-                                
+                                return (
+                                    False,
+                                    None,
+                                    f"Upper bound dimension ({upper_length}) must match constraint dimension ({expr_length})",
+                                    func_name,
+                                )
+
                     except Exception as dim_error:
-                        return False, None, f"Could not verify dimensions: {dim_error}", func_name
-                
+                        return (
+                            False,
+                            None,
+                            f"Could not verify dimensions: {dim_error}",
+                            func_name,
+                        )
+
             except Exception as test_error:
-                return False, None, f"Function test call failed: {test_error}", func_name
+                return (
+                    False,
+                    None,
+                    f"Function test call failed: {test_error}",
+                    func_name,
+                )
 
             # Ensure the function has access to the restricted globals
             if hasattr(constraint_func, "__globals__"):
@@ -336,10 +403,12 @@ class SafeConstraintExecutor:
                 error_msg += "\nTip: Check that bounds match constraint dimensions"
             return False, None, error_msg, ""
 
-    def _create_restricted_globals(self, additional_imports: Optional[list[str]] = None) -> Dict[str, Any]:
+    def _create_restricted_globals(
+        self, additional_imports: list[str] | None = None
+    ) -> dict[str, Any]:
         """
         Create a restricted global namespace for code execution.
-        
+
         Args:
             additional_imports: Optional list of additional imports to include
         """
@@ -371,25 +440,26 @@ class SafeConstraintExecutor:
         # Import allowed modules
         try:
             import math
-            from typing import Any, List, Optional, Tuple, Union
 
+            # from typing import Any, List, Optional, Tuple, Union
             import casadi as cs
             import numpy as np
             from liecasadi import SO3
 
-            # Add main module references  
+            # Add main module references
             restricted_globals["cs"] = cs
-            restricted_globals["np"] = np
-            restricted_globals["math"] = math
+            restricted_globals["np"] = np  # type: ignore[assignment]
+            restricted_globals["math"] = math  # type: ignore[assignment]
             restricted_globals["SO3"] = SO3
 
             # Make liecasadi module available too
             import liecasadi
+
             restricted_globals["liecasadi"] = liecasadi
 
             # Add ALL commonly used CasADi functions directly
             restricted_globals["vertcat"] = cs.vertcat
-            restricted_globals["horzcat"] = cs.horzcat  
+            restricted_globals["horzcat"] = cs.horzcat
             restricted_globals["mtimes"] = cs.mtimes
             restricted_globals["fabs"] = cs.fabs
             restricted_globals["fmax"] = cs.fmax
@@ -420,11 +490,11 @@ class SafeConstraintExecutor:
 
             # Constants
             restricted_globals["inf"] = cs.inf
-            restricted_globals["pi"] = np.pi
+            restricted_globals["pi"] = np.pi  # type: ignore[assignment]
 
             # CasADi types
             restricted_globals["MX"] = cs.MX
-            restricted_globals["SX"] = cs.SX 
+            restricted_globals["SX"] = cs.SX
             restricted_globals["DM"] = cs.DM
 
             # Matrix creation functions
@@ -441,10 +511,12 @@ class SafeConstraintExecutor:
 
         return restricted_globals
 
-    def _process_dynamic_imports(self, globals_dict: Dict[str, Any], import_requests: list[str]) -> None:
+    def _process_dynamic_imports(
+        self, globals_dict: dict[str, Any], import_requests: list[str]
+    ) -> None:
         """
         Process dynamic import requests from LLM code and add them to globals.
-        
+
         Args:
             globals_dict: Dictionary to add imports to
             import_requests: List of import statements to process
@@ -453,35 +525,42 @@ class SafeConstraintExecutor:
             try:
                 # Parse the import statement
                 tree = ast.parse(import_request)
-                
+
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Import):
                         for alias in node.names:
                             if alias.name in self.ALLOWED_IMPORTS:
                                 # Import the module
                                 module = __import__(alias.name)
-                                alias_name = alias.asname if alias.asname else alias.name
+                                alias_name = (
+                                    alias.asname if alias.asname else alias.name
+                                )
                                 globals_dict[alias_name] = module
-                                
+
                     elif isinstance(node, ast.ImportFrom):
                         if node.module and node.module in self.ALLOWED_IMPORTS:
-                            module = __import__(node.module, fromlist=[alias.name for alias in node.names])
+                            module = __import__(
+                                node.module,
+                                fromlist=[alias.name for alias in node.names],
+                            )
                             for alias in node.names:
                                 if alias.name in self.ALLOWED_IMPORTS[node.module]:
                                     attr = getattr(module, alias.name)
-                                    alias_name = alias.asname if alias.asname else alias.name
+                                    alias_name = (
+                                        alias.asname if alias.asname else alias.name
+                                    )
                                     globals_dict[alias_name] = attr
-                                    
+
             except Exception as e:
                 print(f"Warning: Could not process import '{import_request}': {e}")
 
     def extract_imports_from_code(self, code: str) -> list[str]:
         """
         Extract import statements from LLM code for dynamic processing.
-        
+
         Args:
             code: Python code to analyze
-            
+
         Returns:
             List of import statements found in the code
         """
@@ -494,17 +573,17 @@ class SafeConstraintExecutor:
                     import_stmt = ast.get_source_segment(code, node)
                     if import_stmt:
                         imports.append(import_stmt)
-        except:
+        except Exception:
             pass  # If parsing fails, return empty list
-        
+
         return imports
 
     def _find_constraint_entry_point(
         self,
-        locals_dict: Dict[str, Any],
-        globals_dict: Dict[str, Any],
-        preferred_name: Optional[str] = None,
-    ) -> Tuple[Optional[Callable[..., Any]], str, str]:
+        locals_dict: dict[str, Any],
+        globals_dict: dict[str, Any],
+        preferred_name: str | None = None,
+    ) -> tuple[Callable[..., Any] | None, str, str]:
         """
         Find the main constraint function entry point in the executed code.
 
@@ -550,7 +629,7 @@ class SafeConstraintExecutor:
         func_name: str,
         test_kindyn_model: Any,
         test_config: Any,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Validate that the constraint function is compatible with MPC interface.
 
@@ -618,7 +697,7 @@ class SafeConstraintExecutor:
         test_kindyn_model: Any,
         test_config: Any,
         test_contact: Any,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Test that the constraint function works with sample inputs.
 

@@ -1,6 +1,6 @@
 """Constraint generation system using LLM feedback."""
 
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 
@@ -15,10 +15,10 @@ class ConstraintGenerator:
 
     def __init__(self) -> None:
         """Initialize the constraint generator."""
-        self.iteration_history: List[Dict[str, Any]] = []
+        self.iteration_history: list[dict[str, Any]] = []
         self.robot_details = self._get_robot_details()
 
-    def _get_robot_details(self) -> Dict[str, Any]:
+    def _get_robot_details(self) -> dict[str, Any]:
         """Get robot-specific details for enhanced prompts."""
         return {
             "mass": "~12 kg",
@@ -27,7 +27,7 @@ class ConstraintGenerator:
             "joint_limits": "Hip: ±45°, Thigh: ±90°, Calf: ±150°",
             "max_jump_height": "~0.5-0.8m realistic",
             "typical_stance_height": "~0.25m COM height",
-            "foot_spacing": "Front/rear: ~30cm, Left/right: ~20cm"
+            "foot_spacing": "Front/rear: ~30cm, Left/right: ~20cm",
         }
 
     def get_system_prompt(self) -> str:
@@ -43,13 +43,13 @@ class ConstraintGenerator:
         robot_context = f"""
 
 ROBOT PHYSICAL DETAILS:
-- Mass: {self.robot_details['mass']}
-- {self.robot_details['dimensions']}
-- Leg reach: {self.robot_details['leg_reach']}
-- Joint limits: {self.robot_details['joint_limits']}
-- Realistic jump height: {self.robot_details['max_jump_height']}
-- Typical stance COM height: {self.robot_details['typical_stance_height']}
-- Foot spacing: {self.robot_details['foot_spacing']}
+- Mass: {self.robot_details["mass"]}
+- {self.robot_details["dimensions"]}
+- Leg reach: {self.robot_details["leg_reach"]}
+- Joint limits: {self.robot_details["joint_limits"]}
+- Realistic jump height: {self.robot_details["max_jump_height"]}
+- Typical stance COM height: {self.robot_details["typical_stance_height"]}
+- Foot spacing: {self.robot_details["foot_spacing"]}
 
 Use these physical limits to create realistic constraints."""
 
@@ -70,9 +70,9 @@ Use these physical limits to create realistic constraints."""
     def create_feedback_context(
         self,
         iteration: int,
-        trajectory_data: Dict[str, Any],
-        optimization_status: Dict[str, Any],
-        simulation_results: Dict[str, Any],
+        trajectory_data: dict[str, Any],
+        optimization_status: dict[str, Any],
+        simulation_results: dict[str, Any],
         previous_constraints: str,
     ) -> str:
         """
@@ -128,7 +128,7 @@ Use these physical limits to create realistic constraints."""
 
     def analyze_trajectory(
         self, state_traj: np.ndarray, mpc_dt: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Enhanced trajectory analysis to extract key metrics for feedback.
 
@@ -158,31 +158,29 @@ Use these physical limits to create realistic constraints."""
                 "initial_com_height": float(com_positions[0, 2]),
                 "final_com_height": float(com_positions[-1, 2]),
                 "height_gain": float(np.max(com_positions[:, 2]) - com_positions[0, 2]),
-                
                 # Orientation analysis
                 "initial_pitch": float(euler_angles[0, 1]),
                 "final_pitch": float(euler_angles[-1, 1]),
                 "total_pitch_rotation": float(euler_angles[-1, 1] - euler_angles[0, 1]),
                 "max_roll": float(np.max(np.abs(euler_angles[:, 0]))),
                 "max_pitch": float(np.max(np.abs(euler_angles[:, 1]))),
-                "max_yaw": float(np.max(
-                    np.abs(euler_angles[:, 2] - euler_angles[0, 2]))),
-
+                "max_yaw": float(
+                    np.max(np.abs(euler_angles[:, 2] - euler_angles[0, 2]))
+                ),
                 # Velocity analysis
-                "max_com_velocity": float(np.max(
-                    np.linalg.norm(com_velocities, axis=1))),
-                "max_angular_vel": float(np.max(
-                    np.linalg.norm(angular_velocities, axis=1))),
+                "max_com_velocity": float(
+                    np.max(np.linalg.norm(com_velocities, axis=1))
+                ),
+                "max_angular_vel": float(
+                    np.max(np.linalg.norm(angular_velocities, axis=1))
+                ),
                 "final_com_velocity": float(np.linalg.norm(com_velocities[-1, :])),
-                
                 # Displacement analysis
-                "com_displacement_x": float(
-                    com_positions[-1, 0] - com_positions[0, 0]),
-                "com_displacement_y": float(
-                    com_positions[-1, 1] - com_positions[0, 1]),
-                "total_distance": float(np.sum(
-                    np.linalg.norm(np.diff(com_positions, axis=0), axis=1))),
-
+                "com_displacement_x": float(com_positions[-1, 0] - com_positions[0, 0]),
+                "com_displacement_y": float(com_positions[-1, 1] - com_positions[0, 1]),
+                "total_distance": float(
+                    np.sum(np.linalg.norm(np.diff(com_positions, axis=0), axis=1))
+                ),
                 # Timing
                 "trajectory_duration": float(len(state_traj) * mpc_dt),
             }
@@ -190,14 +188,15 @@ Use these physical limits to create realistic constraints."""
             # Flight phase analysis
             initial_height = com_positions[0, 2]
             height_threshold = initial_height + 0.05  # 5cm above initial
-            airborne_mask = (com_positions[:, 2] > height_threshold)
+            airborne_mask = com_positions[:, 2] > height_threshold
 
             if np.any(airborne_mask):
                 flight_indices = np.where(airborne_mask)[0]
                 metrics["flight_duration"] = float(len(flight_indices) * mpc_dt)
                 metrics["flight_start_time"] = float(flight_indices[0] * mpc_dt)
                 metrics["flight_peak_height"] = float(
-                    np.max(com_positions[flight_indices, 2]))
+                    np.max(com_positions[flight_indices, 2])
+                )
             else:
                 metrics["flight_duration"] = 0.0
                 metrics["flight_start_time"] = 0.0
@@ -211,8 +210,9 @@ Use these physical limits to create realistic constraints."""
             # Smoothness metrics
             com_accelerations = np.diff(com_velocities, axis=0) / mpc_dt
             if com_accelerations.shape[0] > 0:
-                metrics["max_acceleration"] = float(np.max(
-                    np.linalg.norm(com_accelerations, axis=1)))
+                metrics["max_acceleration"] = float(
+                    np.max(np.linalg.norm(com_accelerations, axis=1))
+                )
             else:
                 metrics["max_acceleration"] = 0.0
 

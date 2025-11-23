@@ -4,7 +4,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -17,8 +17,8 @@ from utils.visualization import render_and_save_planned_trajectory
 
 from .constraint_generator import ConstraintGenerator
 from .llm_client import LLMClient
-from .safe_executor import SafeConstraintExecutor
 from .llm_mpc import LLMTaskMPC
+from .safe_executor import SafeConstraintExecutor
 
 try:
     from gym_quadruped.quadruped_env import QuadrupedEnv
@@ -55,7 +55,7 @@ class FeedbackPipeline:
 
         # Initialize kinodynamic model
         self.kindyn_model = KinoDynamic_Model(self.config)
-        
+
         # Initialize LLM-specific MPC (replaces the fixed MPC)
         self.llm_mpc = LLMTaskMPC(self.kindyn_model, self.config)
 
@@ -65,8 +65,14 @@ class FeedbackPipeline:
         )
 
         # Task-specific MPC tracking
-        self.current_task_mpc: Optional[LLMTaskMPC] = None
+        self.current_task_mpc: LLMTaskMPC | None = None
         self.llm_mpc_code: str = ""
+
+        # LLM constraint tracking
+        self.llm_constraints: list[Any] = []
+
+        # MPC reference for constraint injection
+        self.mpc: Any = None
 
         # Initialize simulation environment
         if QuadrupedEnv is not None:
@@ -82,12 +88,12 @@ class FeedbackPipeline:
             self.env = None
 
         # Pipeline state
-        self.iteration_results: List[Dict[str, Any]] = []
+        self.iteration_results: list[dict[str, Any]] = []
         self.max_iterations = int(os.getenv("MAX_LLM_ITERATIONS", "5"))
         self.results_dir = Path(os.getenv("RESULTS_DIR", "results/llm_iterations"))
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
-    def run_pipeline(self, command: str) -> Dict[str, Any]:
+    def run_pipeline(self, command: str) -> dict[str, Any]:
         """
         Run the complete LLM feedback pipeline for a given command.
 
@@ -226,19 +232,19 @@ class FeedbackPipeline:
         self,
         system_prompt: str,
         user_message: str,
-        context: Optional[str] = None,
+        context: str | None = None,
         command: str = "",
         max_attempts: int = 10,
-    ) -> Tuple[str, str, List[Dict[str, Any]]]:
+    ) -> tuple[str, str, list[dict[str, Any]]]:
         """
         Generate constraints using the LLM with comprehensive auto-retry on failures.
-        
+
         This implements the full repair loop with detailed error feedback to the LLM.
 
         Returns:
             Tuple of (final_code, function_name, attempt_log)
         """
-        attempts: List[Dict[str, Any]] = []
+        attempts: list[dict[str, Any]] = []
 
         for attempt in range(1, max_attempts + 1):
             print(f"🔄 Constraint generation attempt {attempt}/{max_attempts}")
@@ -279,7 +285,7 @@ class FeedbackPipeline:
 
                 # Create fresh LLM MPC instance for this attempt
                 task_mpc = LLMTaskMPC(self.kindyn_model, self.config)
-                
+
                 # Test the MPC configuration code with SafeExecutor
                 success, error_msg = self.safe_executor.execute_mpc_configuration_code(
                     mpc_config_code, task_mpc
@@ -293,7 +299,7 @@ class FeedbackPipeline:
                             "code": mpc_config_code,
                             "error": error_msg,
                             "success": False,
-                            "failure_stage": "mpc_configuration"
+                            "failure_stage": "mpc_configuration",
                         }
                     )
                     continue
@@ -301,10 +307,10 @@ class FeedbackPipeline:
                 # Store the configured MPC for later use
                 self.current_task_mpc = task_mpc
                 self.llm_mpc_code = mpc_config_code
-                
+
                 # Get configuration summary for logging
                 config_summary = task_mpc.get_configuration_summary()
-                task_name = config_summary.get('task_name', 'unknown')
+                task_name = config_summary.get("task_name", "unknown")
 
                 # Success!
                 attempts.append(
@@ -315,7 +321,7 @@ class FeedbackPipeline:
                         "success": True,
                         "task_name": task_name,
                         "failure_stage": "none",
-                        "config_summary": config_summary
+                        "config_summary": config_summary,
                     }
                 )
 
@@ -323,21 +329,28 @@ class FeedbackPipeline:
                 print(f"   Task: {task_name}")
                 print(f"   Duration: {config_summary.get('duration', 0):.2f}s")
                 print(f"   Constraints: {config_summary.get('num_constraints', 0)}")
-                print(f"   Contact phases: {len(config_summary.get('contact_phases', []))}")
+                print(
+                    f"   Contact phases: {len(config_summary.get('contact_phases', []))}"
+                )
                 return mpc_config_code, task_name, attempts
 
             except Exception as e:
                 # Catch any unexpected errors and provide details
                 import traceback
-                error_details = f"Unexpected error: {str(e)}\nTraceback: {traceback.format_exc()}"
-                
+
+                error_details = (
+                    f"Unexpected error: {str(e)}\nTraceback: {traceback.format_exc()}"
+                )
+
                 attempts.append(
                     {
                         "attempt": attempt,
-                        "code": constraint_code if "constraint_code" in locals() else "",
+                        "code": mpc_config_code
+                        if "mpc_config_code" in locals()
+                        else "",
                         "error": error_details,
                         "success": False,
-                        "failure_stage": "unexpected_exception"
+                        "failure_stage": "unexpected_exception",
                     }
                 )
                 print(f"❌ Attempt {attempt} failed with unexpected error: {str(e)}")
@@ -345,19 +358,21 @@ class FeedbackPipeline:
 
         # All attempts failed - provide comprehensive failure summary
         print(f"❌ All {max_attempts} constraint generation attempts failed")
-        
+
         # Analyze failure patterns
-        failure_stages = [attempt.get("failure_stage", "unknown") for attempt in attempts]
+        failure_stages = [
+            attempt.get("failure_stage", "unknown") for attempt in attempts
+        ]
         common_errors = {}
         for attempt in attempts:
             error = attempt.get("error", "")[:100]  # First 100 chars
             common_errors[error] = common_errors.get(error, 0) + 1
-        
+
         print("Failure analysis:")
         print(f"  Failure stages: {set(failure_stages)}")
         print(f"  Most common errors: {list(common_errors.keys())[:3]}")
-        
-        last_error = attempts[-1]['error'] if attempts else 'No attempts recorded'
+
+        last_error = attempts[-1]["error"] if attempts else "No attempts recorded"
         raise ValueError(
             f"Failed to generate valid constraints after {max_attempts} attempts.\n"
             f"Last error: {last_error}\n"
@@ -366,7 +381,7 @@ class FeedbackPipeline:
 
     def _solve_trajectory_optimization(
         self, mpc_config_code: str, task_name: str, iteration: int, run_dir: Path
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Solve trajectory optimization with LLM-configured MPC."""
 
         if self.current_task_mpc is None:
@@ -381,7 +396,7 @@ class FeedbackPipeline:
         print("=" * 50)
         print(mpc_config_code)
         print("=" * 50)
-        
+
         # Show MPC configuration summary
         config_summary = self.current_task_mpc.get_configuration_summary()
         print("🔧 MPC Configuration Summary:")
@@ -390,8 +405,10 @@ class FeedbackPipeline:
         print(f"  Horizon: {config_summary['horizon']} steps")
         print(f"  Constraints: {config_summary['num_constraints']}")
         print(f"  Contact Phases: {len(config_summary['contact_phases'])}")
-        for phase in config_summary.get('contact_phases', []):
-            print(f"    {phase['phase_type']}: {phase['start_time']:.2f}-{phase['start_time'] + phase['duration']:.2f}s")
+        for phase in config_summary.get("contact_phases", []):
+            print(
+                f"    {phase['phase_type']}: {phase['start_time']:.2f}-{phase['start_time'] + phase['duration']:.2f}s"
+            )
 
         # Setup initial conditions
         initial_state, _ = conversion.sim_to_mpc(
@@ -403,8 +420,8 @@ class FeedbackPipeline:
         try:
             # Solve trajectory optimization with LLM-configured MPC
             print("⚙️  Solving trajectory optimization with LLM MPC...")
-            state_traj, grf_traj, joint_vel_traj, status = self.current_task_mpc.solve_trajectory(
-                initial_state, ref
+            state_traj, grf_traj, joint_vel_traj, status = (
+                self.current_task_mpc.solve_trajectory(initial_state, ref)
             )
 
             if status == 0:
@@ -415,11 +432,13 @@ class FeedbackPipeline:
         except Exception as e:
             print(f"❌ LLM MPC failed: {e}")
             print("🔄 Falling back to default MPC...")
-            
+
             # Fallback to default MPC
             try:
-                state_traj, grf_traj, joint_vel_traj, status = self.fallback_mpc.solve_trajectory(
-                    initial_state, ref, self.config.mpc_config.contact_sequence
+                state_traj, grf_traj, joint_vel_traj, status = (
+                    self.fallback_mpc.solve_trajectory(
+                        initial_state, ref, self.config.mpc_config.contact_sequence
+                    )
                 )
                 print(f"Fallback MPC status: {status}")
             except Exception as fallback_error:
@@ -434,12 +453,14 @@ class FeedbackPipeline:
             "converged": status == 0,
             "status": "success" if status == 0 else "failed",
             "objective_value": 0.0,
-            "mpc_type": "llm_configured" if self.current_task_mpc is not None else "fallback",
-            "config_summary": config_summary
+            "mpc_type": "llm_configured"
+            if self.current_task_mpc is not None
+            else "fallback",
+            "config_summary": config_summary,
         }
 
         # Analyze trajectory using LLM MPC time step
-        mpc_dt = config_summary.get('time_step', self.config.mpc_config.mpc_dt)
+        mpc_dt = config_summary.get("time_step", self.config.mpc_config.mpc_dt)
         trajectory_analysis = self.constraint_generator.analyze_trajectory(
             state_traj, mpc_dt
         )
@@ -455,9 +476,15 @@ class FeedbackPipeline:
             print(
                 f"  Yaw Change: {trajectory_analysis.get('max_yaw', 0):.3f}rad ({trajectory_analysis.get('max_yaw', 0) * 180 / 3.14159:.1f}°)"
             )
-            print(f"  X Displacement: {trajectory_analysis.get('com_displacement_x', 0):.3f}m")
-            print(f"  Y Displacement: {trajectory_analysis.get('com_displacement_y', 0):.3f}m")
-            print(f"  Flight Duration: {trajectory_analysis.get('flight_duration', 0):.3f}s")
+            print(
+                f"  X Displacement: {trajectory_analysis.get('com_displacement_x', 0):.3f}m"
+            )
+            print(
+                f"  Y Displacement: {trajectory_analysis.get('com_displacement_y', 0):.3f}m"
+            )
+            print(
+                f"  Flight Duration: {trajectory_analysis.get('flight_duration', 0):.3f}s"
+            )
 
         # Save trajectory data
         np.save(run_dir / f"state_traj_iter_{iteration}.npy", state_traj)
@@ -481,8 +508,8 @@ class FeedbackPipeline:
         return result
 
     def _execute_simulation(
-        self, optimization_result: Dict[str, Any], iteration: int, run_dir: Path
-    ) -> Dict[str, Any]:
+        self, optimization_result: dict[str, Any], iteration: int, run_dir: Path
+    ) -> dict[str, Any]:
         """Execute the optimized trajectory in simulation."""
 
         if not optimization_result["success"]:
@@ -629,10 +656,10 @@ class FeedbackPipeline:
         qvel_traj: np.ndarray,
         grf_traj: np.ndarray,
         tracking_error: float,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Analyze the quality and realism of the simulation."""
 
-        analysis: Dict[str, Any] = {
+        analysis: dict[str, Any] = {
             "realistic": True,
             "max_joint_velocity": 0.0,
             "max_grf": 0.0,
@@ -679,8 +706,8 @@ class FeedbackPipeline:
     def _create_feedback_context(
         self,
         iteration: int,
-        optimization_result: Dict[str, Any],
-        simulation_result: Dict[str, Any],
+        optimization_result: dict[str, Any],
+        simulation_result: dict[str, Any],
         constraint_code: str,
     ) -> str:
         """Create feedback context for the next LLM iteration."""
@@ -697,7 +724,7 @@ class FeedbackPipeline:
             constraint_code,
         )
 
-    def _score_iteration(self, iteration_result: Dict[str, Any]) -> float:
+    def _score_iteration(self, iteration_result: dict[str, Any]) -> float:
         """
         Score an iteration based on optimization success, simulation quality, AND task-specific behavior.
 
@@ -733,89 +760,107 @@ class FeedbackPipeline:
 
         return score
 
-    def _score_task_specific_behavior(self, iteration_result: Dict[str, Any]) -> float:
+    def _score_task_specific_behavior(self, iteration_result: dict[str, Any]) -> float:
         """
         Score based on whether the robot actually performed the intended behavior.
-        
+
         Returns:
             Score between 0 and 1 based on task-specific metrics
         """
         command = iteration_result.get("command", "").lower()
-        trajectory_analysis = iteration_result.get("optimization", {}).get("trajectory_analysis", {})
-        
+        trajectory_analysis = iteration_result.get("optimization", {}).get(
+            "trajectory_analysis", {}
+        )
+
         if not trajectory_analysis or "error" in trajectory_analysis:
             return 0.0
-        
+
         try:
             # Extract key metrics
             height_gain = trajectory_analysis.get("height_gain", 0)
-            total_pitch_rotation = abs(trajectory_analysis.get("total_pitch_rotation", 0))
-            total_yaw_change = abs(trajectory_analysis.get("max_yaw", 0)) 
+            total_pitch_rotation = abs(
+                trajectory_analysis.get("total_pitch_rotation", 0)
+            )
+            total_yaw_change = abs(trajectory_analysis.get("max_yaw", 0))
             com_displacement_x = abs(trajectory_analysis.get("com_displacement_x", 0))
             com_displacement_y = abs(trajectory_analysis.get("com_displacement_y", 0))
-            max_height = trajectory_analysis.get("max_com_height", 0)
-            
+
             # Task-specific scoring
             if any(word in command for word in ["backflip", "flip", "somersault"]):
                 # Backflip: needs significant pitch rotation (close to 2π ≈ 6.28)
-                target_rotation = 6.28  # 2π radians
-                rotation_score = min(1.0, total_pitch_rotation / target_rotation)
-                height_score = min(1.0, height_gain / 0.3) if height_gain > 0.1 else 0
+                target_rotation: float = 6.28  # 2π radians
+                rotation_score: float = min(1.0, total_pitch_rotation / target_rotation)
+                height_score: float = (
+                    min(1.0, height_gain / 0.3) if height_gain > 0.1 else 0
+                )
                 return 0.7 * rotation_score + 0.3 * height_score
-                
+
             elif any(word in command for word in ["turn", "spin", "rotate", "around"]):
                 # Turn around: needs yaw rotation (π for 180°, 2π for 360°)
                 if "360" in command or "full" in command or "720" in command:
-                    target_rotation = 6.28 if "360" in command else 12.56  # 2π or 4π for 720°
+                    target_rotation = (
+                        6.28 if "360" in command else 12.56
+                    )  # 2π or 4π for 720°
                 else:
                     target_rotation = 3.14  # π for turn around (180°)
-                
-                yaw_score = min(1.0, total_yaw_change / target_rotation)
+
+                yaw_score: float = min(1.0, total_yaw_change / target_rotation)
                 # Penalize if it just jumps instead of turning
                 if height_gain > 0.3 and yaw_score < 0.3:
                     return 0.1  # Probably just jumped
                 return yaw_score
-                
+
             elif any(word in command for word in ["jump", "leap", "hop"]):
                 if any(word in command for word in ["high", "up"]):
                     # Jump high: needs significant height gain
                     target_height = 0.4  # 40cm gain
-                    return min(1.0, height_gain / target_height) if height_gain > 0.1 else 0
-                    
-                elif any(word in command for word in ["left", "right", "forward", "backward", "side"]):
+                    return (
+                        min(1.0, height_gain / target_height)
+                        if height_gain > 0.1
+                        else 0
+                    )
+
+                elif any(
+                    word in command
+                    for word in ["left", "right", "forward", "backward", "side"]
+                ):
                     # Directional jump: needs both height and displacement
-                    height_score = min(1.0, height_gain / 0.2) if height_gain > 0.05 else 0
+                    height_score = (
+                        min(1.0, height_gain / 0.2) if height_gain > 0.05 else 0
+                    )
                     displacement = max(com_displacement_x, com_displacement_y)
-                    displacement_score = min(1.0, displacement / 0.3) if displacement > 0.1 else 0
+                    displacement_score = (
+                        min(1.0, displacement / 0.3) if displacement > 0.1 else 0
+                    )
                     return 0.5 * height_score + 0.5 * displacement_score
-                    
+
                 else:
                     # Generic jump: just needs height
                     return min(1.0, height_gain / 0.2) if height_gain > 0.05 else 0
-                    
+
             elif any(word in command for word in ["squat", "crouch", "lower"]):
                 # Lowering motion: needs negative height change
                 return min(1.0, abs(height_gain) / 0.1) if height_gain < -0.05 else 0
-                
+
             else:
                 # Unknown command: give partial credit for any significant motion
-                motion_score = 0
+                motion_score = 0.0
                 if height_gain > 0.1:
                     motion_score += 0.3
                 if total_pitch_rotation > 0.5:
-                    motion_score += 0.3  
+                    motion_score += 0.3
                 if total_yaw_change > 0.5:
                     motion_score += 0.3
                 if max(com_displacement_x, com_displacement_y) > 0.1:
                     motion_score += 0.1
                 return min(1.0, motion_score)
-                
+
         except Exception as e:
             print(f"Warning: Task scoring failed: {e}")
             return 0.0
 
     def _save_iteration_results(
-        self, iteration_result: Dict[str, Any], run_dir: Path
+        self, iteration_result: dict[str, Any], run_dir: Path
     ) -> None:
         """Save detailed results for a single iteration."""
         iteration = iteration_result["iteration"]
@@ -843,8 +888,8 @@ class FeedbackPipeline:
     def _inject_llm_constraints_to_mpc(self) -> None:
         """
         Inject LLM constraints into the MPC problem using the proper MPC constraint interface.
-        
-        This adds the LLM-generated constraints as additional path constraints to the 
+
+        This adds the LLM-generated constraints as additional path constraints to the
         existing MPC constraint system, rather than directly to the Opti problem.
         """
         if not self.llm_constraints:
@@ -854,15 +899,19 @@ class FeedbackPipeline:
         constraint_func = self.llm_constraints[0]  # Use the current constraint
 
         try:
-            print(f"🔧 Adding LLM constraint to MPC path constraints...")
-            
+            print("🔧 Adding LLM constraint to MPC path constraints...")
+
             # Add the LLM constraint to the MPC's path constraint list
             # This ensures it's applied consistently with the existing constraint system
-            if hasattr(self.config, 'mpc_config') and hasattr(self.config.mpc_config, 'path_constraints'):
+            if hasattr(self.config, "mpc_config") and hasattr(
+                self.config.mpc_config, "path_constraints"
+            ):
                 # Add the LLM constraint to the path constraints list
                 self.config.mpc_config.path_constraints.append(constraint_func)
-                print(f"✅ Added LLM constraint to path constraints list")
-                print(f"   Total path constraints: {len(self.config.mpc_config.path_constraints)}")
+                print("✅ Added LLM constraint to path constraints list")
+                print(
+                    f"   Total path constraints: {len(self.config.mpc_config.path_constraints)}"
+                )
             else:
                 # Fallback: inject directly into the Opti problem (less preferred)
                 print("Warning: Using direct Opti injection as fallback")
@@ -871,6 +920,7 @@ class FeedbackPipeline:
         except Exception as e:
             print(f"Error: Failed to inject LLM constraints: {e}")
             import traceback
+
             traceback.print_exc()
 
     def _inject_llm_constraints_direct(self) -> None:
@@ -898,7 +948,10 @@ class FeedbackPipeline:
                         x_k, u_k, self.kindyn_model, self.config, contact_k
                     )
 
-                    if not isinstance(constraint_result, tuple) or len(constraint_result) != 3:
+                    if (
+                        not isinstance(constraint_result, tuple)
+                        or len(constraint_result) != 3
+                    ):
                         print(f"Warning: Invalid constraint result at time step {k}")
                         continue
 
@@ -914,11 +967,14 @@ class FeedbackPipeline:
                     print(f"Warning: Failed to process time step {k}: {step_error}")
                     continue
 
-            print(f"✅ Direct injection completed: {constraints_added} constraint sets added")
+            print(
+                f"✅ Direct injection completed: {constraints_added} constraint sets added"
+            )
 
         except Exception as e:
             print(f"Error: Direct constraint injection failed: {e}")
             import traceback
+
             traceback.print_exc()
 
     def _make_json_safe(self, obj: Any) -> Any:

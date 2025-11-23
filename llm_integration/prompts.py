@@ -1,6 +1,6 @@
 """LLM prompts for constraint generation and feedback."""
 
-from typing import Any, Dict
+from typing import Any
 
 
 def get_system_prompt() -> str:
@@ -36,10 +36,10 @@ CRITICAL REQUIREMENTS - FOLLOW EXACTLY:
    MUST return exactly 3 CasADi MX objects: constraint_expr, lower_bounds, upper_bounds
 
 ROBOT STATE SPACE (24-DOF):
-x_k[0:3]   - COM position [x, y, z] 
+x_k[0:3]   - COM position [x, y, z]
 x_k[3:6]   - COM velocity [vx, vy, vz]
 x_k[6]     - roll angle
-x_k[7]     - pitch angle  
+x_k[7]     - pitch angle
 x_k[8]     - yaw angle
 x_k[9:12]  - angular velocity [wx, wy, wz]
 x_k[12:24] - joint angles (12 joints: 4 legs × 3 joints)
@@ -75,7 +75,7 @@ def backflip_constraints(x_k, u_k, kindyn_model, config, contact_k):
 mpc.add_constraint(backflip_constraints)
 
 TURN AROUND (stay grounded + rotate):
-mpc.set_task_name("turn_around") 
+mpc.set_task_name("turn_around")
 mpc.set_duration(2.0)
 contact_seq = np.ones((4, int(2.0/0.02)))
 mpc.set_contact_sequence(contact_seq)
@@ -91,7 +91,7 @@ mpc.add_constraint(turn_constraints)
 
 JUMP LEFT (takeoff + lateral displacement):
 mpc.set_task_name("jump_left")
-mpc.set_duration(1.0) 
+mpc.set_duration(1.0)
 phases = [("prep", 0.2, [1,1,1,1]), ("flight", 0.6, [0,0,0,0]), ("land", 0.2, [1,1,1,1])]
 contact_seq = mpc._create_phase_sequence(phases)
 mpc.set_contact_sequence(contact_seq)
@@ -143,7 +143,7 @@ def get_user_prompt(command: str) -> str:
 Generate complete MPC configuration and constraints for: "{command}"
 
 REQUIREMENTS:
-- Return ONLY Python code (no markdown, no explanations)  
+- Return ONLY Python code (no markdown, no explanations)
 - Configure MPC object with appropriate contact sequence and timing
 - Define constraint function with correct signature
 - Choose contact patterns suitable for the task type
@@ -151,12 +151,12 @@ REQUIREMENTS:
 STRUCTURE YOUR CODE:
 1. Set task name, duration, and time step
 2. Create appropriate contact sequence for the behavior
-3. Define constraint function that enforces the behavior 
+3. Define constraint function that enforces the behavior
 4. Add constraint to MPC
 
 BEHAVIOR ANALYSIS:
 - Ground-based (turn, walk, squat): keep feet planted [1,1,1,1]
-- Aerial (jump, flip, leap): include flight phase [0,0,0,0] 
+- Aerial (jump, flip, leap): include flight phase [0,0,0,0]
 - Mixed motions: use phase sequences
 
 Generate complete MPC setup for "{command}":"""
@@ -164,9 +164,9 @@ Generate complete MPC setup for "{command}":"""
 
 def create_feedback_context(
     iteration: int,
-    trajectory_data: Dict[str, Any],
-    optimization_status: Dict[str, Any],
-    simulation_results: Dict[str, Any],
+    trajectory_data: dict[str, Any],
+    optimization_status: dict[str, Any],
+    simulation_results: dict[str, Any],
     previous_constraints: str,
 ) -> str:
     """
@@ -189,15 +189,15 @@ PREVIOUS CODE:
 {previous_constraints}
 
 RESULTS ANALYSIS:
-Optimization: {'SUCCESS' if optimization_status.get('converged', False) else 'FAILED'}
-Simulation: {'SUCCESS' if simulation_results.get('success', False) else 'FAILED'}"""
+Optimization: {"SUCCESS" if optimization_status.get("converged", False) else "FAILED"}
+Simulation: {"SUCCESS" if simulation_results.get("success", False) else "FAILED"}"""
 
     # Add specific trajectory metrics
     if trajectory_data:
         max_height = trajectory_data.get("max_com_height", 0)
         total_rotation = trajectory_data.get("total_pitch_rotation", 0)
         flight_duration = trajectory_data.get("flight_duration", 0)
-        
+
         context += f"""
 Max Height: {max_height:.3f}m
 Total Rotation: {total_rotation:.3f}rad ({total_rotation * 57.3:.1f}°)
@@ -207,15 +207,15 @@ Flight Duration: {flight_duration:.3f}s"""
     issues = []
     if not optimization_status.get("converged", False):
         issues.append("Optimization failed - constraints too strict or conflicting")
-    
+
     if simulation_results.get("tracking_error", float("inf")) > 0.1:
         issues.append("High tracking error - constraints may be unrealistic")
-        
+
     if not simulation_results.get("realistic", True):
         issues.append("Simulation unrealistic - constraints cause physical violations")
 
     if issues:
-        context += f"\n\nPROBLEMS:\n" + "\n".join(f"- {issue}" for issue in issues)
+        context += "\n\nPROBLEMS:\n" + "\n".join(f"- {issue}" for issue in issues)
 
     context += """
 

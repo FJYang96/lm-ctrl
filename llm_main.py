@@ -26,7 +26,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -171,7 +171,7 @@ def check_api_key() -> bool:
         return False
 
 
-def print_results_summary(results: Dict[str, Any], elapsed_time: float) -> None:
+def print_results_summary(results: dict[str, Any], elapsed_time: float) -> None:
     """Print a summary of the pipeline results."""
 
     print("\\n" + "=" * 60)
