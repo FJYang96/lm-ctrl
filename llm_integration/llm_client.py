@@ -15,7 +15,7 @@ import requests
 class LLMConfig:
     """Configuration for LLM client"""
 
-    provider: str = "openai"  # openai, anthropic, local
+    provider: str = "openai"  # openai, anthropic, gemini, local
     model: str = "gpt-4"
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -57,6 +57,11 @@ class LLMClient:
             api_key = os.getenv("ANTHROPIC_API_KEY")
             model = os.getenv("ANTHROPIC_MODEL", "claude-3-sonnet-20240229")
 
+        elif os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+            provider = "gemini"
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
         elif os.getenv("LLM_BASE_URL"):  # Local/custom endpoint
             provider = "local"
             api_key = os.getenv("LLM_API_KEY", "dummy")
@@ -67,7 +72,7 @@ class LLMClient:
             model=model,
             api_key=api_key,
             base_url=os.getenv("LLM_BASE_URL"),
-            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "2000")),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "8192")),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
             timeout=int(os.getenv("LLM_TIMEOUT", "60")),
         )
@@ -76,10 +81,10 @@ class LLMClient:
         """Validate LLM configuration"""
         if not self.config.api_key:
             raise ValueError(
-                "No API key found. Please set one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, or LLM_API_KEY"
+                "No API key found. Please set one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY/GOOGLE_API_KEY, or LLM_API_KEY"
             )
 
-        if self.config.provider not in ["openai", "anthropic", "local"]:
+        if self.config.provider not in ["openai", "anthropic", "gemini", "local"]:
             raise ValueError(f"Unsupported provider: {self.config.provider}")
 
     def generate_response(self, prompt: str, **kwargs) -> str:
@@ -111,6 +116,8 @@ class LLMClient:
             return self._call_openai(prompt, config)
         elif config.provider == "anthropic":
             return self._call_anthropic(prompt, config)
+        elif config.provider == "gemini":
+            return self._call_gemini(prompt, config)
         elif config.provider == "local":
             return self._call_local(prompt, config)
         else:
@@ -221,6 +228,85 @@ class LLMClient:
 
         result = response.json()
         return result["content"][0]["text"]
+
+    def _call_gemini(self, prompt: str, config: LLMConfig) -> str:
+        """Call Google Gemini using the preferred SDK, with fallbacks.
+
+        Preference order:
+        1) New Google AI SDK: `from google import genai` with Client
+        2) Legacy SDK: `import google.generativeai as genai`
+        3) Direct REST API
+        """
+        try:
+            from google import genai  # type: ignore
+
+            client = genai.Client()
+
+            response = client.models.generate_content(
+                model=config.model,
+                contents=prompt,
+            )
+            print(response)
+            if hasattr(response, "text") and response.text:
+                return response.text
+            # Attempt to extract alternative shapes if .text is empty
+            if getattr(response, "candidates", None):
+                candidate = response.candidates[0]
+                parts = (
+                    getattr(candidate, "content", {}).parts
+                    if hasattr(candidate, "content")
+                    else None
+                )
+                if parts and len(parts) > 0 and getattr(parts[0], "text", None):
+                    return parts[0].text
+        except ImportError:
+            # Proceed to next fallback
+            pass
+        except Exception:
+            # Proceed to next fallback
+            pass
+
+        # 3) Direct REST API
+        return self._call_gemini_direct(prompt, config)
+
+    def _call_gemini_direct(self, prompt: str, config: LLMConfig) -> str:
+        """Direct Gemini API call using requests"""
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.model}:generateContent"
+        params = {"key": config.api_key}
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": config.temperature,
+                "maxOutputTokens": config.max_tokens,
+            },
+        }
+
+        response = requests.post(
+            url, params=params, headers=headers, json=data, timeout=config.timeout
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Gemini API error: {response.status_code} - {response.text}"
+            )
+
+        result = response.json()
+
+        # Typical Gemini response shape
+        try:
+            return result["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception:
+            # Try alternative shapes or raise
+            if "text" in result:
+                return result["text"]
+            raise RuntimeError(f"Unknown Gemini response format: {result}")
 
     def _call_local(self, prompt: str, config: LLMConfig) -> str:
         """Call local/custom LLM endpoint"""
