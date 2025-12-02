@@ -14,7 +14,7 @@ duration: float = 1.0
 robot_data: RobotData = get_robot_data(robot)
 
 # Select constraint mode: "standard" or "complementarity"
-CONSTRAINT_MODE: str = "complementarity"  # Change this to switch modes
+CONSTRAINT_MODE: str = "normal"  # Change this to switch modes
 
 experiment: BaseExperiment = BaseExperiment(
     mu_ground=0.5,
@@ -77,9 +77,9 @@ else:  # standard mode
             constr.input_limits_constraints,
         ],
         path_constraint_params={
-            "SWING_GRF_EPS": 0.0,
-            "STANCE_HEIGHT_EPS": 0.0,
-            "NO_SLIP_EPS": 0.0,
+            "SWING_GRF_EPS": 0.001,
+            "STANCE_HEIGHT_EPS": 0.01,
+            "NO_SLIP_EPS": 0.001,
         },
         warmstart_state=None,
         warmstart_input=None,

@@ -6,7 +6,7 @@ from liecasadi import SO3
 
 from .dynamics.model import KinoDynamic_Model
 
-INF = 1e6
+INF = 1e4
 
 
 def friction_cone_constraints(
@@ -41,17 +41,21 @@ def friction_cone_constraints(
             * (1 - contact_flag)
         )  # grf <= EPS when not in contact
 
-        # Friction cone constraints
-        # Previously was not active for swing feet, but now is to enforce that swing feet should have zero GRF.
-        mu_term = config.experiment.mu_ground * f_z
+        # Friction cone for swing (feet not in contact) should have zero GRF.
+        # expr_list.append(f_x)
+        # min_list.append(-config.robot_data.grf_limits * contact_flag) # 0 in swing
+        # max_list.append(config.robot_data.grf_limits * contact_flag)  # 0 in swing
 
+        # Friction cone for stance (feet in contact) should have friction cone constraints.
+        mu_term = config.experiment.mu_ground * f_z
+        relaxed_mu_term = mu_term  # * contact_flag + INF * (1 - contact_flag)
         expr_list.append(f_x)
-        min_list.append(-mu_term)
-        max_list.append(mu_term)
+        min_list.append(-relaxed_mu_term)
+        max_list.append(relaxed_mu_term)
 
         expr_list.append(f_y)
-        min_list.append(-mu_term)
-        max_list.append(mu_term)
+        min_list.append(-relaxed_mu_term)
+        max_list.append(relaxed_mu_term)
 
     return cs.vertcat(*expr_list), cs.vertcat(*min_list), cs.vertcat(*max_list)
 
@@ -131,10 +135,10 @@ def foot_velocity_constraints(
         qvel_joints_RR,
     )
 
-    foot_vel_FL = kindyn_model.jacobian_FL_fun(H, joint_positions)[0:3, :] @ qvel
-    foot_vel_FR = kindyn_model.jacobian_FR_fun(H, joint_positions)[0:3, :] @ qvel
-    foot_vel_RL = kindyn_model.jacobian_RL_fun(H, joint_positions)[0:3, :] @ qvel
-    foot_vel_RR = kindyn_model.jacobian_RR_fun(H, joint_positions)[0:3, :] @ qvel
+    foot_vel_FL = kindyn_model.jacobian_FL_fun(H, joint_positions)[0:2, :] @ qvel
+    foot_vel_FR = kindyn_model.jacobian_FR_fun(H, joint_positions)[0:2, :] @ qvel
+    foot_vel_RL = kindyn_model.jacobian_RL_fun(H, joint_positions)[0:2, :] @ qvel
+    foot_vel_RR = kindyn_model.jacobian_RR_fun(H, joint_positions)[0:2, :] @ qvel
 
     # Stack all foot velocities
     foot_velocities = cs.vertcat(
@@ -143,13 +147,13 @@ def foot_velocity_constraints(
     foot_velocity_min = cs.repmat(
         -config.mpc_config.path_constraint_params["NO_SLIP_EPS"] * contact_k
         - INF * (1 - contact_k),
-        3,
+        2,
         1,
     ).reshape((-1, 1))
     foot_velocity_max = cs.repmat(
         config.mpc_config.path_constraint_params["NO_SLIP_EPS"] * contact_k
         + INF * (1 - contact_k),
-        3,
+        2,
         1,
     ).reshape((-1, 1))
 

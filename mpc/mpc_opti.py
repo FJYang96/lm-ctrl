@@ -170,7 +170,7 @@ class QuadrupedMPCOpti:
 
     def _setup_path_constraints(self) -> None:
         """Setup path constraints including friction cone, foot height, etc."""
-        for k in range(self.horizon):
+        for k in range(1, self.horizon):
             contact_k = self.P_contact[:, k]
             u_k = self.U[:, k]
             x_k = self.X[:, k]
@@ -249,6 +249,7 @@ class QuadrupedMPCOpti:
                     U_init[12 + foot * 3 : 12 + foot * 3 + 3, i] = 0.0
 
         self.opti.set_initial(self.U, U_init)
+        # self.opti.callback(lambda it: self._diagnose_ill_conditioning())
 
         try:
             # Solve the optimization problem
@@ -258,19 +259,53 @@ class QuadrupedMPCOpti:
             X_opt = sol.value(self.X)
             U_opt = sol.value(self.U)
 
-            # Convert to expected format
-            state_traj = X_opt.T  # Shape: (horizon+1, states_dim)
-            joint_vel_traj = U_opt[0:12, :].T  # Shape: (horizon, 12)
-            grf_traj = U_opt[12:24, :].T  # Shape: (horizon, 12)
-
             status = 0  # Success
 
         except Exception as e:
             print(f"Optimization failed: {e}")
             # Return empty trajectories on failure
-            state_traj = np.zeros((self.horizon + 1, self.states_dim))
-            joint_vel_traj = np.zeros((self.horizon, 12))
-            grf_traj = np.zeros((self.horizon, 12))
+            X_opt = self.opti.debug.value(self.X)
+            U_opt = self.opti.debug.value(self.U)
             status = 1  # Failure
 
+        # Convert to expected format
+        state_traj = X_opt.T  # Shape: (horizon+1, states_dim)
+        joint_vel_traj = U_opt[0:12, :].T  # Shape: (horizon, 12)
+        grf_traj = U_opt[12:24, :].T  # Shape: (horizon, 12)
+
         return state_traj, grf_traj, joint_vel_traj, status
+
+    def _diagnose_ill_conditioning(self) -> None:
+        # We define the functions on the fly using the symbolic graph
+        f = self.opti.f
+        g = self.opti.g
+        x = self.opti.x
+        p = self.opti.p
+
+        x_val = self.opti.debug.value(x)
+        p_val = self.opti.debug.value(p)
+
+        # Gradient of Objective
+        grad_f_fn = cs.Function("grad_f", [x, p], [cs.gradient(f, x)])
+        grad_val = np.abs(grad_f_fn(x_val, p_val).full().flatten())
+
+        # Jacobian of Constraints
+        jac_g_fn = cs.Function("jac_g", [x, p], [cs.jacobian(g, x)])
+        jac_val_sparse = jac_g_fn(x_val, p_val)
+
+        # Compute row norms (sensitivity of each constraint)
+        jac_row_norms = np.array(cs.norm_fro(jac_val_sparse).full()).flatten()
+
+        # 6. Report
+        print(
+            f"Objective Gradient: Min={np.min(grad_val):.2e}, Max={np.max(grad_val):.2e}"
+        )
+        print(
+            f"Constraint Jacobian: Min={np.min(jac_row_norms):.2e}, Max={np.max(jac_row_norms):.2e}"
+        )
+
+        # 7. Identify offenders
+        bad_indices = np.where((jac_row_norms > 1e6) | (jac_row_norms < 1e-8))[0]
+        if len(bad_indices) > 0:
+            print(f"found {len(bad_indices)} potentially ill-scaled constraints.")
+            print(f"Examples: {bad_indices[:3]}")
