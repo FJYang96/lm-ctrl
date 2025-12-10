@@ -13,7 +13,8 @@ The LLM generates both the MPC configuration and constraints together,
 creating a cohesive optimization setup for each unique behavior.
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -107,7 +108,9 @@ class LLMTaskMPC:
 
     def add_constraint(self, constraint_func: Callable[..., Any]) -> None:
         """Add a constraint function to this task."""
-        self.constraint_functions.append(constraint_func)
+        # Wrap the constraint function to be contact-aware for jumping tasks
+        wrapped_constraint = self._wrap_constraint_for_contact_phases(constraint_func)
+        self.constraint_functions.append(wrapped_constraint)
 
     def set_duration(self, duration: float) -> None:
         """Set the MPC duration."""
@@ -243,6 +246,16 @@ class LLMTaskMPC:
             original_constraints + self.constraint_functions
         )
 
+        # Ensure path constraint parameters exist (critical for optimization feasibility)
+        if not hasattr(task_config.mpc_config, "path_constraint_params"):
+            task_config.mpc_config.path_constraint_params = {
+                "COMPLEMENTARITY_EPS": 1e-3,
+                "SWING_GRF_EPS": 0.0,
+                "STANCE_HEIGHT_EPS": 0.04,
+                "NO_SLIP_EPS": 0.01,
+                "BODY_CLEARANCE_MIN": 0.02,
+            }
+
         return task_config
 
     def solve_trajectory(
@@ -346,3 +359,60 @@ class LLMTaskMPC:
             return "single_foot"
         else:
             return "unknown"
+
+    def _wrap_constraint_for_contact_phases(
+        self, constraint_func: Callable[..., Any]
+    ) -> Callable[..., Any]:
+        """
+        Wrap LLM-generated constraints to be contact-aware.
+
+        This prevents constraints from being applied during incompatible contact phases.
+        For example, height constraints should only apply during flight phases.
+        """
+
+        def contact_aware_constraint(
+            x_k: Any, u_k: Any, kindyn_model: Any, config: Any, contact_k: Any
+        ) -> tuple[Any, Any, Any]:
+            import casadi as cs
+
+            # Get the original constraint
+            original_expr, original_lower, original_upper = constraint_func(
+                x_k, u_k, kindyn_model, config, contact_k
+            )
+
+            # Check if this is a stance phase (all feet in contact)
+            is_stance = cs.sum1(contact_k) >= 3.5  # Almost all feet in contact
+
+            # For jumping tasks, relax height constraints during stance phases
+            try:
+                expr_size = original_expr.size()
+                expr_length = (
+                    expr_size[0]
+                    if len(expr_size) > 1
+                    else expr_size[0]
+                    if hasattr(expr_size, "__getitem__")
+                    else 1
+                )
+
+                if expr_length >= 3:
+                    # Assume third constraint is height (com_z)
+                    # During stance phase, allow robot to be on ground (relax height constraint)
+                    relaxed_height_lower = cs.if_else(is_stance, 0.0, original_lower[2])
+
+                    # Reconstruct lower bounds with relaxed height
+                    try:
+                        relaxed_lower = cs.vertcat(
+                            original_lower[0], original_lower[1], relaxed_height_lower
+                        )
+                        return original_expr, relaxed_lower, original_upper
+                    except Exception:
+                        # If reconstruction fails, return original
+                        pass
+            except Exception:
+                # If size checking fails, return original constraint
+                pass
+
+            # For non-height constraints or other cases, return original
+            return original_expr, original_lower, original_upper
+
+        return contact_aware_constraint
