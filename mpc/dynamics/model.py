@@ -255,7 +255,7 @@ class KinoDynamic_Model:
         self.mass = cs.SX.sym("mass", 1, 1)
         self.gravity_constant = config.experiment.gravity_constant
 
-    def compute_b_R_w(self, roll: float, pitch: float, yaw: float) -> np.ndarray:
+    def compute_b_R_w(self, roll: float, pitch: float, yaw: float) -> cs.SX:
         # Z Y X rotations!
         Rx = cs.SX.eye(3)
         Rx[0, 0] = 1
@@ -504,8 +504,18 @@ class KinoDynamic_Model:
         f_impl = self.states_dot - f_expl
 
         if not ACADOS_AVAILABLE:
-            print("Warning: AcadosModel not available. Returning None.")
-            return None
+            # Create a minimal model object with the essential properties for CasADi Opti
+            class MinimalModel:
+                def __init__(
+                    self, states: cs.MX, inputs: cs.MX, param: cs.MX, f_expl: cs.MX
+                ) -> None:
+                    self.x = states
+                    self.u = inputs
+                    self.p = param
+                    self.f_expl_expr = f_expl
+                    self.name = "kinodynamic_model"
+
+            return MinimalModel(self.states, self.inputs, self.param, f_expl)
 
         acados_model = AcadosModel()
         acados_model.f_impl_expr = f_impl

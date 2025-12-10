@@ -170,7 +170,9 @@ class QuadrupedMPCOpti:
 
     def _setup_path_constraints(self) -> None:
         """Setup path constraints including friction cone, foot height, etc."""
-        for k in range(self.horizon):
+        # Begin imposing path constraints only after the first timestep
+        # This prevents conflicts with the initial state constraints
+        for k in range(1, self.horizon):  # Start from k=1 instead of k=0
             contact_k = self.P_contact[:, k]
             u_k = self.U[:, k]
             x_k = self.X[:, k]
