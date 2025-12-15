@@ -16,7 +16,11 @@ class QuadrupedMPCOpti:
     """
 
     def __init__(
-        self, model: KinoDynamic_Model, config: Any, build: bool = True
+        self,
+        model: KinoDynamic_Model,
+        config: Any,
+        build: bool = True,
+        additional_constraints: Any = None,
     ) -> None:
         """
         Initializes the hopping MPC solver using CasADi Opti.
@@ -25,10 +29,12 @@ class QuadrupedMPCOpti:
             model: KinoDynamic_Model instance
             config: Configuration object with MPC parameters
             build: Whether to build the solver (kept for compatibility)
+            additional_constraints: Optional user-defined constraint function
         """
         self.horizon = int(config.mpc_config.duration / config.mpc_config.mpc_dt)
         self.config = config
         self.kindyn_model = model
+        self.additional_constraints = additional_constraints
 
         # Get dimensions from the kinodynamic model
         acados_model = self.kindyn_model.export_robot_model()
@@ -175,12 +181,32 @@ class QuadrupedMPCOpti:
             u_k = self.U[:, k]
             x_k = self.X[:, k]
 
+            # Standard constraints from config
             for constraint in self.config.mpc_config.path_constraints:
                 constraint_expr, constraint_l, constraint_u = constraint(
                     x_k, u_k, self.kindyn_model, self.config, contact_k
                 )
                 self.opti.subject_to(constraint_expr >= constraint_l)
                 self.opti.subject_to(constraint_expr <= constraint_u)
+
+            # Additional dynamically generated constraints (from LLM)
+            if self.additional_constraints is not None:
+                # Call the constraint function
+                # Signature: (x_k, u_k, kinodynamic_model, config, contact_k, k, horizon)
+                result = self.additional_constraints(
+                    x_k,
+                    u_k,
+                    self.kindyn_model,
+                    self.config,
+                    contact_k,
+                    k,
+                    self.horizon,
+                )
+
+                if result is not None:
+                    constraint_expr, constraint_l, constraint_u = result
+                    self.opti.subject_to(constraint_expr >= constraint_l)
+                    self.opti.subject_to(constraint_expr <= constraint_u)
 
     def _setup_solver(self) -> None:
         """Setup the solver options."""
