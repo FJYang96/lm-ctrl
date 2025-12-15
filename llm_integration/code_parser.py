@@ -87,10 +87,11 @@ class SafeCodeParser:
         """Create a restricted global namespace for code execution"""
         safe_globals = {"__builtins__": {}}
 
-        # Add allowed built-ins
+        # Add allowed built-ins - handle both dict and module forms of __builtins__
+        import builtins
         for name in self.ALLOWED_BUILTINS:
-            if hasattr(__builtins__, name):
-                safe_globals["__builtins__"][name] = getattr(__builtins__, name)
+            if hasattr(builtins, name):
+                safe_globals["__builtins__"][name] = getattr(builtins, name)
 
         # Add allowed imports
         try:
@@ -254,11 +255,11 @@ class SafeCodeParser:
             if not isinstance(expr, (cs.SX, cs.MX, cs.DM)):
                 raise ValueError("Constraint expression must be CasADi symbolic type")
 
-            # Check bounds are numeric or CasADi
+            # Check bounds are numeric, numpy arrays, or CasADi
             for bound in [lower, upper]:
-                if not isinstance(bound, (int, float, cs.SX, cs.MX, cs.DM)):
+                if not isinstance(bound, (int, float, np.ndarray, list, cs.SX, cs.MX, cs.DM)):
                     raise ValueError(
-                        "Constraint bounds must be numeric or CasADi types"
+                        f"Constraint bounds must be numeric, numpy array, or CasADi types. Got {type(bound)}"
                     )
 
             return True

@@ -471,26 +471,32 @@ class ResultsLogger:
     ) -> None:
         """Log results from a single iteration"""
 
+        # Helper to convert numpy types to Python native types
+        def to_native(val):
+            if hasattr(val, 'item'):  # numpy scalar
+                return val.item()
+            return val
+
         iteration_data = {
             "iteration": iteration,
             "command": command,
             "constraints_code": constraints_code,
             "metrics": {
-                "optimization_converged": metrics.optimization_converged,
-                "solver_status": metrics.solver_status,
-                "max_violation": metrics.max_violation,
-                "height_clearance_achieved": metrics.height_clearance_achieved,
-                "rotation_target_achieved": metrics.rotation_target_achieved,
-                "landing_stable": metrics.landing_stable,
-                "overall_success": metrics.overall_success,
-                "solve_time": metrics.solve_time,
-                "initial_height": metrics.initial_height,
-                "max_height": metrics.max_height,
-                "final_height": metrics.final_height,
-                "pitch_change": metrics.pitch_change,
+                "optimization_converged": to_native(metrics.optimization_converged),
+                "solver_status": to_native(metrics.solver_status),
+                "max_violation": to_native(metrics.max_violation),
+                "height_clearance_achieved": to_native(metrics.height_clearance_achieved),
+                "rotation_target_achieved": to_native(metrics.rotation_target_achieved),
+                "landing_stable": to_native(metrics.landing_stable),
+                "overall_success": to_native(metrics.overall_success),
+                "solve_time": to_native(metrics.solve_time),
+                "initial_height": to_native(metrics.initial_height),
+                "max_height": to_native(metrics.max_height),
+                "final_height": to_native(metrics.final_height),
+                "pitch_change": to_native(metrics.pitch_change),
             },
             "feedback": feedback,
-            "constraint_violations": metrics.constraint_violations,
+            "constraint_violations": [to_native(v) for v in metrics.constraint_violations] if metrics.constraint_violations else [],
         }
 
         # Save to JSON file
