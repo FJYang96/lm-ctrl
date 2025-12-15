@@ -255,12 +255,22 @@ class IterativeRefinementEngine:
         """Solve trajectory optimization with generated constraints"""
         try:
             # Import here to avoid circular imports
+            import copy
+
             from mpc.mpc_opti import QuadrupedMPCOpti
+
+            # Create a modified config with reduced max iterations for LLM-generated constraints
+            # This prevents infinite loops on infeasible constraints
+            modified_config = copy.copy(self.config)
+            modified_solver_config = dict(self.config.solver_config)
+            modified_solver_config["ipopt.max_iter"] = 100  # Cap at 100 iterations
+            modified_solver_config["ipopt.print_level"] = 3  # Reduce verbosity
+            modified_config.solver_config = modified_solver_config
 
             # Create MPC instance with additional constraints
             mpc = QuadrupedMPCOpti(
                 model=self.kinodynamic_model,
-                config=self.config,
+                config=modified_config,
                 build=True,
                 additional_constraints=constraint_function,
             )
@@ -273,6 +283,10 @@ class IterativeRefinementEngine:
             )
 
             solve_time = time.time() - start_time
+
+            # Check if solver hit iteration limit (status 1 means max iterations reached)
+            if status == 1:
+                print("⚠️ Solver hit 100 iteration cap - constraints likely infeasible")
 
             # Combine into input trajectory format
             input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
