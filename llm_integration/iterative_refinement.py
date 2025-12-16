@@ -255,45 +255,54 @@ class IterativeRefinementEngine:
         """Solve trajectory optimization with generated constraints"""
         try:
             # Import here to avoid circular imports
-            import copy
-
             from mpc.mpc_opti import QuadrupedMPCOpti
 
-            # Create a modified config with reduced max iterations for LLM-generated constraints
+            # Save original solver config values
+            original_max_iter = self.config.solver_config.get("ipopt.max_iter", 1000)
+            original_print_level = self.config.solver_config.get("ipopt.print_level", 5)
+
+            # Temporarily modify solver config for LLM-generated constraints
             # This prevents infinite loops on infeasible constraints
-            modified_config = copy.copy(self.config)
-            modified_solver_config = dict(self.config.solver_config)
-            modified_solver_config["ipopt.max_iter"] = 100  # Cap at 100 iterations
-            modified_solver_config["ipopt.print_level"] = 3  # Reduce verbosity
-            modified_config.solver_config = modified_solver_config
+            self.config.solver_config["ipopt.max_iter"] = 100  # Cap at 100 iterations
+            self.config.solver_config["ipopt.print_level"] = 3  # Reduce verbosity
 
-            # Create MPC instance with additional constraints
-            mpc = QuadrupedMPCOpti(
-                model=self.kinodynamic_model,
-                config=modified_config,
-                build=True,
-                additional_constraints=constraint_function,
-            )
+            try:
+                # Create MPC instance with additional constraints
+                mpc = QuadrupedMPCOpti(
+                    model=self.kinodynamic_model,
+                    config=self.config,
+                    build=True,
+                    additional_constraints=constraint_function,
+                )
 
-            start_time = time.time()
+                start_time = time.time()
 
-            # Solve trajectory
-            state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
-                initial_state, reference_trajectory, contact_sequence
-            )
+                # Solve trajectory
+                state_traj, grf_traj, joint_vel_traj, status = mpc.solve_trajectory(
+                    initial_state, reference_trajectory, contact_sequence
+                )
 
-            solve_time = time.time() - start_time
+                solve_time = time.time() - start_time
 
-            # Check if solver hit iteration limit (status 1 means max iterations reached)
-            if status == 1:
-                print("⚠️ Solver hit 100 iteration cap - constraints likely infeasible")
+                # Check if solver hit iteration limit (status 1 means max iterations reached)
+                if status == 1:
+                    print(
+                        "⚠️ Solver hit 100 iteration cap - constraints likely infeasible"
+                    )
 
-            # Combine into input trajectory format
-            input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
+                # Combine into input trajectory format
+                input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
 
-            print(f"⚡ Optimization completed in {solve_time:.2f}s, status: {status}")
+                print(
+                    f"⚡ Optimization completed in {solve_time:.2f}s, status: {status}"
+                )
 
-            return state_traj, input_traj, grf_traj, status, solve_time
+                return state_traj, input_traj, grf_traj, status, solve_time
+
+            finally:
+                # Restore original solver config
+                self.config.solver_config["ipopt.max_iter"] = original_max_iter
+                self.config.solver_config["ipopt.print_level"] = original_print_level
 
         except Exception as e:
             print(f"❌ Optimization error: {e}")
