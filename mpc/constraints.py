@@ -192,3 +192,137 @@ def input_limits_constraints(
         )
     )
     return u_k, lb, ub
+
+
+def body_clearance_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """
+    Add body clearance constraints to ensure all parts of the robot body remain above ground.
+
+    This constraint considers the COM height and the robot's body dimensions (roll, pitch)
+    to ensure that even when the body is tilted, the lowest point of the body remains
+    above a minimum clearance height.
+
+    We need to account for:
+    - COM position z-coordinate
+    - Body roll and pitch that could bring edges of the body closer to ground
+    - Half of the body height dimension to get the lowest point
+    """
+    com_position_z = x_k[2]  # z-coordinate of COM
+    roll = x_k[6]
+    pitch = x_k[7]
+
+    # Safety margin accounts for body dimensions and tilt
+    # For small angles: additional_clearance ≈ body_length/2 * |pitch| + body_width/2 * |roll|
+    body_half_length = 0.15
+    body_half_width = 0.10
+    body_half_height = 0.05
+
+    tilt_clearance = body_half_length * cs.fabs(pitch) + body_half_width * cs.fabs(roll)
+    body_clearance_margin = body_half_height + tilt_clearance
+    effective_clearance = com_position_z - body_clearance_margin
+
+    # Minimum clearance from config (e.g., 0.02m above ground)
+    min_clearance = config.mpc_config.path_constraint_params.get(
+        "BODY_CLEARANCE_MIN", 0.01
+    )
+
+    return effective_clearance, min_clearance, INF
+
+
+def complementarity_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """
+    Implement relaxed complementarity constraints: f_normal * v_normal <= epsilon
+
+    This constraint ensures that contact forces and velocities don't both be
+    significantly non-zero, which would violate physical contact mechanics.
+
+    For each foot:
+    - f_z: normal force (from u_k[12:24])
+    - v_z: normal velocity (from foot Jacobian * qvel)
+    - Constraint: f_z * v_z <= epsilon
+
+    The constraint is only active during stance phase (contact_k = 1).
+    """
+    # Extract state components
+    com_position = x_k[0:3]
+    com_velocity = x_k[3:6]
+    roll = x_k[6]
+    pitch = x_k[7]
+    yaw = x_k[8]
+    com_angular_velocity = x_k[9:12]
+    joint_positions = x_k[12:24]
+
+    # Extract joint velocities and forces
+    qvel_joints_FL = u_k[0:3]
+    qvel_joints_FR = u_k[3:6]
+    qvel_joints_RL = u_k[6:9]
+    qvel_joints_RR = u_k[9:12]
+    forces = u_k[12:24]  # [FL_xyz, FR_xyz, RL_xyz, RR_xyz]
+
+    # Create homogeneous transformation matrix
+    from liecasadi import SO3
+
+    w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
+    H = cs.MX.eye(4)
+    H[0:3, 0:3] = w_R_b
+    H[0:3, 3] = com_position
+
+    # Full velocity vector for Jacobian multiplication
+    qvel = cs.vertcat(
+        com_velocity,
+        com_angular_velocity,
+        qvel_joints_FL,
+        qvel_joints_FR,
+        qvel_joints_RL,
+        qvel_joints_RR,
+    )
+
+    # Compute foot velocities using Jacobians
+    foot_vel_FL = kindyn_model.jacobian_FL_fun(H, joint_positions)[0:3, :] @ qvel
+    foot_vel_FR = kindyn_model.jacobian_FR_fun(H, joint_positions)[0:3, :] @ qvel
+    foot_vel_RL = kindyn_model.jacobian_RL_fun(H, joint_positions)[0:3, :] @ qvel
+    foot_vel_RR = kindyn_model.jacobian_RR_fun(H, joint_positions)[0:3, :] @ qvel
+
+    # Extract normal (z) components
+    f_z = cs.vertcat(forces[2], forces[5], forces[8], forces[11])  # Normal forces
+    v_z = cs.vertcat(
+        foot_vel_FL[2], foot_vel_FR[2], foot_vel_RL[2], foot_vel_RR[2]
+    )  # Normal velocities
+
+    # Complementarity products: f_z * v_z
+    # We want these to be small (close to zero) during contact
+    comp_products = f_z * v_z
+
+    # The constraint is: comp_products <= epsilon (only during stance)
+    # During swing, we don't enforce this constraint
+    epsilon = config.mpc_config.path_constraint_params.get("COMPLEMENTARITY_EPS", 1e-3)
+
+    # Apply constraint only during stance
+    # During swing (contact_k = 0), we relax the constraint to a large value
+    expr_list = []
+    min_list = []
+    max_list = []
+
+    for foot_idx in range(4):
+        comp_prod = comp_products[foot_idx]
+        contact_flag = contact_k[foot_idx]
+
+        # Constraint: f_z * v_z <= epsilon during stance
+        # During swing, we allow up to a large value (effectively no constraint)
+        expr_list.append(comp_prod)
+        min_list.append(-1e6)  # No lower bound
+        max_list.append(epsilon * contact_flag + 1e6 * (1 - contact_flag))
+
+    return cs.vertcat(*expr_list), cs.vertcat(*min_list), cs.vertcat(*max_list)
