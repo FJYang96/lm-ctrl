@@ -17,7 +17,7 @@ from .feedback import (
     TrajectoryMetrics,
 )
 from .llm_client import LLMClient
-from .prompts import SYSTEM_PROMPT
+from .prompts import build_system_prompt
 
 
 class IterativeRefinementEngine:
@@ -89,8 +89,11 @@ class IterativeRefinementEngine:
         print(f"🚀 Starting iterative refinement for command: '{command}'")
         print(f"📊 Max iterations: {self.max_iterations}")
 
+        # Build dynamic system prompt with robot/trajectory info
+        system_prompt = build_system_prompt(self.config, contact_sequence)
+
         # Initialize context with system prompt and command
-        context = f"{SYSTEM_PROMPT}\n\n## User Command\n\n{command}\n\nGenerate constraint function for this command:"
+        context = f"{system_prompt}\n\n## User Command\n\n{command}\n\nGenerate constraint function for this command:"
 
         # Track best result across iterations
         best_constraint_function = None
