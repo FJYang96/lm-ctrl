@@ -60,7 +60,7 @@ class LLMClient:
         elif os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
             provider = "gemini"
             api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+            model = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
         elif os.getenv("LLM_BASE_URL"):  # Local/custom endpoint
             provider = "local"
