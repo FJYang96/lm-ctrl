@@ -178,9 +178,22 @@ class QuadrupedMPCOpti:
             x_k = self.X[:, k]
 
             for constraint in self.config.mpc_config.path_constraints:
-                constraint_expr, constraint_l, constraint_u = constraint(
-                    x_k, u_k, self.kindyn_model, self.config, contact_k
-                )
+                # Try new signature with k and horizon first, fall back to old signature
+                try:
+                    constraint_expr, constraint_l, constraint_u = constraint(
+                        x_k,
+                        u_k,
+                        self.kindyn_model,
+                        self.config,
+                        contact_k,
+                        k,
+                        self.horizon,
+                    )
+                except TypeError:
+                    # Fall back to old 5-argument signature for backward compatibility
+                    constraint_expr, constraint_l, constraint_u = constraint(
+                        x_k, u_k, self.kindyn_model, self.config, contact_k
+                    )
                 self.opti.subject_to(constraint_expr >= constraint_l)
                 self.opti.subject_to(constraint_expr <= constraint_u)
 

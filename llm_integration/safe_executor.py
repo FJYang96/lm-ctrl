@@ -173,12 +173,13 @@ class SafeConstraintExecutor:
                 "No function definition found. Must define a constraint function.",
             )
 
-        # Validate function signatures
+        # Validate function signatures (prefer 7 arguments, accept 5 for backward compatibility)
         for func_def in function_defs:
-            if len(func_def.args.args) != 5:
+            num_args = len(func_def.args.args)
+            if num_args not in (5, 7):
                 return (
                     False,
-                    f"Function '{func_def.name}' must have exactly 5 arguments: (x_k, u_k, kindyn_model, config, contact_k)",
+                    f"Function '{func_def.name}' must have 7 arguments: (x_k, u_k, kindyn_model, config, contact_k, k, horizon). Got {num_args} arguments.",
                 )
 
         return True, ""
@@ -267,14 +268,14 @@ class SafeConstraintExecutor:
             if not callable(constraint_func):
                 return False, None, f"'{func_name}' is not callable", func_name
 
-            # Validate function signature
+            # Validate function signature (accept both 5 and 7 parameters)
             try:
                 sig = inspect.signature(constraint_func)
-                if len(sig.parameters) != 5:
+                if len(sig.parameters) not in (5, 7):
                     return (
                         False,
                         None,
-                        f"Function '{func_name}' must have exactly 5 parameters, got {len(sig.parameters)}",
+                        f"Function '{func_name}' must have 5 or 7 parameters, got {len(sig.parameters)}",
                         func_name,
                     )
             except Exception as e:
@@ -290,6 +291,8 @@ class SafeConstraintExecutor:
                 test_x = cs.MX.sym("test_x", 24)
                 test_u = cs.MX.sym("test_u", 24)
                 test_contact = cs.MX.sym("test_contact", 4)
+                test_k = 10  # Sample timestep
+                test_horizon = 75  # Sample horizon
 
                 # Mock objects for testing
                 class MockKindyn:
@@ -304,9 +307,21 @@ class SafeConstraintExecutor:
                         self.experiment = type("obj", (object,), {"mu_ground": 0.8})()
                         self.robot_data = type("obj", (object,), {"mass": 12.0})()
 
-                result = constraint_func(
-                    test_x, test_u, MockKindyn(), MockConfig(), test_contact
-                )
+                # Try new 7-argument signature first, fall back to old 5-argument
+                try:
+                    result = constraint_func(
+                        test_x,
+                        test_u,
+                        MockKindyn(),
+                        MockConfig(),
+                        test_contact,
+                        test_k,
+                        test_horizon,
+                    )
+                except TypeError:
+                    result = constraint_func(
+                        test_x, test_u, MockKindyn(), MockConfig(), test_contact
+                    )
 
                 # Validate return format
                 if not isinstance(result, tuple) or len(result) != 3:
@@ -647,11 +662,24 @@ class SafeConstraintExecutor:
             test_x = cs.MX.sym("test_x", 24)  # State vector
             test_u = cs.MX.sym("test_u", 24)  # Input vector
             test_contact = cs.MX.sym("test_contact", 4)  # Contact sequence
+            test_k = 10  # Sample timestep
+            test_horizon = 75  # Sample horizon
 
-            # Try to call the function with MPC interface
-            result = constraint_func(
-                test_x, test_u, test_kindyn_model, test_config, test_contact
-            )
+            # Try to call the function with MPC interface (try 7-arg first, then 5-arg)
+            try:
+                result = constraint_func(
+                    test_x,
+                    test_u,
+                    test_kindyn_model,
+                    test_config,
+                    test_contact,
+                    test_k,
+                    test_horizon,
+                )
+            except TypeError:
+                result = constraint_func(
+                    test_x, test_u, test_kindyn_model, test_config, test_contact
+                )
 
             # Validate return format (should be tuple of 3 elements)
             if not isinstance(result, tuple) or len(result) != 3:

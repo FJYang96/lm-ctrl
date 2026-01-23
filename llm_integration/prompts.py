@@ -10,122 +10,96 @@ def get_system_prompt() -> str:
     Returns:
         System prompt string
     """
-    return """You are a robotics expert generating COMPLETE MPC configurations for quadruped robot behaviors.
+    return """You are a robotics expert generating MPC configurations for quadruped robot trajectory optimization.
 
-CRITICAL REQUIREMENTS - FOLLOW EXACTLY:
+OUTPUT FORMAT: Return ONLY Python code. No markdown, no backticks, no explanations.
 
-1. OUTPUT FORMAT: Return ONLY Python code. NO markdown, NO backticks, NO explanations, NO comments.
+== ROBOT PHYSICS ==
 
-2. GENERATE TWO PARTS:
-   A) MPC CONFIGURATION CODE - Sets up contact sequences and timing for the task
-   B) CONSTRAINT FUNCTION - Enforces task-specific behavior requirements
+State x_k (24-dim):
+- x_k[0:3]: COM position [x, y, z] in meters
+- x_k[3:6]: COM velocity [vx, vy, vz] in m/s
+- x_k[6:9]: orientation [roll, pitch, yaw] in radians
+- x_k[9:12]: angular velocity [wx, wy, wz] in rad/s
+- x_k[12:24]: joint angles (12 joints)
 
-3. MPC CONFIGURATION: Use the 'mpc' object to configure the task:
-   - mpc.set_task_name("task_name")
-   - mpc.set_duration(total_seconds)
-   - mpc.set_time_step(0.02)  # Usually keep at 0.02
-   - mpc.set_contact_sequence(contact_array)
-   - mpc.add_constraint(constraint_function)
+Key physical facts:
+- Robot starts at COM height ~0.21m
+- Mass ~12kg, can jump to ~0.5-1.5m height
+- Rotation: angle_change ≈ angular_velocity × time
+- Projectile motion: peak_height ≈ initial_height + v²/(2g)
 
-4. CONTACT SEQUENCES: Choose appropriate foot contact patterns:
-   - [1,1,1,1] = all feet in contact (for turns, squats, walking)
-   - [0,0,0,0] = flight phase (for jumps, leaps, flips)
-   - Mixed patterns for complex motions
+== MPC CONFIGURATION ==
 
-5. CONSTRAINT SIGNATURE: def name(x_k, u_k, kindyn_model, config, contact_k):
-   MUST return exactly 3 CasADi MX objects: constraint_expr, lower_bounds, upper_bounds
+Required calls:
+  mpc.set_task_name("name")
+  mpc.set_duration(seconds)  # typically 1.0-2.0s
+  mpc.set_time_step(0.02)
+  mpc.set_contact_sequence(contact_array)
+  mpc.add_constraint(constraint_function)
 
-ROBOT STATE SPACE (24-DOF):
-x_k[0:3]   - COM position [x, y, z]
-x_k[3:6]   - COM velocity [vx, vy, vz]
-x_k[6]     - roll angle
-x_k[7]     - pitch angle
-x_k[8]     - yaw angle
-x_k[9:12]  - angular velocity [wx, wy, wz]
-x_k[12:24] - joint angles (12 joints: 4 legs × 3 joints)
+Contact patterns:
+- [1,1,1,1] = all feet grounded (walking, turning, squatting)
+- [0,0,0,0] = flight phase (jumping, flipping)
+- Use mpc._create_phase_sequence([(name, duration, pattern), ...])
 
-ROBOT INPUT SPACE (24-DOF):
-u_k[0:12]  - joint velocities (12 joints)
-u_k[12:24] - ground reaction forces (4 feet × 3 forces: fx,fy,fz per foot)
+== CONSTRAINT DESIGN PRINCIPLES ==
 
-AVAILABLE FUNCTIONS:
+Signature: def name(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
+    # k = current timestep, horizon = total timesteps
+    # progress = k / horizon  (0.0 at start, 1.0 at end)
+    return (constraint_expr, lower_bound, upper_bound)  # CasADi MX objects
+
+PRINCIPLE 1: Constraints define FEASIBLE REGIONS, not exact trajectories
+- The optimizer finds the EASIEST path within your constraints
+- If starting state is already valid, optimizer may do nothing
+- To FORCE motion: make constraints that EXCLUDE the starting state
+
+PRINCIPLE 2: Start conservative, fail fast
+- Loose constraints → optimization succeeds → check if motion happened
+- Tight constraints → optimization fails → you learn nothing
+- Better to succeed with weak motion than fail completely
+
+PRINCIPLE 3: One-sided bounds are more robust
+- (lower, inf) or (-inf, upper) usually works
+- (lower, upper) with tight band often fails
+- Let the optimizer find the optimal value within your region
+
+PRINCIPLE 4: Time-varying constraints guide motion
+- Use progress = k/horizon for gradual changes
+- Example: upper_bound = start_value - progress * change
+- Smooth ramps are more feasible than sudden jumps
+
+PRINCIPLE 5: Understand what you're actually constraining
+- height >= 0.5 means "never go below 0.5m" at ANY timestep
+- This includes takeoff! Robot starts at 0.21m, can't instantly be at 0.5m
+- Think about the ENTIRE trajectory, not just the goal state
+
+== AVAILABLE FUNCTIONS ==
 vertcat, horzcat, sin, cos, sqrt, fabs, fmax, fmin, sum1, MX, inf, pi, np
 
-CONTACT SEQUENCE HELPERS:
-- np.ones((4, horizon)) - all feet in contact
-- np.zeros((4, horizon)) - all feet in flight
-- mpc._create_phase_sequence([(phase_name, duration, [FL,FR,RL,RR]), ...])
+== EXAMPLE STRUCTURE ==
 
-TASK-SPECIFIC MPC EXAMPLES:
-
-BACKFLIP (needs flight phase + rotation):
-mpc.set_task_name("backflip")
-mpc.set_duration(1.2)
-phases = [("stance", 0.3, [1,1,1,1]), ("flight", 0.6, [0,0,0,0]), ("landing", 0.3, [1,1,1,1])]
-contact_seq = mpc._create_phase_sequence(phases)
-mpc.set_contact_sequence(contact_seq)
-
-def backflip_constraints(x_k, u_k, kindyn_model, config, contact_k):
-    pitch = x_k[7]
-    height = x_k[2]
-    constraints = vertcat(pitch, height)
-    lower = vertcat(2*pi - 0.2, 0.4)
-    upper = vertcat(2*pi + 0.2, inf)
-    return constraints, lower, upper
-mpc.add_constraint(backflip_constraints)
-
-TURN AROUND (stay grounded + rotate):
-mpc.set_task_name("turn_around")
-mpc.set_duration(2.0)
-contact_seq = np.ones((4, int(2.0/0.02)))
-mpc.set_contact_sequence(contact_seq)
-
-def turn_constraints(x_k, u_k, kindyn_model, config, contact_k):
-    yaw = x_k[8]
-    height = x_k[2]
-    constraints = vertcat(yaw, height)
-    lower = vertcat(pi - 0.1, 0.15)
-    upper = vertcat(pi + 0.1, 0.35)
-    return constraints, lower, upper
-mpc.add_constraint(turn_constraints)
-
-JUMP LEFT (takeoff + lateral displacement):
-mpc.set_task_name("jump_left")
-mpc.set_duration(1.0)
-phases = [("prep", 0.2, [1,1,1,1]), ("flight", 0.6, [0,0,0,0]), ("land", 0.2, [1,1,1,1])]
-contact_seq = mpc._create_phase_sequence(phases)
-mpc.set_contact_sequence(contact_seq)
-
-def jump_left_constraints(x_k, u_k, kindyn_model, config, contact_k):
-    com_y = x_k[1]
-    height = x_k[2]
-    constraints = vertcat(com_y, height)
-    lower = vertcat(0.3, 0.3)
-    upper = vertcat(inf, inf)
-    return constraints, lower, upper
-mpc.add_constraint(jump_left_constraints)
-
-SQUAT DOWN (stay grounded + lower):
-mpc.set_task_name("squat")
+mpc.set_task_name("task")
 mpc.set_duration(1.5)
-contact_seq = np.ones((4, int(1.5/0.02)))
+mpc.set_time_step(0.02)
+phases = [("phase1", 0.3, [1,1,1,1]), ("phase2", 0.9, [0,0,0,0]), ("phase3", 0.3, [1,1,1,1])]
+contact_seq = mpc._create_phase_sequence(phases)
 mpc.set_contact_sequence(contact_seq)
 
-def squat_constraints(x_k, u_k, kindyn_model, config, contact_k):
-    height = x_k[2]
-    return height, 0.1, 0.2
-mpc.add_constraint(squat_constraints)
+def task_constraints(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
+    progress = k / horizon
+    # Extract relevant states
+    # Apply phase-appropriate constraints
+    # Return (expr, lower, upper)
+    return constraints, lower, upper
 
-CRITICAL RULES:
-- ALWAYS configure MPC first, then define constraints
-- ALWAYS use appropriate contact sequences for the task type
-- NEVER use import statements
-- ALWAYS return 3 CasADi MX objects from constraint functions
-- CHOOSE realistic durations (0.5-3.0 seconds typical)
-- KEEP feet planted (all 1s) for turning/ground-based motions
-- USE flight phases (0s) only for jumps/flips/leaps
+mpc.add_constraint(task_constraints)
 
-YOUR TASK: Generate complete MPC configuration + constraints for the given robot behavior."""
+== TASK ==
+Generate MPC configuration and constraints for the requested behavior.
+Think about: What motion is needed? What constraints will FORCE that motion?
+Start with simple, loose constraints. The feedback loop will help you refine."""
 
 
 def get_user_prompt(command: str) -> str:
@@ -138,28 +112,15 @@ def get_user_prompt(command: str) -> str:
     Returns:
         Formatted user prompt
     """
-    return f"""TASK: {command}
+    return f"""Generate MPC configuration for: "{command}"
 
-Generate complete MPC configuration and constraints for: "{command}"
+Think step by step:
+1. What type of motion is this? (ground-based, aerial, rotation, translation)
+2. What contact sequence is appropriate?
+3. What physical quantities need to be constrained to achieve this?
+4. What are reasonable bounds that FORCE the desired motion?
 
-REQUIREMENTS:
-- Return ONLY Python code (no markdown, no explanations)
-- Configure MPC object with appropriate contact sequence and timing
-- Define constraint function with correct signature
-- Choose contact patterns suitable for the task type
-
-STRUCTURE YOUR CODE:
-1. Set task name, duration, and time step
-2. Create appropriate contact sequence for the behavior
-3. Define constraint function that enforces the behavior
-4. Add constraint to MPC
-
-BEHAVIOR ANALYSIS:
-- Ground-based (turn, walk, squat): keep feet planted [1,1,1,1]
-- Aerial (jump, flip, leap): include flight phase [0,0,0,0]
-- Mixed motions: use phase sequences
-
-Generate complete MPC setup for "{command}":"""
+Return ONLY Python code."""
 
 
 def create_feedback_context(
@@ -182,49 +143,70 @@ def create_feedback_context(
     Returns:
         Formatted feedback context string
     """
-    # Build simplified feedback context
-    context = f"""ITERATION {iteration} FEEDBACK - IMPROVE CONSTRAINTS
+    context = f"""ITERATION {iteration} FEEDBACK
 
 PREVIOUS CODE:
 {previous_constraints}
 
-RESULTS ANALYSIS:
-Optimization: {"SUCCESS" if optimization_status.get("converged", False) else "FAILED"}
-Simulation: {"SUCCESS" if simulation_results.get("success", False) else "FAILED"}"""
+"""
 
-    # Add specific trajectory metrics
-    if trajectory_data:
-        max_height = trajectory_data.get("max_com_height", 0)
-        total_rotation = trajectory_data.get("total_pitch_rotation", 0)
-        flight_duration = trajectory_data.get("flight_duration", 0)
+    # Optimization status
+    if optimization_status.get("converged", False):
+        context += "OPTIMIZATION: SUCCESS\n"
+    else:
+        context += """OPTIMIZATION: FAILED - No feasible trajectory found!
 
+This means your constraints are MUTUALLY EXCLUSIVE or PHYSICALLY IMPOSSIBLE.
+Common causes:
+- Requiring height > X when robot starts below X (can't teleport)
+- Combining too many tight constraints simultaneously
+- Progressive bounds that increase faster than physics allows
+
+To fix: SIMPLIFY and LOOSEN constraints. Remove the most restrictive one.
+Start with just ONE key constraint, verify it works, then add more gradually.
+
+"""
+
+    # Simulation status
+    if simulation_results.get("success", False):
+        context += f"SIMULATION: SUCCESS (tracking_error: {simulation_results.get('tracking_error', 0):.3f})\n"
+    else:
+        context += "SIMULATION: FAILED\n"
+
+    # Trajectory metrics
+    if trajectory_data and optimization_status.get("converged", False):
         context += f"""
-Max Height: {max_height:.3f}m
-Total Rotation: {total_rotation:.3f}rad ({total_rotation * 57.3:.1f}°)
-Flight Duration: {flight_duration:.3f}s"""
+ACHIEVED TRAJECTORY:
+- Height: {trajectory_data.get('initial_com_height', 0):.3f}m → max {trajectory_data.get('max_com_height', 0):.3f}m → final {trajectory_data.get('final_com_height', 0):.3f}m
+- Height change: {trajectory_data.get('height_gain', 0):.3f}m
+- Pitch rotation: {trajectory_data.get('total_pitch_rotation', 0):.2f} rad ({trajectory_data.get('total_pitch_rotation', 0) * 57.3:.0f}°)
+- Max pitch: {trajectory_data.get('max_pitch', 0):.2f} rad ({trajectory_data.get('max_pitch', 0) * 57.3:.0f}°)
+- Flight duration: {trajectory_data.get('flight_duration', 0):.2f}s
+"""
 
-    # Add specific improvement suggestions
-    issues = []
-    if not optimization_status.get("converged", False):
-        issues.append("Optimization failed - constraints too strict or conflicting")
+        # Analyze what might be missing
+        height_gain = trajectory_data.get("height_gain", 0)
+        rotation = abs(trajectory_data.get("total_pitch_rotation", 0))
 
-    if simulation_results.get("tracking_error", float("inf")) > 0.1:
-        issues.append("High tracking error - constraints may be unrealistic")
+        suggestions = []
 
-    if not simulation_results.get("realistic", True):
-        issues.append("Simulation unrealistic - constraints cause physical violations")
+        if height_gain < 0.05 and height_gain > -0.05:
+            suggestions.append(
+                "Height barely changed. To force vertical motion, constrain height to exclude starting value (0.21m)."
+            )
 
-    if issues:
-        context += "\n\nPROBLEMS:\n" + "\n".join(f"- {issue}" for issue in issues)
+        if rotation < 0.5:  # Less than ~30 degrees
+            suggestions.append(
+                "Minimal rotation occurred. To force rotation, constrain angular velocity (wy for pitch, wz for yaw) to be non-zero."
+            )
+
+        if suggestions:
+            context += "\nANALYSIS:\n" + "\n".join(f"- {s}" for s in suggestions)
 
     context += """
 
-TASK: Generate improved constraint function.
-- Return ONLY Python code (no explanations)
-- Fix identified issues
-- Keep same function signature
-- Ensure bounds match constraint dimensions
-- Use CasADi MX objects only"""
+TASK: Generate improved constraints based on this feedback.
+Return ONLY Python code."""
 
     return context
 
@@ -244,39 +226,26 @@ def create_repair_prompt(
     Returns:
         Repair prompt string
     """
-    # Truncate code if too long
     code_snippet = failed_code
     if len(failed_code) > 800:
         code_snippet = (
             failed_code[:400] + "\n... [truncated] ...\n" + failed_code[-400:]
         )
 
-    return f"""MPC CONFIGURATION REPAIR ATTEMPT {attempt_number}/10
+    return f"""REPAIR ATTEMPT {attempt_number}/10
 
 TASK: {command}
 
-ERROR MESSAGE:
-{error_message}
+ERROR: {error_message}
 
 FAILED CODE:
 {code_snippet}
 
-FIX THE ERROR AND REGENERATE COMPLETE MPC CONFIGURATION
+Common fixes:
+- Constraint function must have 7 parameters: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)
+- Must return exactly 3 values: (constraint_expr, lower_bound, upper_bound)
+- All return values must be CasADi MX objects (use vertcat for multiple constraints)
+- No import statements allowed
+- Must call mpc.set_contact_sequence() and mpc.add_constraint()
 
-COMMON FIXES:
-- Missing mpc configuration: must call mpc.set_contact_sequence() and mpc.add_constraint()
-- Wrong constraint signature: must be (x_k, u_k, kindyn_model, config, contact_k)
-- Wrong return format: constraints must return exactly 3 CasADi MX objects
-- Contact sequence errors: use np.ones() or mpc._create_phase_sequence()
-- Dimension mismatches: bounds must match constraint vector length
-- Import errors: remove all import statements
-- Syntax errors: check parentheses, brackets, indentation
-
-REQUIREMENTS:
-- Return ONLY Python code (no explanations, no markdown)
-- Configure MPC: set_task_name, set_duration, set_contact_sequence
-- Define constraint function with correct signature
-- Add constraint to MPC with mpc.add_constraint()
-- Use appropriate contact sequence for the task type
-
-Generate corrected MPC configuration:"""
+Return ONLY corrected Python code."""

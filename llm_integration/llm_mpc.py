@@ -14,7 +14,7 @@ creating a cohesive optimization setup for each unique behavior.
 """
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -216,34 +216,41 @@ class LLMTaskMPC:
                 model=self.kindyn_model, config=task_config, build=True
             )
 
+            # Restore base config to prevent pollution between iterations
+            self._restore_base_config()
+
             return True, ""
 
         except Exception as e:
+            # Restore base config even on failure
+            self._restore_base_config()
             return False, str(e)
 
     def _create_task_config(self) -> Any:
-        """Create a config object tailored for this specific task."""
+        """Create a config object tailored for this specific task.
 
-        # Instead of deep copying, create a new config with modified attributes
-        # This avoids the pickle issues with complex nested objects
+        Note: We store original values and restore them after MPC build to prevent
+        config pollution between iterations.
+        """
         task_config = self.base_config
 
-        # Store original values to restore later if needed
-        # original_duration = task_config.mpc_config.duration
-        # original_dt = task_config.mpc_config.mpc_dt
-        # original_contact_sequence = getattr(
-        #     task_config.mpc_config, "_contact_sequence", None
-        # )
-        original_constraints = list(task_config.mpc_config.path_constraints)
+        # Store original values to restore after MPC build
+        self._original_duration = task_config.mpc_config.duration
+        self._original_dt = task_config.mpc_config.mpc_dt
+        self._original_contact_sequence = getattr(
+            task_config.mpc_config, "_contact_sequence", None
+        )
+        # Make a copy of the original constraints list to prevent accumulation
+        self._original_constraints = list(task_config.mpc_config.path_constraints)
 
         # Temporarily override with LLM-specified parameters
         task_config.mpc_config.duration = self.mpc_duration
         task_config.mpc_config.mpc_dt = self.mpc_dt
         task_config.mpc_config._contact_sequence = self.contact_sequence
 
-        # Add LLM constraints to path constraints (without modifying original)
+        # Add LLM constraints to path constraints (using copy of original)
         task_config.mpc_config.path_constraints = (
-            original_constraints + self.constraint_functions
+            list(self._original_constraints) + self.constraint_functions
         )
 
         # Ensure path constraint parameters exist (critical for optimization feasibility)
@@ -257,6 +264,19 @@ class LLMTaskMPC:
             }
 
         return task_config
+
+    def _restore_base_config(self) -> None:
+        """Restore base config to original values after MPC build."""
+        if hasattr(self, "_original_constraints"):
+            self.base_config.mpc_config.path_constraints = self._original_constraints
+        if hasattr(self, "_original_duration"):
+            self.base_config.mpc_config.duration = self._original_duration
+        if hasattr(self, "_original_dt"):
+            self.base_config.mpc_config.mpc_dt = self._original_dt
+        if hasattr(self, "_original_contact_sequence"):
+            self.base_config.mpc_config._contact_sequence = (
+                self._original_contact_sequence
+            )
 
     def solve_trajectory(
         self, initial_state: np.ndarray, ref: np.ndarray
@@ -366,53 +386,43 @@ class LLMTaskMPC:
         """
         Wrap LLM-generated constraints to be contact-aware.
 
-        This prevents constraints from being applied during incompatible contact phases.
-        For example, height constraints should only apply during flight phases.
+        Supports both 5-argument and 7-argument constraint signatures:
+        - 5 args: (x_k, u_k, kindyn_model, config, contact_k)
+        - 7 args: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)
+
+        The LLM is responsible for generating constraints that are appropriate
+        for the task's contact sequence.
         """
+        import inspect
+
+        # Detect the number of parameters in the constraint function
+        try:
+            sig = inspect.signature(constraint_func)
+            num_params = len(sig.parameters)
+        except (ValueError, TypeError):
+            num_params = 5  # Default to 5-arg signature
 
         def contact_aware_constraint(
-            x_k: Any, u_k: Any, kindyn_model: Any, config: Any, contact_k: Any
+            x_k: Any,
+            u_k: Any,
+            kindyn_model: Any,
+            config: Any,
+            contact_k: Any,
+            k: int = 0,
+            horizon: int = 1,
         ) -> tuple[Any, Any, Any]:
-            import casadi as cs
-
-            # Get the original constraint
-            original_expr, original_lower, original_upper = constraint_func(
-                x_k, u_k, kindyn_model, config, contact_k
-            )
-
-            # Check if this is a stance phase (all feet in contact)
-            is_stance = cs.sum1(contact_k) >= 3.5  # Almost all feet in contact
-
-            # For jumping tasks, relax height constraints during stance phases
-            try:
-                expr_size = original_expr.size()
-                expr_length = (
-                    expr_size[0]
-                    if len(expr_size) > 1
-                    else expr_size[0]
-                    if hasattr(expr_size, "__getitem__")
-                    else 1
+            # Call with appropriate number of arguments based on function signature
+            if num_params >= 7:
+                return cast(
+                    tuple[Any, Any, Any],
+                    constraint_func(
+                        x_k, u_k, kindyn_model, config, contact_k, k, horizon
+                    ),
                 )
-
-                if expr_length >= 3:
-                    # Assume third constraint is height (com_z)
-                    # During stance phase, allow robot to be on ground (relax height constraint)
-                    relaxed_height_lower = cs.if_else(is_stance, 0.0, original_lower[2])
-
-                    # Reconstruct lower bounds with relaxed height
-                    try:
-                        relaxed_lower = cs.vertcat(
-                            original_lower[0], original_lower[1], relaxed_height_lower
-                        )
-                        return original_expr, relaxed_lower, original_upper
-                    except Exception:
-                        # If reconstruction fails, return original
-                        pass
-            except Exception:
-                # If size checking fails, return original constraint
-                pass
-
-            # For non-height constraints or other cases, return original
-            return original_expr, original_lower, original_upper
+            else:
+                return cast(
+                    tuple[Any, Any, Any],
+                    constraint_func(x_k, u_k, kindyn_model, config, contact_k),
+                )
 
         return contact_aware_constraint

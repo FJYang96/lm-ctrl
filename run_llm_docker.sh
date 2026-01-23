@@ -36,6 +36,9 @@ if ! grep -q "ANTHROPIC_API_KEY=sk-" .env; then
     exit 1
 fi
 
+# Create results directory on host BEFORE running Docker
+mkdir -p results/llm_iterations
+
 echo "🐳 Building Docker image..."
 docker build -t quadruped-lm-ctrl .
 

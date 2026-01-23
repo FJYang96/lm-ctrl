@@ -144,7 +144,15 @@ class FeedbackPipeline:
                     optimization_result, iteration, run_dir
                 )
 
-                # Collect iteration results
+                # Step 6: Create feedback context (for debugging and next iteration)
+                feedback_context = self._create_feedback_context(
+                    iteration,
+                    optimization_result,
+                    simulation_result,
+                    constraint_code,
+                )
+
+                # Collect iteration results (including feedback for debugging)
                 iteration_result = {
                     "iteration": iteration,
                     "command": command,
@@ -153,6 +161,7 @@ class FeedbackPipeline:
                     "attempt_log": attempt_log,
                     "optimization": optimization_result,
                     "simulation": simulation_result,
+                    "feedback_context": feedback_context,  # Added for debugging
                     "timestamp": time.time(),
                 }
 
@@ -161,15 +170,14 @@ class FeedbackPipeline:
                 # Save iteration results
                 self._save_iteration_results(iteration_result, run_dir)
 
-                # Step 6: Create feedback for next iteration
+                # Use feedback for next iteration
                 if iteration < self.max_iterations:
-                    print("Generating feedback for next iteration...")
-                    context = self._create_feedback_context(
-                        iteration,
-                        optimization_result,
-                        simulation_result,
-                        constraint_code,
-                    )
+                    print("\n" + "=" * 60)
+                    print("FEEDBACK FOR NEXT ITERATION:")
+                    print("=" * 60)
+                    print(feedback_context)
+                    print("=" * 60 + "\n")
+                    context = feedback_context
 
                 # Track best result based on success score
                 score = self._score_iteration(iteration_result)
@@ -888,6 +896,15 @@ class FeedbackPipeline:
             attempt_file = run_dir / f"attempts_iter_{iteration}.json"
             with open(attempt_file, "w") as f:
                 json.dump(iteration_result["attempt_log"], f, indent=2)
+
+        # Save feedback context as readable text file for debugging
+        if (
+            "feedback_context" in iteration_result
+            and iteration_result["feedback_context"]
+        ):
+            feedback_file = run_dir / f"feedback_iter_{iteration}.txt"
+            with open(feedback_file, "w") as f:
+                f.write(iteration_result["feedback_context"])
 
     def _inject_llm_constraints_to_mpc(self) -> None:
         """
