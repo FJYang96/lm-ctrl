@@ -89,46 +89,6 @@ class ConstraintGenerator:
         """
         return prompts.get_user_prompt(command)
 
-    def create_feedback_context(
-        self,
-        iteration: int,
-        trajectory_data: dict[str, Any],
-        optimization_status: dict[str, Any],
-        simulation_results: dict[str, Any],
-        previous_constraints: str,
-    ) -> str:
-        """
-        Create feedback context for the next LLM iteration.
-
-        Args:
-            iteration: Current iteration number
-            trajectory_data: Optimized trajectory information
-            optimization_status: Solver status and convergence info
-            simulation_results: Simulation execution results
-            previous_constraints: Previously generated constraints
-
-        Returns:
-            Formatted feedback context string
-        """
-        # Store iteration history
-        self.iteration_history.append(
-            {
-                "iteration": iteration,
-                "trajectory_data": trajectory_data,
-                "optimization_status": optimization_status,
-                "simulation_results": simulation_results,
-                "constraints": previous_constraints,
-            }
-        )
-
-        return prompts.create_feedback_context(
-            iteration,
-            trajectory_data,
-            optimization_status,
-            simulation_results,
-            previous_constraints,
-        )
-
     def create_repair_prompt(
         self, command: str, failed_code: str, error_message: str, attempt_number: int
     ) -> str:

@@ -15,8 +15,8 @@ class LLMClient:
         load_dotenv()
 
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
-        self.model = os.getenv("ANTHROPIC_MODEL", "claude-4-sonnet-20250514")
-        self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "4000"))
+        self.model = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-5-20251101")
+        self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "40000"))
         self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 
         if not self.api_key or self.api_key == "your_api_key_here":

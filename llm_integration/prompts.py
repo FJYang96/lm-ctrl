@@ -1,7 +1,5 @@
 """LLM prompts for constraint generation and feedback."""
 
-from typing import Any
-
 
 def get_system_prompt(mass: float = 15.0, initial_height: float = 0.2117) -> str:
     """
@@ -174,106 +172,6 @@ Think step by step:
 REMINDER: You MUST include mpc.set_contact_sequence() - this is the #1 cause of failures.
 
 Return ONLY Python code."""
-
-
-def create_feedback_context(
-    iteration: int,
-    trajectory_data: dict[str, Any],
-    optimization_status: dict[str, Any],
-    simulation_results: dict[str, Any],
-    previous_constraints: str,
-) -> str:
-    """
-    Create feedback context for the next LLM iteration.
-
-    Args:
-        iteration: Current iteration number
-        trajectory_data: Optimized trajectory information
-        optimization_status: Solver status and convergence info
-        simulation_results: Simulation execution results
-        previous_constraints: Previously generated constraints
-
-    Returns:
-        Formatted feedback context string
-    """
-    context = f"""ITERATION {iteration} FEEDBACK
-
-PREVIOUS CODE:
-{previous_constraints}
-
-"""
-
-    # Optimization status
-    if optimization_status.get("converged", False):
-        context += "OPTIMIZATION: SUCCESS\n"
-    else:
-        context += """OPTIMIZATION: FAILED - No feasible trajectory found!
-
-This means your constraints are MUTUALLY EXCLUSIVE or PHYSICALLY IMPOSSIBLE.
-Common causes:
-- Requiring height > X when robot starts below X (can't teleport)
-- Combining too many tight constraints simultaneously
-- Progressive bounds that increase faster than physics allows
-
-To fix: SIMPLIFY and LOOSEN constraints. Remove the most restrictive one.
-Start with just ONE key constraint, verify it works, then add more gradually.
-
-"""
-
-    # Simulation status
-    if simulation_results.get("success", False):
-        context += f"SIMULATION: SUCCESS (tracking_error: {simulation_results.get('tracking_error', 0):.3f})\n"
-    else:
-        context += "SIMULATION: FAILED\n"
-
-    # Trajectory metrics
-    if trajectory_data and optimization_status.get("converged", False):
-        # Get rotation values
-        pitch_rotation = trajectory_data.get("total_pitch_rotation", 0)
-        yaw_rotation = trajectory_data.get("max_yaw", 0)  # Total yaw change
-        roll_rotation = trajectory_data.get("max_roll", 0)
-
-        context += f"""
-ACHIEVED TRAJECTORY:
-- Height: {trajectory_data.get('initial_com_height', 0):.3f}m -> max {trajectory_data.get('max_com_height', 0):.3f}m -> final {trajectory_data.get('final_com_height', 0):.3f}m
-- Height change: {trajectory_data.get('height_gain', 0):.3f}m
-- Pitch rotation (forward/back flip): {pitch_rotation:.2f} rad ({pitch_rotation * 57.3:.0f} deg)
-- Yaw rotation (turning left/right): {yaw_rotation:.2f} rad ({yaw_rotation * 57.3:.0f} deg)
-- Roll rotation (side tilt): {roll_rotation:.2f} rad ({roll_rotation * 57.3:.0f} deg)
-- Flight duration: {trajectory_data.get('flight_duration', 0):.2f}s
-"""
-
-        # Analyze what might be missing
-        height_gain = trajectory_data.get("height_gain", 0)
-        pitch_rot = abs(pitch_rotation)
-        yaw_rot = abs(yaw_rotation)
-
-        suggestions = []
-
-        if height_gain < 0.05 and height_gain > -0.05:
-            suggestions.append(
-                "Height barely changed. To force vertical motion, constrain height after t=0 to exclude starting value."
-            )
-
-        if pitch_rot < 0.5:  # Less than ~30 degrees
-            suggestions.append(
-                "Minimal pitch rotation. To force pitch (backflip/frontflip), constrain x_k[10] (pitch angular velocity) to be non-zero during flight."
-            )
-
-        if yaw_rot < 0.5:  # Less than ~30 degrees
-            suggestions.append(
-                "Minimal yaw rotation. To force turning, constrain x_k[11] (yaw angular velocity) or x_k[8] (yaw angle) to change."
-            )
-
-        if suggestions:
-            context += "\nANALYSIS:\n" + "\n".join(f"- {s}" for s in suggestions)
-
-    context += """
-
-TASK: Generate improved constraints based on this feedback.
-Return ONLY Python code."""
-
-    return context
 
 
 def create_repair_prompt(
