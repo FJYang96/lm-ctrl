@@ -16,6 +16,10 @@ from utils.simulation import create_reference_trajectory, simulate_trajectory
 from utils.visualization import render_and_save_planned_trajectory
 
 from .constraint_generator import ConstraintGenerator
+from .enhanced_feedback import (
+    create_visual_feedback,
+    generate_enhanced_feedback,
+)
 from .llm_client import LLMClient
 from .llm_mpc import LLMTaskMPC
 from .safe_executor import SafeConstraintExecutor
@@ -93,6 +97,11 @@ class FeedbackPipeline:
         self.results_dir = Path(os.getenv("RESULTS_DIR", "results/llm_iterations"))
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
+        # Enhanced feedback tracking
+        self.previous_iteration_analysis: dict[str, Any] | None = None
+        self.current_joint_torques: np.ndarray | None = None
+        self.current_images: list[str] = []
+
     def run_pipeline(self, command: str) -> dict[str, Any]:
         """
         Run the complete LLM feedback pipeline for a given command.
@@ -112,6 +121,8 @@ class FeedbackPipeline:
 
         # Initialize pipeline state
         self.iteration_results = []
+        self.previous_iteration_analysis = None
+        self.current_images = []
         context = None
         best_result = None
         best_score = -float("inf")
@@ -121,14 +132,18 @@ class FeedbackPipeline:
         initial_user_message = self.constraint_generator.get_user_prompt(command)
 
         for iteration in range(1, self.max_iterations + 1):
-            print(f"\\n=== ITERATION {iteration} ===")
+            print(f"\n=== ITERATION {iteration} ===")
 
             try:
                 # Step 3: Generate constraints using LLM with auto-retry
                 print("Generating constraints with LLM...")
                 constraint_code, function_name, attempt_log = (
                     self._generate_constraints_with_retry(
-                        system_prompt, initial_user_message, context, command
+                        system_prompt,
+                        initial_user_message,
+                        context,
+                        command,
+                        images=self.current_images,
                     )
                 )
 
@@ -144,12 +159,25 @@ class FeedbackPipeline:
                     optimization_result, iteration, run_dir
                 )
 
-                # Step 6: Create feedback context (for debugging and next iteration)
+                # Step 6: Create enhanced feedback context with visual frames
                 feedback_context = self._create_feedback_context(
                     iteration,
+                    command,
                     optimization_result,
                     simulation_result,
                     constraint_code,
+                    run_dir,
+                )
+
+                # Extract visual feedback for next iteration
+                self.current_images = create_visual_feedback(run_dir, iteration)
+                print(
+                    f"📸 Extracted {len(self.current_images)} frames for visual feedback"
+                )
+
+                # Track previous iteration analysis for comparison
+                self.previous_iteration_analysis = optimization_result.get(
+                    "trajectory_analysis", {}
                 )
 
                 # Collect iteration results (including feedback for debugging)
@@ -243,11 +271,13 @@ class FeedbackPipeline:
         context: str | None = None,
         command: str = "",
         max_attempts: int = 10,
+        images: list[str] | None = None,
     ) -> tuple[str, str, list[dict[str, Any]]]:
         """
         Generate constraints using the LLM with comprehensive auto-retry on failures.
 
         This implements the full repair loop with detailed error feedback to the LLM.
+        Uses vision API when images are provided for enhanced feedback.
 
         Returns:
             Tuple of (final_code, function_name, attempt_log)
@@ -272,10 +302,15 @@ class FeedbackPipeline:
                         command, failed_code, error_msg, attempt
                     )
 
-                # Call LLM
-                response = self.llm_client.generate_constraints(
-                    system_prompt, prompt, None
-                )
+                # Call LLM with vision if images available, otherwise standard call
+                if images and len(images) > 0:
+                    response = self.llm_client.generate_constraints_with_vision(
+                        system_prompt, prompt, None, images
+                    )
+                else:
+                    response = self.llm_client.generate_constraints(
+                        system_prompt, prompt, None
+                    )
 
                 # Extract code from response with improved extraction
                 mpc_config_code = self.llm_client.extract_raw_code(response)
@@ -549,15 +584,29 @@ class FeedbackPipeline:
             )
 
             print("🔧 Computing joint torques via inverse dynamics...")
+            # Use LLM MPC's contact sequence if available
+            if (
+                self.current_task_mpc
+                and self.current_task_mpc.contact_sequence is not None
+            ):
+                contact_seq = self.current_task_mpc.contact_sequence
+                mpc_dt = self.current_task_mpc.mpc_dt
+            else:
+                contact_seq = self.config.mpc_config.contact_sequence
+                mpc_dt = self.config.mpc_config.mpc_dt
+
             # Compute joint torques using inverse dynamics
             joint_torques_traj = compute_joint_torques(
                 self.kindyn_model,
                 state_traj,
                 grf_traj,
-                self.config.mpc_config.contact_sequence,
-                self.config.mpc_config.mpc_dt,
+                contact_seq,
+                mpc_dt,
                 joint_vel_traj,
             )
+
+            # Store for enhanced feedback
+            self.current_joint_torques = joint_torques_traj
 
             print("🏃 Executing trajectory in physics simulation...")
             # Execute in simulation
@@ -714,22 +763,82 @@ class FeedbackPipeline:
     def _create_feedback_context(
         self,
         iteration: int,
+        command: str,
         optimization_result: dict[str, Any],
         simulation_result: dict[str, Any],
         constraint_code: str,
+        run_dir: Path,
     ) -> str:
-        """Create feedback context for the next LLM iteration."""
+        """Create enhanced feedback context for the next LLM iteration.
 
-        # Extract trajectory data
-        trajectory_data = optimization_result.get("trajectory_analysis", {})
-        optimization_status = optimization_result.get("optimization_metrics", {})
+        Raises:
+            ValueError: If required feedback data is missing or invalid.
+        """
+        # Extract trajectory data - these are REQUIRED
+        trajectory_analysis = optimization_result.get("trajectory_analysis")
+        if trajectory_analysis is None:
+            raise ValueError(
+                "Enhanced feedback requires trajectory_analysis but it was not provided"
+            )
 
-        return self.constraint_generator.create_feedback_context(
-            iteration,
-            trajectory_data,
-            optimization_status,
-            simulation_result,
-            constraint_code,
+        optimization_status = optimization_result.get("optimization_metrics")
+        if optimization_status is None:
+            raise ValueError(
+                "Enhanced feedback requires optimization_metrics but it was not provided"
+            )
+
+        # Get trajectory data for enhanced analysis - REQUIRED
+        state_traj = optimization_result.get("state_trajectory")
+        if state_traj is None or (hasattr(state_traj, "size") and state_traj.size == 0):
+            raise ValueError(
+                "Enhanced feedback requires state_trajectory but it was empty or not provided"
+            )
+
+        grf_traj = optimization_result.get("grf_trajectory")
+        if grf_traj is None or (hasattr(grf_traj, "size") and grf_traj.size == 0):
+            raise ValueError(
+                "Enhanced feedback requires grf_trajectory but it was empty or not provided"
+            )
+
+        joint_vel_traj = optimization_result.get("joint_vel_trajectory")
+        if joint_vel_traj is None or (
+            hasattr(joint_vel_traj, "size") and joint_vel_traj.size == 0
+        ):
+            raise ValueError(
+                "Enhanced feedback requires joint_vel_trajectory but it was empty or not provided"
+            )
+
+        # Get contact sequence from current MPC - REQUIRED
+        if self.current_task_mpc and self.current_task_mpc.contact_sequence is not None:
+            contact_sequence = self.current_task_mpc.contact_sequence
+            mpc_dt = self.current_task_mpc.mpc_dt
+        else:
+            raise ValueError(
+                "Enhanced feedback requires contact_sequence from LLM MPC but it was not configured"
+            )
+
+        # Simulation results - REQUIRED
+        if simulation_result is None:
+            raise ValueError(
+                "Enhanced feedback requires simulation_result but it was not provided"
+            )
+
+        # Generate enhanced feedback - no fallback
+        return generate_enhanced_feedback(
+            iteration=iteration,
+            command=command,
+            state_traj=state_traj,
+            grf_traj=grf_traj,
+            joint_vel_traj=joint_vel_traj,
+            joint_torques_traj=self.current_joint_torques,
+            contact_sequence=contact_sequence,
+            mpc_dt=mpc_dt,
+            optimization_status=optimization_status,
+            simulation_results=simulation_result,
+            trajectory_analysis=trajectory_analysis,
+            previous_constraints=constraint_code,
+            previous_iteration_analysis=self.previous_iteration_analysis,
+            robot_mass=self.config.robot_data.mass,
         )
 
     def _score_iteration(self, iteration_result: dict[str, Any]) -> float:

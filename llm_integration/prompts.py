@@ -14,6 +14,24 @@ def get_system_prompt() -> str:
 
 OUTPUT FORMAT: Return ONLY Python code. No markdown, no backticks, no explanations.
 
+== CRITICAL: MANDATORY REQUIREMENTS ==
+
+⚠️ YOUR CODE WILL FAIL WITHOUT ALL FIVE OF THESE CALLS:
+
+1. mpc.set_task_name("...")           ← REQUIRED
+2. mpc.set_duration(...)              ← REQUIRED
+3. mpc.set_time_step(0.02)            ← REQUIRED
+4. mpc.set_contact_sequence(...)      ← REQUIRED - #1 CAUSE OF FAILURES
+5. mpc.add_constraint(...)            ← REQUIRED
+
+THE MOST COMMON FAILURE: Forgetting mpc.set_contact_sequence()
+- EVERY motion needs a contact sequence, including ground-based motions like squatting
+- For ground-based motions: use [1,1,1,1] for all timesteps (all feet grounded)
+- For aerial motions: include [0,0,0,0] phases (all feet in air)
+- Use mpc._create_phase_sequence() to build the contact array
+
+If you see "No contact sequence specified" error, you forgot mpc.set_contact_sequence().
+
 == ROBOT PHYSICS ==
 
 State x_k (24-dim):
@@ -96,6 +114,35 @@ def task_constraints(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
 
 mpc.add_constraint(task_constraints)
 
+== UNDERSTANDING FEEDBACK ==
+
+You will receive rich feedback after each iteration:
+
+1. VISUAL FRAMES: You will see two sets of frames:
+   - PLANNED TRAJECTORY: What the MPC optimizer computed (ideal motion)
+   - SIMULATED TRAJECTORY: What actually happened in physics simulation
+   Compare them to see tracking errors and where reality diverges from the plan.
+
+2. TASK PROGRESS TABLE: Shows % completion toward each goal criterion.
+   - If a criterion is at 25%, your constraint for that is too weak.
+   - If a criterion is at 100%, that aspect is working - focus on others.
+
+3. PHASE ANALYSIS: Breakdown by motion phase (stance, flight, landing).
+   - Check crouch depth during pre-flight (deeper = more power)
+   - Check angular velocities during flight (higher = more rotation)
+   - Check impact velocity at landing (should be small)
+
+4. GROUND REACTION FORCES: Shows push-off and landing forces.
+   - Takeoff GRF should be high (2-3x body weight) for good jumps
+   - Landing GRF shows impact intensity
+
+5. ACTUATOR STATUS: Shows if robot is at physical limits.
+   - If torques are >90% saturated, robot cannot push harder
+   - If joints are at limits, motion is kinematically constrained
+
+6. VS PREVIOUS ITERATION: Shows what improved or regressed.
+   - Use this to understand effect of your constraint changes.
+
 == TASK ==
 Generate MPC configuration and constraints for the requested behavior.
 Think about: What motion is needed? What constraints will FORCE that motion?
@@ -116,9 +163,11 @@ def get_user_prompt(command: str) -> str:
 
 Think step by step:
 1. What type of motion is this? (ground-based, aerial, rotation, translation)
-2. What contact sequence is appropriate?
+2. What contact sequence is appropriate? (REQUIRED - your code will fail without mpc.set_contact_sequence())
 3. What physical quantities need to be constrained to achieve this?
 4. What are reasonable bounds that FORCE the desired motion?
+
+REMINDER: You MUST include mpc.set_contact_sequence() - this is the #1 cause of failures.
 
 Return ONLY Python code."""
 
@@ -241,11 +290,17 @@ ERROR: {error_message}
 FAILED CODE:
 {code_snippet}
 
-Common fixes:
+⚠️ MANDATORY CHECKLIST - Your code MUST include ALL of these:
+□ mpc.set_task_name("...")
+□ mpc.set_duration(...)
+□ mpc.set_time_step(0.02)
+□ mpc.set_contact_sequence(...)  ← THIS IS THE #1 MISSING CALL
+□ mpc.add_constraint(...)
+
+Other requirements:
 - Constraint function must have 7 parameters: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)
 - Must return exactly 3 values: (constraint_expr, lower_bound, upper_bound)
 - All return values must be CasADi MX objects (use vertcat for multiple constraints)
 - No import statements allowed
-- Must call mpc.set_contact_sequence() and mpc.add_constraint()
 
 Return ONLY corrected Python code."""
