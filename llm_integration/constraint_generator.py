@@ -13,47 +13,69 @@ class ConstraintGenerator:
     Enhanced with robot-specific details and improved trajectory analysis.
     """
 
-    def __init__(self) -> None:
-        """Initialize the constraint generator."""
+    def __init__(self, config: Any = None) -> None:
+        """Initialize the constraint generator.
+
+        Args:
+            config: Optional robot configuration object. If provided, physical
+                   facts are extracted from actual robot data for accuracy.
+        """
         self.iteration_history: list[dict[str, Any]] = []
+        self.config = config
         self.robot_details = self._get_robot_details()
 
     def _get_robot_details(self) -> dict[str, Any]:
-        """Get robot-specific details for enhanced prompts."""
-        return {
-            "mass": "~12 kg",
-            "dimensions": "Body: ~30cm x 20cm x 10cm",
-            "leg_reach": "~30cm leg extension",
-            "joint_limits": "Hip: ±45°, Thigh: ±90°, Calf: ±150°",
-            "max_jump_height": "~0.5-0.8m realistic",
-            "typical_stance_height": "~0.25m COM height",
-            "foot_spacing": "Front/rear: ~30cm, Left/right: ~20cm",
+        """Get robot-specific details from config or use sensible defaults."""
+        # Default values (used if no config provided)
+        details = {
+            "mass": 15.0,
+            "initial_height": 0.2117,
+            "joint_limits_lower": [-0.8, -1.6, -2.6] * 4,
+            "joint_limits_upper": [0.8, 1.6, -0.5] * 4,
         }
+
+        if self.config is None:
+            return details
+
+        # Extract real values from config if available
+        try:
+            robot_data = getattr(self.config, "robot_data", None)
+            experiment = getattr(self.config, "experiment", None)
+
+            if robot_data and hasattr(robot_data, "mass"):
+                details["mass"] = float(robot_data.mass)
+
+            if experiment and hasattr(experiment, "initial_qpos"):
+                initial_qpos = experiment.initial_qpos
+                if len(initial_qpos) >= 3:
+                    details["initial_height"] = float(initial_qpos[2])
+
+            if robot_data and hasattr(robot_data, "joint_limits_lower"):
+                details["joint_limits_lower"] = robot_data.joint_limits_lower.tolist()
+
+            if robot_data and hasattr(robot_data, "joint_limits_upper"):
+                details["joint_limits_upper"] = robot_data.joint_limits_upper.tolist()
+
+        except Exception:
+            # If anything fails, use defaults silently
+            pass
+
+        return details
 
     def get_system_prompt(self) -> str:
         """
         Get the system prompt that instructs the LLM on constraint generation.
 
         Returns:
-            System prompt string with robot details
+            System prompt string with accurate robot details from config
         """
-        base_prompt = prompts.get_system_prompt()
+        # Pass actual robot details to the prompt generator
+        base_prompt = prompts.get_system_prompt(
+            mass=self.robot_details["mass"],
+            initial_height=self.robot_details["initial_height"],
+        )
 
-        # Add robot-specific context
-        robot_context = f"""
-
-ROBOT PHYSICAL DETAILS:
-- Mass: {self.robot_details["mass"]}
-- {self.robot_details["dimensions"]}
-- Leg reach: {self.robot_details["leg_reach"]}
-- Joint limits: {self.robot_details["joint_limits"]}
-- Realistic jump height: {self.robot_details["max_jump_height"]}
-- Typical stance COM height: {self.robot_details["typical_stance_height"]}
-- Foot spacing: {self.robot_details["foot_spacing"]}
-
-Use these physical limits to create realistic constraints."""
-
-        return base_prompt + robot_context
+        return base_prompt
 
     def get_user_prompt(self, command: str) -> str:
         """

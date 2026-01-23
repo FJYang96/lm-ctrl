@@ -3,26 +3,30 @@
 from typing import Any
 
 
-def get_system_prompt() -> str:
+def get_system_prompt(mass: float = 15.0, initial_height: float = 0.2117) -> str:
     """
     Get the system prompt that instructs the LLM on MPC configuration + constraint generation.
 
-    Returns:
-        System prompt string
-    """
-    return """You are a robotics expert generating MPC configurations for quadruped robot trajectory optimization.
+    Args:
+        mass: Robot mass in kg (from actual config)
+        initial_height: Robot initial COM height in meters (from actual config)
 
-OUTPUT FORMAT: Return ONLY Python code. No markdown, no backticks, no explanations.
+    Returns:
+        System prompt string with accurate physical parameters
+    """
+    return f"""You are a robotics expert generating MPC configurations for quadruped robot trajectory optimization.
+
+OUTPUT FORMAT: Return ONLY Python code. You may use ```python code blocks.
 
 == CRITICAL: MANDATORY REQUIREMENTS ==
 
-⚠️ YOUR CODE WILL FAIL WITHOUT ALL FIVE OF THESE CALLS:
+YOUR CODE WILL FAIL WITHOUT ALL FIVE OF THESE CALLS:
 
-1. mpc.set_task_name("...")           ← REQUIRED
-2. mpc.set_duration(...)              ← REQUIRED
-3. mpc.set_time_step(0.02)            ← REQUIRED
-4. mpc.set_contact_sequence(...)      ← REQUIRED - #1 CAUSE OF FAILURES
-5. mpc.add_constraint(...)            ← REQUIRED
+1. mpc.set_task_name("...")           <- REQUIRED
+2. mpc.set_duration(...)              <- REQUIRED
+3. mpc.set_time_step(0.02)            <- REQUIRED
+4. mpc.set_contact_sequence(...)      <- REQUIRED - #1 CAUSE OF FAILURES
+5. mpc.add_constraint(...)            <- REQUIRED
 
 THE MOST COMMON FAILURE: Forgetting mpc.set_contact_sequence()
 - EVERY motion needs a contact sequence, including ground-based motions like squatting
@@ -41,11 +45,12 @@ State x_k (24-dim):
 - x_k[9:12]: angular velocity [wx, wy, wz] in rad/s
 - x_k[12:24]: joint angles (12 joints)
 
-Key physical facts:
-- Robot starts at COM height ~0.21m
-- Mass ~12kg, can jump to ~0.5-1.5m height
-- Rotation: angle_change ≈ angular_velocity × time
-- Projectile motion: peak_height ≈ initial_height + v²/(2g)
+Key physical facts (from actual robot config):
+- Robot mass: {mass:.2f} kg
+- Robot starts at COM height EXACTLY {initial_height:.4f}m
+- Achievable jump height: ~0.3-0.5m above starting height
+- Rotation: angle_change = angular_velocity * time
+- Projectile motion: peak_height = initial_height + v^2/(2g)
 
 == MPC CONFIGURATION ==
 
@@ -66,35 +71,37 @@ Contact patterns:
 Signature: def name(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
     # k = current timestep, horizon = total timesteps
     # progress = k / horizon  (0.0 at start, 1.0 at end)
-    return (constraint_expr, lower_bound, upper_bound)  # CasADi MX objects
+    return (constraint_expr, lower_bound, upper_bound)  # CasADi MX expressions
 
-PRINCIPLE 1: Constraints define FEASIBLE REGIONS, not exact trajectories
+PRINCIPLE 1: NEVER violate constraints at t=0
+- At k=0, the robot is at its starting state (height={initial_height:.4f}m)
+- If you set upper_bound < {initial_height:.4f} at k=0, optimization FAILS IMMEDIATELY
+- Always use bounds that INCLUDE the starting state at the first timestep
+- Then gradually tighten constraints over time using progress = k/horizon
+
+PRINCIPLE 2: Constraints define FEASIBLE REGIONS, not exact trajectories
 - The optimizer finds the EASIEST path within your constraints
 - If starting state is already valid, optimizer may do nothing
-- To FORCE motion: make constraints that EXCLUDE the starting state
+- To FORCE motion: make constraints that EXCLUDE the starting state AFTER t=0
 
-PRINCIPLE 2: Start conservative, fail fast
-- Loose constraints → optimization succeeds → check if motion happened
-- Tight constraints → optimization fails → you learn nothing
+PRINCIPLE 3: Start conservative, fail fast
+- Loose constraints -> optimization succeeds -> check if motion happened
+- Tight constraints -> optimization fails -> you learn nothing
 - Better to succeed with weak motion than fail completely
 
-PRINCIPLE 3: One-sided bounds are more robust
-- (lower, inf) or (-inf, upper) usually works
-- (lower, upper) with tight band often fails
+PRINCIPLE 4: One-sided bounds are more robust
+- Use (lower, cs.inf) or (-cs.inf, upper) when possible
+- Tight bands (lower, upper) often cause infeasibility
 - Let the optimizer find the optimal value within your region
 
-PRINCIPLE 4: Time-varying constraints guide motion
+PRINCIPLE 5: Time-varying constraints guide motion
 - Use progress = k/horizon for gradual changes
-- Example: upper_bound = start_value - progress * change
+- Example for lowering: if k == 0: upper = {initial_height:.4f} + 0.01 else: upper = {initial_height:.4f} - progress * drop
 - Smooth ramps are more feasible than sudden jumps
 
-PRINCIPLE 5: Understand what you're actually constraining
-- height >= 0.5 means "never go below 0.5m" at ANY timestep
-- This includes takeoff! Robot starts at 0.21m, can't instantly be at 0.5m
-- Think about the ENTIRE trajectory, not just the goal state
-
 == AVAILABLE FUNCTIONS ==
-vertcat, horzcat, sin, cos, sqrt, fabs, fmax, fmin, sum1, MX, inf, pi, np
+vertcat, horzcat, mtimes, sin, cos, tan, sqrt, exp, log, fabs, fmax, fmin,
+sum1, norm_2, atan2, asin, acos, tanh, MX, DM, cs.inf, pi, np
 
 == EXAMPLE STRUCTURE ==
 
@@ -107,10 +114,18 @@ mpc.set_contact_sequence(contact_seq)
 
 def task_constraints(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
     progress = k / horizon
-    # Extract relevant states
-    # Apply phase-appropriate constraints
-    # Return (expr, lower, upper)
-    return constraints, lower, upper
+    height = x_k[2]
+
+    # IMPORTANT: Don't violate at t=0! Start with loose bounds.
+    if k == 0:
+        lower = 0.05
+        upper = 0.5  # Above starting height - always feasible
+    else:
+        # Now gradually tighten to force motion
+        lower = 0.05
+        upper = {initial_height:.4f} + 0.01 - progress * 0.1  # Gradually lower ceiling
+
+    return (height, lower, upper)
 
 mpc.add_constraint(task_constraints)
 
@@ -118,30 +133,19 @@ mpc.add_constraint(task_constraints)
 
 You will receive rich feedback after each iteration:
 
-1. VISUAL FRAMES: You will see two sets of frames:
-   - PLANNED TRAJECTORY: What the MPC optimizer computed (ideal motion)
-   - SIMULATED TRAJECTORY: What actually happened in physics simulation
-   Compare them to see tracking errors and where reality diverges from the plan.
+1. VISUAL FRAMES: Comparing PLANNED vs SIMULATED trajectory frames.
 
 2. TASK PROGRESS TABLE: Shows % completion toward each goal criterion.
    - If a criterion is at 25%, your constraint for that is too weak.
    - If a criterion is at 100%, that aspect is working - focus on others.
 
 3. PHASE ANALYSIS: Breakdown by motion phase (stance, flight, landing).
-   - Check crouch depth during pre-flight (deeper = more power)
-   - Check angular velocities during flight (higher = more rotation)
-   - Check impact velocity at landing (should be small)
 
-4. GROUND REACTION FORCES: Shows push-off and landing forces.
-   - Takeoff GRF should be high (2-3x body weight) for good jumps
-   - Landing GRF shows impact intensity
+4. GROUND REACTION FORCES: Takeoff GRF should be 2-3x body weight for good jumps.
 
 5. ACTUATOR STATUS: Shows if robot is at physical limits.
-   - If torques are >90% saturated, robot cannot push harder
-   - If joints are at limits, motion is kinematically constrained
 
 6. VS PREVIOUS ITERATION: Shows what improved or regressed.
-   - Use this to understand effect of your constraint changes.
 
 == TASK ==
 Generate MPC configuration and constraints for the requested behavior.
@@ -224,29 +228,41 @@ Start with just ONE key constraint, verify it works, then add more gradually.
 
     # Trajectory metrics
     if trajectory_data and optimization_status.get("converged", False):
+        # Get rotation values
+        pitch_rotation = trajectory_data.get("total_pitch_rotation", 0)
+        yaw_rotation = trajectory_data.get("max_yaw", 0)  # Total yaw change
+        roll_rotation = trajectory_data.get("max_roll", 0)
+
         context += f"""
 ACHIEVED TRAJECTORY:
-- Height: {trajectory_data.get('initial_com_height', 0):.3f}m → max {trajectory_data.get('max_com_height', 0):.3f}m → final {trajectory_data.get('final_com_height', 0):.3f}m
+- Height: {trajectory_data.get('initial_com_height', 0):.3f}m -> max {trajectory_data.get('max_com_height', 0):.3f}m -> final {trajectory_data.get('final_com_height', 0):.3f}m
 - Height change: {trajectory_data.get('height_gain', 0):.3f}m
-- Pitch rotation: {trajectory_data.get('total_pitch_rotation', 0):.2f} rad ({trajectory_data.get('total_pitch_rotation', 0) * 57.3:.0f}°)
-- Max pitch: {trajectory_data.get('max_pitch', 0):.2f} rad ({trajectory_data.get('max_pitch', 0) * 57.3:.0f}°)
+- Pitch rotation (forward/back flip): {pitch_rotation:.2f} rad ({pitch_rotation * 57.3:.0f} deg)
+- Yaw rotation (turning left/right): {yaw_rotation:.2f} rad ({yaw_rotation * 57.3:.0f} deg)
+- Roll rotation (side tilt): {roll_rotation:.2f} rad ({roll_rotation * 57.3:.0f} deg)
 - Flight duration: {trajectory_data.get('flight_duration', 0):.2f}s
 """
 
         # Analyze what might be missing
         height_gain = trajectory_data.get("height_gain", 0)
-        rotation = abs(trajectory_data.get("total_pitch_rotation", 0))
+        pitch_rot = abs(pitch_rotation)
+        yaw_rot = abs(yaw_rotation)
 
         suggestions = []
 
         if height_gain < 0.05 and height_gain > -0.05:
             suggestions.append(
-                "Height barely changed. To force vertical motion, constrain height to exclude starting value (0.21m)."
+                "Height barely changed. To force vertical motion, constrain height after t=0 to exclude starting value."
             )
 
-        if rotation < 0.5:  # Less than ~30 degrees
+        if pitch_rot < 0.5:  # Less than ~30 degrees
             suggestions.append(
-                "Minimal rotation occurred. To force rotation, constrain angular velocity (wy for pitch, wz for yaw) to be non-zero."
+                "Minimal pitch rotation. To force pitch (backflip/frontflip), constrain x_k[10] (pitch angular velocity) to be non-zero during flight."
+            )
+
+        if yaw_rot < 0.5:  # Less than ~30 degrees
+            suggestions.append(
+                "Minimal yaw rotation. To force turning, constrain x_k[11] (yaw angular velocity) or x_k[8] (yaw angle) to change."
             )
 
         if suggestions:
@@ -300,7 +316,7 @@ FAILED CODE:
 Other requirements:
 - Constraint function must have 7 parameters: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)
 - Must return exactly 3 values: (constraint_expr, lower_bound, upper_bound)
-- All return values must be CasADi MX objects (use vertcat for multiple constraints)
-- No import statements allowed
+- All return values must be CasADi MX expressions (use vertcat for multiple constraints)
+- CRITICAL: At k=0, bounds must INCLUDE the starting state (height=0.2117m). Constraints that violate t=0 cause immediate failure!
 
 Return ONLY corrected Python code."""

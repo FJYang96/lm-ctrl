@@ -54,7 +54,7 @@ class FeedbackPipeline:
 
         # Initialize components
         self.llm_client = LLMClient()
-        self.constraint_generator = ConstraintGenerator()
+        self.constraint_generator = ConstraintGenerator(config=self.config)
         self.safe_executor = SafeConstraintExecutor()
 
         # Initialize kinodynamic model
