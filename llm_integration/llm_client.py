@@ -46,20 +46,19 @@ class LLMClient:
             full_user_message = f"{context}\n\n{user_message}"
 
         try:
-            response = self.client.messages.create(
+            # Use streaming to handle long requests (required by new Anthropic SDK)
+            response_text = ""
+            with self.client.messages.stream(
                 model=self.model,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
                 system=system_prompt,
                 messages=[{"role": "user", "content": full_user_message}],
-            )
+            ) as stream:
+                for text in stream.text_stream:
+                    response_text += text
 
-            # Extract text from response, handling different content types
-            content_block = response.content[0]
-            if hasattr(content_block, "text"):
-                return content_block.text  # type: ignore
-            else:
-                return str(content_block)
+            return response_text
 
         except Exception as e:
             print(f"Error calling Claude API: {e}")
