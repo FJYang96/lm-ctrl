@@ -35,6 +35,15 @@ class QuadrupedMPCOpti:
         self.states_dim = acados_model.x.size()[0]
         self.inputs_dim = acados_model.u.size()[0]
 
+        # Compute phase boundaries for jumping motion
+        self.pre_flight_steps = int(
+            config.mpc_config.pre_flight_stance_duration / config.mpc_config.mpc_dt
+        )
+        self.flight_steps = int(
+            config.mpc_config.flight_duration / config.mpc_config.mpc_dt
+        )
+        self.landing_start = self.pre_flight_steps + self.flight_steps
+
         # Initialize the Opti optimization environment
         self.opti = cs.Opti()
 
@@ -54,9 +63,14 @@ class QuadrupedMPCOpti:
 
         # Parameters that can be set at runtime
         self.P_contact = self.opti.parameter(4, self.horizon)  # Contact sequence
-        self.P_ref_state = self.opti.parameter(self.states_dim)  # Reference state
+        self.P_ref_state = self.opti.parameter(
+            self.states_dim
+        )  # Reference state (peak)
         self.P_ref_input = self.opti.parameter(self.inputs_dim)  # Reference input
         self.P_initial_state = self.opti.parameter(self.states_dim)  # Initial state
+        self.P_terminal_state = self.opti.parameter(
+            self.states_dim
+        )  # Terminal/landing state
 
         # Robot parameters
         self.P_mu = self.opti.parameter()  # Friction coefficient
@@ -128,7 +142,13 @@ class QuadrupedMPCOpti:
         )
 
     def _setup_cost_function(self) -> None:
-        """Setup the quadratic tracking cost function."""
+        """Setup the quadratic tracking cost function with phase-aware references.
+
+        The jumping motion has three phases:
+        1. Pre-flight stance: Prepare to jump (reference = initial state)
+        2. Flight: Reach peak height (reference = elevated peak state)
+        3. Post-landing stance: Land safely (reference = terminal/initial state)
+        """
         # Cost weights from config
         q_base = self.config.mpc_config.q_base
         q_joint = self.config.mpc_config.q_joint
@@ -140,11 +160,23 @@ class QuadrupedMPCOpti:
         # Initialize cost
         cost = 0
 
-        # Stage costs (intermediate stages)
+        # Stage costs with phase-aware reference selection
         for k in range(self.horizon):
+            # Determine which reference to use based on phase
+            # Pre-flight: use initial state, Flight: use peak ref, Landing: use terminal
+            if k < self.pre_flight_steps:
+                # Pre-flight: preparing to jump - reference is initial state
+                ref_state = self.P_initial_state
+            elif k < self.landing_start:
+                # Flight phase: reach peak height - reference is elevated state
+                ref_state = self.P_ref_state
+            else:
+                # Landing phase: return to ground - reference is terminal state
+                ref_state = self.P_terminal_state
+
             # State tracking cost
-            state_error_base = self.X[0:12, k] - self.P_ref_state[0:12]
-            state_error_joint = self.X[12:24, k] - self.P_ref_state[12:24]
+            state_error_base = self.X[0:12, k] - ref_state[0:12]
+            state_error_joint = self.X[12:24, k] - ref_state[12:24]
 
             # Input tracking cost
             input_error_vel = self.U[0:12, k] - self.P_ref_input[0:12]
@@ -156,12 +188,17 @@ class QuadrupedMPCOpti:
             cost += cs.mtimes([input_error_vel.T, r_joint_vel, input_error_vel])
             cost += cs.mtimes([input_error_forces.T, r_forces, input_error_forces])
 
-        # Terminal cost
-        terminal_error_base = self.X[0:12, self.horizon] - self.P_ref_state[0:12]
-        terminal_error_joint = self.X[12:24, self.horizon] - self.P_ref_state[12:24]
+        # Terminal cost - use terminal state (landed position) as reference
+        terminal_error_base = self.X[0:12, self.horizon] - self.P_terminal_state[0:12]
+        terminal_error_joint = (
+            self.X[12:24, self.horizon] - self.P_terminal_state[12:24]
+        )
 
-        cost += cs.mtimes([terminal_error_base.T, q_terminal_base, terminal_error_base])
-        cost += cs.mtimes(
+        # Higher weight on terminal cost to ensure proper landing
+        cost += 2.0 * cs.mtimes(
+            [terminal_error_base.T, q_terminal_base, terminal_error_base]
+        )
+        cost += 2.0 * cs.mtimes(
             [terminal_error_joint.T, q_terminal_joint, terminal_error_joint]
         )
 
@@ -197,6 +234,48 @@ class QuadrupedMPCOpti:
                 self.opti.subject_to(constraint_expr >= constraint_l)
                 self.opti.subject_to(constraint_expr <= constraint_u)
 
+        # Add terminal landing constraints for proper landing behavior
+        self._setup_terminal_landing_constraints()
+
+    def _setup_terminal_landing_constraints(self) -> None:
+        """Setup terminal constraints to ensure proper landing.
+
+        These constraints ensure:
+        1. Terminal vertical velocity is small (soft landing)
+        2. Terminal height is close to initial height
+        3. Terminal angular velocities are small (stable landing)
+        """
+        # Terminal state
+        x_terminal = self.X[:, self.horizon]
+
+        # 1. Terminal vertical velocity should be small (soft landing)
+        # Allow a small downward velocity for landing absorption
+        terminal_vz = x_terminal[5]  # z-component of linear velocity
+        self.opti.subject_to(terminal_vz >= -0.5)  # Not falling too fast
+        self.opti.subject_to(terminal_vz <= 0.3)  # Not rising
+
+        # 2. Terminal horizontal velocities should be small (stable)
+        terminal_vx = x_terminal[3]
+        terminal_vy = x_terminal[4]
+        self.opti.subject_to(terminal_vx >= -0.5)
+        self.opti.subject_to(terminal_vx <= 0.5)
+        self.opti.subject_to(terminal_vy >= -0.3)
+        self.opti.subject_to(terminal_vy <= 0.3)
+
+        # 3. Terminal angular velocities should be small (stable orientation)
+        terminal_omega = x_terminal[9:12]
+        for i in range(3):
+            self.opti.subject_to(terminal_omega[i] >= -0.5)
+            self.opti.subject_to(terminal_omega[i] <= 0.5)
+
+        # 4. Terminal roll and pitch should be small (upright landing)
+        terminal_roll = x_terminal[6]
+        terminal_pitch = x_terminal[7]
+        self.opti.subject_to(terminal_roll >= -0.2)
+        self.opti.subject_to(terminal_roll <= 0.2)
+        self.opti.subject_to(terminal_pitch >= -0.2)
+        self.opti.subject_to(terminal_pitch <= 0.2)
+
     def _setup_solver(self) -> None:
         """Setup the solver options."""
         self.opti.solver("ipopt", self.config.solver_config)
@@ -224,30 +303,73 @@ class QuadrupedMPCOpti:
         self.opti.set_value(self.P_ref_input, ref[self.states_dim :])
         self.opti.set_value(self.P_contact, contact_sequence)
 
+        # Create terminal state for landing - should return to near-initial configuration
+        # Terminal position: same XY as ref (forward motion) but Z back to initial height
+        terminal_state = initial_state.copy()
+        # Keep the forward motion (X displacement) from the reference
+        terminal_state[0] = ref[0]  # X position from reference (forward motion)
+        terminal_state[1] = ref[1]  # Y position from reference
+        # Z position: return to initial height (not elevated)
+        terminal_state[2] = initial_state[2]
+        # Terminal velocities should be near zero
+        terminal_state[3:6] = 0.0  # Linear velocity
+        terminal_state[9:12] = 0.0  # Angular velocity
+        # Keep joint positions from initial (stable standing pose)
+        terminal_state[12:24] = initial_state[12:24]
+        self.opti.set_value(self.P_terminal_state, terminal_state)
+
         # Robot parameters
         self.opti.set_value(self.P_mu, self.config.experiment.mu_ground)
         self.opti.set_value(self.P_mass, self.config.robot_data.mass)
         self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
 
-        # Better initial guess for joint positions
-        # Start with the initial configuration and keep it reasonable
+        # Better initial guess with phase-aware trajectory
         X_init = np.zeros((self.states_dim, self.horizon + 1))
+        dt = self.config.mpc_config.mpc_dt
+
         for i in range(self.horizon + 1):
             X_init[:, i] = initial_state.copy()
-            # Ensure joint angles stay in reasonable ranges
-            X_init[12:24, i] = initial_state[12:24]  # Keep initial joint configuration
+
+            # Phase-aware height profile
+            if i < self.pre_flight_steps:
+                # Pre-flight: stay at initial height
+                X_init[2, i] = initial_state[2]
+            elif i < self.landing_start:
+                # Flight phase: parabolic trajectory towards peak
+                flight_progress = (i - self.pre_flight_steps) / self.flight_steps
+                # Parabolic profile: rises then falls
+                peak_height = ref[2]  # Target height from reference
+                height_offset = peak_height - initial_state[2]
+                # Parabola: 4 * t * (1 - t) peaks at t=0.5
+                X_init[2, i] = initial_state[
+                    2
+                ] + height_offset * 4 * flight_progress * (1 - flight_progress)
+                # Vertical velocity: positive going up, negative going down
+                X_init[5, i] = height_offset * 4 * (1 - 2 * flight_progress) / dt
+            else:
+                # Landing phase: return to initial height
+                X_init[2, i] = initial_state[2]
+                X_init[5, i] = 0.0  # Zero vertical velocity after landing
+
+            # Forward motion: gradual forward progress
+            forward_target = ref[0]  # Forward position from reference
+            progress = i / self.horizon
+            X_init[0, i] = (
+                initial_state[0] + (forward_target - initial_state[0]) * progress
+            )
+
+            # Keep joint configuration stable
+            X_init[12:24, i] = initial_state[12:24]
 
         self.opti.set_initial(self.X, X_init)
 
-        # Better initial guess for inputs
+        # Better initial guess for inputs with phase awareness
         U_init = np.zeros((self.inputs_dim, self.horizon))
         for i in range(self.horizon):
             # Very small joint velocities
-            U_init[0:12, i] = 0.001 * np.sin(
-                np.arange(12) * 0.1
-            )  # Much smaller velocities
+            U_init[0:12, i] = 0.001 * np.sin(np.arange(12) * 0.1)
 
-            # Gravity compensation forces for stance feet (more conservative)
+            # Gravity compensation forces for stance feet
             contact_i = (
                 contact_sequence[:, i]
                 if i < contact_sequence.shape[1]
@@ -255,10 +377,17 @@ class QuadrupedMPCOpti:
             )
             for foot in range(4):
                 if contact_i[foot] > 0.5:  # In stance
-                    # More conservative force distribution
-                    U_init[12 + foot * 3 + 2, i] = (
-                        self.config.robot_data.mass * 9.81 / 4 * 0.8
-                    )  # 80% of weight
+                    # Landing phase needs higher forces for impact absorption
+                    if i >= self.landing_start:
+                        # Higher force for landing (impact absorption)
+                        U_init[12 + foot * 3 + 2, i] = (
+                            self.config.robot_data.mass * 9.81 / 4 * 1.2
+                        )
+                    else:
+                        # Normal stance force
+                        U_init[12 + foot * 3 + 2, i] = (
+                            self.config.robot_data.mass * 9.81 / 4 * 0.8
+                        )
                 else:
                     # No forces during flight
                     U_init[12 + foot * 3 : 12 + foot * 3 + 3, i] = 0.0
