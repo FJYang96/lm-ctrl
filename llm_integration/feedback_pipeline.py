@@ -794,12 +794,39 @@ class FeedbackPipeline:
 
         if not optimization_converged or not optimization_success:
             # Get constraint violations from MPC for detailed failure feedback
-            constraint_violations = {}
+            constraint_violations: dict[str, Any] = {}
             if self.current_task_mpc and self.current_task_mpc.mpc:
                 try:
+                    # Get system constraint violations (terminal, height bounds)
                     constraint_violations = (
                         self.current_task_mpc.mpc.get_constraint_violations()
                     )
+
+                    # Also get LLM constraint violations
+                    try:
+                        X_debug = self.current_task_mpc.mpc.opti.debug.value(
+                            self.current_task_mpc.mpc.X
+                        )
+                        U_debug = self.current_task_mpc.mpc.opti.debug.value(
+                            self.current_task_mpc.mpc.U
+                        )
+                        llm_violations = (
+                            self.current_task_mpc.evaluate_constraint_violations(
+                                X_debug, U_debug
+                            )
+                        )
+                        # Merge LLM violations into constraint_violations
+                        constraint_violations["llm_constraints"] = llm_violations.get(
+                            "llm_constraints", []
+                        )
+                        constraint_violations["llm_summary"] = llm_violations.get(
+                            "summary", []
+                        )
+                    except Exception as llm_e:
+                        constraint_violations["llm_constraints"] = [
+                            f"Could not evaluate LLM constraints: {llm_e}"
+                        ]
+
                 except Exception as e:
                     constraint_violations = {
                         "summary": [f"Could not analyze violations: {e}"]

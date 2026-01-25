@@ -349,6 +349,139 @@ class LLMTaskMPC:
             "is_configured": self.is_configured,
         }
 
+    def evaluate_constraint_violations(
+        self, X_debug: np.ndarray, U_debug: np.ndarray
+    ) -> dict[str, Any]:
+        """
+        Evaluate LLM-generated constraints against a (possibly failed) trajectory.
+
+        This helps diagnose why optimization failed by showing exactly which
+        LLM constraints are violated and at which timesteps.
+
+        Args:
+            X_debug: State trajectory (states_dim x horizon+1) from opti.debug.value(X)
+            U_debug: Input trajectory (inputs_dim x horizon) from opti.debug.value(U)
+
+        Returns:
+            Dictionary with constraint violation details
+        """
+        violations: dict[str, Any] = {
+            "llm_constraints": [],
+            "by_constraint": {},
+            "summary": [],
+        }
+
+        if not self.constraint_functions:
+            violations["summary"].append("No LLM constraints to evaluate")
+            return violations
+
+        if self.contact_sequence is None:
+            violations["summary"].append("No contact sequence configured")
+            return violations
+
+        horizon = self.contact_sequence.shape[1]
+
+        # Track violations per constraint
+        for i in range(len(self.constraint_functions)):
+            violations["by_constraint"][i] = []
+
+        # Evaluate each constraint at each timestep (skip k=0 as MPC does)
+        for k in range(1, min(horizon, X_debug.shape[1])):
+            x_k = X_debug[:, k]
+            u_k = U_debug[:, k] if k < U_debug.shape[1] else U_debug[:, -1]
+            contact_k = self.contact_sequence[:, k]
+
+            for i, constraint_func in enumerate(self.constraint_functions):
+                try:
+                    # Call the constraint function
+                    result = constraint_func(
+                        x_k,
+                        u_k,
+                        self.kindyn_model,
+                        self.base_config,
+                        contact_k,
+                        k,
+                        horizon,
+                    )
+
+                    # Extract value, lower, upper bounds
+                    if isinstance(result, tuple) and len(result) == 3:
+                        expr_value, lower, upper = result
+
+                        # Convert CasADi types to float if needed
+                        try:
+                            if hasattr(expr_value, "full"):
+                                expr_value = float(expr_value.full().flatten()[0])
+                            elif hasattr(expr_value, "__float__"):
+                                expr_value = float(expr_value)
+                        except Exception:
+                            pass  # Keep as-is if conversion fails
+
+                        try:
+                            if hasattr(lower, "__float__"):
+                                lower = float(lower)
+                            if hasattr(upper, "__float__"):
+                                upper = float(upper)
+                        except Exception:
+                            pass
+
+                        # Check for violations
+                        if isinstance(expr_value, (int, float)) and isinstance(
+                            lower, (int, float)
+                        ):
+                            if expr_value < lower:
+                                violation_msg = (
+                                    f"Constraint {i} at k={k}: "
+                                    f"value={expr_value:.4f} < lower={lower:.4f}"
+                                )
+                                violations["llm_constraints"].append(violation_msg)
+                                violations["by_constraint"][i].append(
+                                    {
+                                        "k": k,
+                                        "value": expr_value,
+                                        "lower": lower,
+                                        "type": "below_lower",
+                                    }
+                                )
+
+                        if isinstance(expr_value, (int, float)) and isinstance(
+                            upper, (int, float)
+                        ):
+                            if expr_value > upper:
+                                violation_msg = (
+                                    f"Constraint {i} at k={k}: "
+                                    f"value={expr_value:.4f} > upper={upper:.4f}"
+                                )
+                                violations["llm_constraints"].append(violation_msg)
+                                violations["by_constraint"][i].append(
+                                    {
+                                        "k": k,
+                                        "value": expr_value,
+                                        "upper": upper,
+                                        "type": "above_upper",
+                                    }
+                                )
+
+                except Exception as e:
+                    # Record evaluation error but continue
+                    violations["llm_constraints"].append(
+                        f"Constraint {i} at k={k}: evaluation error - {str(e)[:50]}"
+                    )
+
+        # Generate summary
+        for i, constraint_violations in violations["by_constraint"].items():
+            if constraint_violations:
+                violations["summary"].append(
+                    f"LLM constraint {i}: violated at {len(constraint_violations)} timesteps"
+                )
+
+        if not violations["summary"]:
+            violations["summary"].append(
+                "No LLM constraint violations detected in evaluated trajectory"
+            )
+
+        return violations
+
     def _analyze_contact_phases(self) -> list[dict[str, Any]]:
         """Analyze the contact sequence to identify distinct phases."""
         if self.contact_sequence is None:

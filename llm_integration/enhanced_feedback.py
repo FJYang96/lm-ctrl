@@ -970,8 +970,23 @@ def generate_failure_feedback(
                 f"  ... and {len(constraint_violations['state_bounds']) - 5} more"
             )
 
+    if constraint_violations.get("llm_constraints"):
+        lines.append("\n🔴 YOUR LLM CONSTRAINT VIOLATIONS:")
+        # Show first 10 LLM constraint violations
+        for violation in constraint_violations["llm_constraints"][:10]:
+            lines.append(f"  • {violation}")
+        if len(constraint_violations["llm_constraints"]) > 10:
+            lines.append(
+                f"  ... and {len(constraint_violations['llm_constraints']) - 10} more"
+            )
+
+    if constraint_violations.get("llm_summary"):
+        lines.append("\nLLM CONSTRAINT SUMMARY:")
+        for summary in constraint_violations["llm_summary"]:
+            lines.append(f"  • {summary}")
+
     if constraint_violations.get("summary"):
-        lines.append("\nSUMMARY:")
+        lines.append("\nSYSTEM CONSTRAINT SUMMARY:")
         for summary in constraint_violations["summary"]:
             lines.append(f"  • {summary}")
 
