@@ -432,7 +432,7 @@ class LLMTaskMPC:
                             if expr_value < lower:
                                 violation_msg = (
                                     f"Constraint {i} at k={k}: "
-                                    f"value={expr_value:.4f} < lower={lower:.4f}"
+                                    f"value={expr_value:.6f} < lower={lower:.6f}"
                                 )
                                 violations["llm_constraints"].append(violation_msg)
                                 violations["by_constraint"][i].append(
@@ -450,7 +450,7 @@ class LLMTaskMPC:
                             if expr_value > upper:
                                 violation_msg = (
                                     f"Constraint {i} at k={k}: "
-                                    f"value={expr_value:.4f} > upper={upper:.4f}"
+                                    f"value={expr_value:.6f} > upper={upper:.6f}"
                                 )
                                 violations["llm_constraints"].append(violation_msg)
                                 violations["by_constraint"][i].append(
