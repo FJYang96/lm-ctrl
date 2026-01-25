@@ -500,6 +500,20 @@ class FeedbackPipeline:
             if self.current_task_mpc is not None
             else "fallback",
             "config_summary": config_summary,
+            # Solver info for feedback
+            "solver_iterations": getattr(
+                self.current_task_mpc, "solver_iterations", None
+            )
+            if self.current_task_mpc
+            else None,
+            "error_message": getattr(self.current_task_mpc, "last_error", None)
+            if self.current_task_mpc and status != 0
+            else None,
+            "infeasibility_info": getattr(
+                self.current_task_mpc, "infeasibility_info", None
+            )
+            if self.current_task_mpc and status != 0
+            else None,
         }
 
         # Analyze trajectory using LLM MPC time step

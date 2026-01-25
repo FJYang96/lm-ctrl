@@ -75,7 +75,21 @@ class ConstraintGenerator:
             initial_height=self.robot_details["initial_height"],
         )
 
-        return base_prompt
+        # Add robot-specific context
+        robot_context = f"""
+
+ROBOT PHYSICAL DETAILS:
+- Mass: ~{self.robot_details["mass"]:.1f} kg
+- Body: ~30cm x 20cm x 10cm
+- Leg reach: ~30cm leg extension
+- Joint limits: Hip: ±45°, Thigh: ±90°, Calf: ±150°
+- Realistic jump height: ~0.5-0.8m
+- Typical stance COM height: ~{self.robot_details["initial_height"]:.2f}m
+- Foot spacing: Front/rear: ~30cm, Left/right: ~20cm
+
+Use these physical limits to create realistic constraints."""
+
+        return base_prompt + robot_context
 
     def get_user_prompt(self, command: str) -> str:
         """
@@ -141,9 +155,15 @@ class ConstraintGenerator:
                 "final_com_height": float(com_positions[-1, 2]),
                 "height_gain": float(np.max(com_positions[:, 2]) - com_positions[0, 2]),
                 # Orientation analysis
+                "initial_roll": float(euler_angles[0, 0]),
+                "final_roll": float(euler_angles[-1, 0]),
+                "total_roll_rotation": float(euler_angles[-1, 0] - euler_angles[0, 0]),
                 "initial_pitch": float(euler_angles[0, 1]),
                 "final_pitch": float(euler_angles[-1, 1]),
                 "total_pitch_rotation": float(euler_angles[-1, 1] - euler_angles[0, 1]),
+                "initial_yaw": float(euler_angles[0, 2]),
+                "final_yaw": float(euler_angles[-1, 2]),
+                "total_yaw_rotation": float(euler_angles[-1, 2] - euler_angles[0, 2]),
                 "max_roll": float(np.max(np.abs(euler_angles[:, 0]))),
                 "max_pitch": float(np.max(np.abs(euler_angles[:, 1]))),
                 "max_yaw": float(

@@ -119,8 +119,10 @@ def analyze_phase_metrics(
     # Extract state components
     com_z = state_traj[:, 2]  # Height
     com_vz = state_traj[:, 5]  # Vertical velocity
+    roll = state_traj[:, 6]  # Roll angle
     pitch = state_traj[:, 7]  # Pitch angle
     yaw = state_traj[:, 8]  # Yaw angle
+    roll_rate = state_traj[:, 9]  # Roll angular velocity
     pitch_rate = state_traj[:, 10]  # Pitch angular velocity
     yaw_rate = state_traj[:, 11]  # Yaw angular velocity
 
@@ -154,8 +156,10 @@ def analyze_phase_metrics(
             "duration": len(flight_indices) * mpc_dt,
             "peak_height": float(np.max(com_z[start_idx:end_idx])),
             "time_to_peak": (peak_idx - start_idx) * mpc_dt,
+            "avg_roll_rate": float(np.mean(np.abs(roll_rate[start_idx:end_idx]))),
             "avg_pitch_rate": float(np.mean(np.abs(pitch_rate[start_idx:end_idx]))),
             "avg_yaw_rate": float(np.mean(np.abs(yaw_rate[start_idx:end_idx]))),
+            "total_roll_change": float(roll[end_idx - 1] - roll[start_idx]),
             "total_pitch_change": float(pitch[end_idx - 1] - pitch[start_idx]),
             "total_yaw_change": float(yaw[end_idx - 1] - yaw[start_idx]),
         }
@@ -475,16 +479,76 @@ def format_enhanced_feedback(
     lines.append(f"ITERATION {iteration} FEEDBACK")
     lines.append("=" * 60)
 
+    # MPC Configuration Summary
+    if "config_summary" in optimization_status:
+        config = optimization_status["config_summary"]
+        lines.append("\n" + "-" * 60)
+        lines.append("MPC CONFIGURATION")
+        lines.append("-" * 60)
+        lines.append(f"Task: {config.get('task_name', 'unknown')}")
+        lines.append(f"Duration: {config.get('duration', 0):.2f}s")
+        lines.append(f"Time step: {config.get('time_step', 0.02):.3f}s")
+        lines.append(f"Horizon: {config.get('horizon', 0)} steps")
+        lines.append(f"Constraints: {config.get('num_constraints', 0)}")
+        if "contact_phases" in config:
+            lines.append("Contact phases:")
+            for phase in config["contact_phases"]:
+                pattern = phase.get("contact_pattern", phase.get("pattern", []))
+                phase_end = phase["start_time"] + phase["duration"]
+                lines.append(
+                    f"  {phase['phase_type']}: {phase['start_time']:.2f}-{phase_end:.2f}s {pattern}"
+                )
+
     # Optimization status
     if optimization_status.get("converged", False):
         lines.append("\n✅ OPTIMIZATION: SUCCESS")
+        if "solver_iterations" in optimization_status:
+            lines.append(
+                f"  Solver converged in {optimization_status['solver_iterations']} iterations"
+            )
     else:
         lines.append("\n❌ OPTIMIZATION: FAILED")
+        # Detailed error info
+        if (
+            "error_message" in optimization_status
+            and optimization_status["error_message"]
+        ):
+            lines.append(f"  Error: {optimization_status['error_message']}")
+        if "solver_iterations" in optimization_status:
+            lines.append(
+                f"  Solver stopped at {optimization_status['solver_iterations']} iterations"
+            )
+        if "infeasibility_info" in optimization_status:
+            lines.append(
+                f"  Infeasibility: {optimization_status['infeasibility_info']}"
+            )
+        lines.append("")
+        lines.append("COMMON FAILURE CAUSES:")
         lines.append(
-            "Your constraints are likely MUTUALLY EXCLUSIVE or PHYSICALLY IMPOSSIBLE."
+            "  1. Constraints violate initial state (t=0) - robot starts at height=0.2117m"
         )
         lines.append(
+            "  2. Mutually exclusive constraints (e.g., height>0.5 AND height<0.3)"
+        )
+        lines.append("  3. Contact sequence doesn't match constraint timing")
+        lines.append("  4. Bounds too tight - try loosening by 20%")
+        lines.append("")
+        lines.append(
             "Fix: SIMPLIFY and LOOSEN constraints. Start with just one key constraint."
+        )
+        lines.append("")
+        lines.append("⚠️  DON'T BE AFRAID TO CHANGE YOUR APPROACH/CODE DRASTICALLY:")
+        lines.append(
+            "  - If optimization failed, the constraint STRUCTURE may be fundamentally flawed"
+        )
+        lines.append(
+            "  - Small tweaks to bad structure won't help - RETHINK the ENTIRE approach"
+        )
+        lines.append(
+            "  - Consider: constrain ONLY the final state (e.g., final yaw = -π)"
+        )
+        lines.append(
+            "  - Avoid progressive bounds that create 'traps' (loose early, tight late)"
         )
 
     # Simulation status
@@ -493,6 +557,14 @@ def format_enhanced_feedback(
         lines.append(f"✅ SIMULATION: SUCCESS (tracking error: {tracking_error:.3f})")
     else:
         lines.append("❌ SIMULATION: FAILED")
+        # Detailed failure info
+        if "error" in simulation_results:
+            lines.append(f"  Error: {simulation_results['error']}")
+        sim_analysis = simulation_results.get("simulation_analysis", {})
+        if sim_analysis.get("issues"):
+            lines.append("  Issues detected:")
+            for issue in sim_analysis["issues"]:
+                lines.append(f"    - {issue}")
 
     # Task Progress Table
     lines.append("\n" + "-" * 60)
@@ -512,6 +584,83 @@ def format_enhanced_feedback(
     lines.append("-" * 60)
     overall = task_progress.get("overall_progress", 0) * 100
     lines.append(f"{'OVERALL TASK COMPLETION:':<55} {overall:>5.0f}%")
+
+    # Comprehensive Trajectory Metrics
+    lines.append("\n" + "-" * 60)
+    lines.append("TRAJECTORY METRICS")
+    lines.append("-" * 60)
+
+    # Position metrics
+    lines.append("Position:")
+    lines.append(
+        f"  Height: initial={trajectory_analysis.get('initial_com_height', 0):.3f}m, "
+        f"max={trajectory_analysis.get('max_com_height', 0):.3f}m, "
+        f"min={trajectory_analysis.get('min_com_height', 0):.3f}m, "
+        f"final={trajectory_analysis.get('final_com_height', 0):.3f}m"
+    )
+    lines.append(f"  Height gain: {trajectory_analysis.get('height_gain', 0):.3f}m")
+    lines.append(
+        f"  X displacement: {trajectory_analysis.get('com_displacement_x', 0):.3f}m"
+    )
+    lines.append(
+        f"  Y displacement: {trajectory_analysis.get('com_displacement_y', 0):.3f}m"
+    )
+    lines.append(
+        f"  Total distance: {trajectory_analysis.get('total_distance', 0):.3f}m"
+    )
+
+    # Velocity metrics
+    lines.append("Velocity:")
+    lines.append(
+        f"  Max COM velocity: {trajectory_analysis.get('max_com_velocity', 0):.2f} m/s"
+    )
+    lines.append(
+        f"  Final COM velocity: {trajectory_analysis.get('final_com_velocity', 0):.2f} m/s"
+    )
+    lines.append(
+        f"  Max angular velocity: {trajectory_analysis.get('max_angular_vel', 0):.2f} rad/s"
+    )
+    lines.append(
+        f"  Max acceleration: {trajectory_analysis.get('max_acceleration', 0):.2f} m/s²"
+    )
+
+    # Orientation metrics
+    lines.append("Orientation:")
+    max_roll = trajectory_analysis.get("max_roll", 0)
+    total_roll = trajectory_analysis.get("total_roll_rotation", 0)
+    lines.append(
+        f"  Roll: max={max_roll:.2f} rad ({max_roll * 57.3:.0f}°), "
+        f"total_change={total_roll:.2f} rad ({total_roll * 57.3:.0f}°)"
+    )
+    max_pitch = trajectory_analysis.get("max_pitch", 0)
+    total_pitch = trajectory_analysis.get("total_pitch_rotation", 0)
+    lines.append(
+        f"  Pitch: max={max_pitch:.2f} rad ({max_pitch * 57.3:.0f}°), "
+        f"total_change={total_pitch:.2f} rad ({total_pitch * 57.3:.0f}°)"
+    )
+    max_yaw = trajectory_analysis.get("max_yaw", 0)
+    lines.append(f"  Yaw: max_change={max_yaw:.2f} rad ({max_yaw * 57.3:.0f}°)")
+
+    # Timing metrics
+    lines.append("Timing:")
+    lines.append(
+        f"  Duration: {trajectory_analysis.get('trajectory_duration', 0):.2f}s"
+    )
+    lines.append(
+        f"  Flight duration: {trajectory_analysis.get('flight_duration', 0):.2f}s"
+    )
+    lines.append(
+        f"  Flight start: {trajectory_analysis.get('flight_start_time', 0):.2f}s"
+    )
+
+    # Joint metrics
+    lines.append("Joints:")
+    lines.append(
+        f"  Max joint range: {trajectory_analysis.get('max_joint_range', 0):.2f} rad"
+    )
+    lines.append(
+        f"  Avg joint range: {trajectory_analysis.get('avg_joint_range', 0):.2f} rad"
+    )
 
     # Phase Analysis
     if phase_metrics and "error" not in phase_metrics:
@@ -536,14 +685,17 @@ def format_enhanced_feedback(
                 f"peak height: {fp['peak_height']:.3f}m"
             )
             lines.append(
-                f"  Pitch rate: {fp.get('avg_pitch_rate', 0):.2f} rad/s, "
+                f"  Roll rate: {fp.get('avg_roll_rate', 0):.2f} rad/s, "
+                f"Pitch rate: {fp.get('avg_pitch_rate', 0):.2f} rad/s, "
                 f"Yaw rate: {fp.get('avg_yaw_rate', 0):.2f} rad/s"
             )
+            roll_change = fp.get("total_roll_change", 0)
+            pitch_change = fp.get("total_pitch_change", 0)
+            yaw_change = fp.get("total_yaw_change", 0)
             lines.append(
-                f"  Pitch change: {fp.get('total_pitch_change', 0):.2f} rad "
-                f"({fp.get('total_pitch_change', 0)*57.3:.0f}°), "
-                f"Yaw change: {fp.get('total_yaw_change', 0):.2f} rad "
-                f"({fp.get('total_yaw_change', 0)*57.3:.0f}°)"
+                f"  Roll change: {roll_change:.2f} rad ({roll_change * 57.3:.0f}°), "
+                f"Pitch change: {pitch_change:.2f} rad ({pitch_change * 57.3:.0f}°), "
+                f"Yaw change: {yaw_change:.2f} rad ({yaw_change * 57.3:.0f}°)"
             )
 
         if "stance_post" in phase_metrics:
@@ -581,12 +733,30 @@ def format_enhanced_feedback(
             torque_pct = actuator_metrics["max_torque_ratio"] * 100
             status = "⚠️ NEAR LIMIT" if torque_pct > 90 else "OK"
             lines.append(f"Torque utilization: {torque_pct:.0f}% of limit {status}")
+            if "torque_clipping_fraction" in actuator_metrics:
+                clip_pct = actuator_metrics["torque_clipping_fraction"] * 100
+                if clip_pct > 0:
+                    lines.append(f"  ⚠️ Torque clipping: {clip_pct:.1f}% of timesteps")
         if "max_velocity_ratio" in actuator_metrics:
             vel_pct = actuator_metrics["max_velocity_ratio"] * 100
             status = "⚠️ NEAR LIMIT" if vel_pct > 90 else "OK"
             lines.append(
                 f"Joint velocity utilization: {vel_pct:.0f}% of limit {status}"
             )
+
+        # Per-joint breakdown
+        if "velocity_saturation_by_joint" in actuator_metrics:
+            saturated_joints = {
+                k: v
+                for k, v in actuator_metrics["velocity_saturation_by_joint"].items()
+                if v > 0.1  # Only show joints saturated >10% of time
+            }
+            if saturated_joints:
+                lines.append("  Saturated joints (>10% of time at limit):")
+                for joint, fraction in sorted(
+                    saturated_joints.items(), key=lambda x: -x[1]
+                ):
+                    lines.append(f"    {joint}: {fraction * 100:.0f}%")
 
     # Comparison to previous iteration
     if previous_iteration_analysis:
@@ -614,6 +784,19 @@ def format_enhanced_feedback(
         lines.append(
             f"Yaw rotation: {yaw_delta:+.2f} rad ({yaw_delta*57.3:+.0f}°) {arrow}"
         )
+
+        prev_roll = abs(previous_iteration_analysis.get("max_roll", 0))
+        curr_roll = abs(trajectory_analysis.get("max_roll", 0))
+        roll_delta = curr_roll - prev_roll
+        arrow = "↑" if roll_delta > 0 else "↓" if roll_delta < 0 else "→"
+        lines.append(f"Roll: {roll_delta:+.2f} rad ({roll_delta * 57.3:+.0f}°) {arrow}")
+
+    # Initial State Reminder
+    lines.append("\n" + "-" * 60)
+    lines.append("REMINDER: INITIAL STATE")
+    lines.append("-" * 60)
+    lines.append("Robot starts at: height=0.2117m, roll=0, pitch=0, yaw=0")
+    lines.append("Constraints at k=0 MUST allow this state!")
 
     # Previous code
     lines.append("\n" + "-" * 60)

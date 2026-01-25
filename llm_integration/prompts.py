@@ -71,61 +71,48 @@ Signature: def name(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
     # progress = k / horizon  (0.0 at start, 1.0 at end)
     return (constraint_expr, lower_bound, upper_bound)  # CasADi MX expressions
 
-PRINCIPLE 1: NEVER violate constraints at t=0
-- At k=0, the robot is at its starting state (height={initial_height:.4f}m)
-- If you set upper_bound < {initial_height:.4f} at k=0, optimization FAILS IMMEDIATELY
-- Always use bounds that INCLUDE the starting state at the first timestep
-- Then gradually tighten constraints over time using progress = k/horizon
+PRINCIPLE 1: Bounds must be CONTINUOUS across timesteps
+- The optimizer needs a SMOOTH path from start to goal
+- NEVER use if/else branches that create sudden jumps in bounds
+- BAD: if progress < 0.5: lower = 0.1 else: lower = 0.3  (jumps from 0.1 to 0.3!)
+- GOOD: lower = 0.1 + progress * 0.2  (smoothly goes from 0.1 to 0.3)
+- If lower_bound at timestep k+1 > upper_bound at timestep k, optimization FAILS
 
-PRINCIPLE 2: Constraints define FEASIBLE REGIONS, not exact trajectories
-- The optimizer finds the EASIEST path within your constraints
-- If starting state is already valid, optimizer may do nothing
-- To FORCE motion: make constraints that EXCLUDE the starting state AFTER t=0
+PRINCIPLE 2: Start from the initial state
+- Robot starts at height={initial_height:.4f}m, all angles=0, all velocities=0
+- At k=0, bounds MUST include these values or optimization fails immediately
+- Use formulas that evaluate to valid bounds at progress=0:
+  - lower = 0.05 (below initial height)
+  - upper = {initial_height:.4f} + 0.3 - progress * 0.2 (starts above, decreases smoothly)
 
-PRINCIPLE 3: Start conservative, fail fast
-- Loose constraints -> optimization succeeds -> check if motion happened
-- Tight constraints -> optimization fails -> you learn nothing
-- Better to succeed with weak motion than fail completely
+PRINCIPLE 3: Use SMOOTH RAMPS, not step functions
+- Express bounds as linear functions of progress: bound = start_value + progress * change
+- For jump: height_lower = 0.05 + progress * 0.3 (rises from 0.05 to 0.35)
+- For rotation: yaw_lower = progress * target_yaw - tolerance
+- The optimizer will find the optimal trajectory within these smooth bounds
 
 PRINCIPLE 4: One-sided bounds are more robust
 - Use (lower, cs.inf) or (-cs.inf, upper) when possible
-- Tight bands (lower, upper) often cause infeasibility
-- Let the optimizer find the optimal value within your region
+- Only constrain what you NEED - don't over-constrain
+- Example: to force rotation, constrain final yaw only: if progress > 0.9: yaw_lower = 2.5
 
-PRINCIPLE 5: Time-varying constraints guide motion
-- Use progress = k/horizon for gradual changes
-- Example for lowering: if k == 0: upper = {initial_height:.4f} + 0.01 else: upper = {initial_height:.4f} - progress * drop
-- Smooth ramps are more feasible than sudden jumps
+PRINCIPLE 5: Constrain the GOAL, not the path
+- Don't try to script the entire trajectory with tight bounds at every timestep
+- Instead: loose bounds throughout, tight bounds only at the END
+- Example for 180° turn: yaw_lower = progress * 3.0 - 1.0, yaw_upper = cs.inf
+  (At progress=0: yaw > -1.0, at progress=1: yaw > 2.0, optimizer finds the path)
 
 == AVAILABLE FUNCTIONS ==
 vertcat, horzcat, mtimes, sin, cos, tan, sqrt, exp, log, fabs, fmax, fmin,
 sum1, norm_2, atan2, asin, acos, tanh, MX, DM, cs.inf, pi, np
 
-== EXAMPLE STRUCTURE ==
+== BOUND FORMULAS ==
 
-mpc.set_task_name("task")
-mpc.set_duration(1.5)
-mpc.set_time_step(0.02)
-phases = [("phase1", 0.3, [1,1,1,1]), ("phase2", 0.9, [0,0,0,0]), ("phase3", 0.3, [1,1,1,1])]
-contact_seq = mpc._create_phase_sequence(phases)
-mpc.set_contact_sequence(contact_seq)
+Use linear interpolation for smooth bounds:
+  bound = start_value + progress * (end_value - start_value)
 
-def task_constraints(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
-    progress = k / horizon
-    height = x_k[2]
-
-    # IMPORTANT: Don't violate at t=0! Start with loose bounds.
-    if k == 0:
-        lower = 0.05
-        upper = 0.5  # Above starting height - always feasible
-    else:
-        # Now gradually tighten to force motion
-        lower = 0.05
-        upper = {initial_height:.4f} + 0.01 - progress * 0.1  # Gradually lower ceiling
-
-    return (height, lower, upper)
-
-mpc.add_constraint(task_constraints)
+At progress=0 (start): bound = start_value (must include initial state!)
+At progress=1 (end): bound = end_value (enforces goal)
 
 == UNDERSTANDING FEEDBACK ==
 

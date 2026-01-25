@@ -54,8 +54,8 @@ Examples:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=5,
-        help="Maximum number of LLM iterations (default: 5)",
+        default=20,
+        help="Maximum number of LLM iterations (default: 20)",
     )
 
     parser.add_argument(

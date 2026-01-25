@@ -53,6 +53,11 @@ class LLMTaskMPC:
         self.mpc: QuadrupedMPCOpti | None = None
         self.is_configured = False
 
+        # Solver info for feedback (populated after solve)
+        self.solver_iterations: int | None = None
+        self.last_error: str | None = None
+        self.infeasibility_info: str | None = None
+
     def configure_from_llm(self, llm_config_code: str) -> tuple[bool, str]:
         """
         Configure the MPC using LLM-generated configuration code.
@@ -297,7 +302,32 @@ class LLMTaskMPC:
         # Use the LLM-specified contact sequence
         if self.contact_sequence is None:
             raise ValueError("Contact sequence not set. Configure MPC first.")
-        return self.mpc.solve_trajectory(initial_state, ref, self.contact_sequence)
+
+        # Reset solver info before solving
+        self.solver_iterations = None
+        self.last_error = None
+        self.infeasibility_info = None
+
+        try:
+            result = self.mpc.solve_trajectory(
+                initial_state, ref, self.contact_sequence
+            )
+
+            # Try to extract solver stats from the MPC/opti instance
+            if hasattr(self.mpc, "opti") and self.mpc.opti is not None:
+                try:
+                    stats = self.mpc.opti.stats()
+                    self.solver_iterations = stats.get("iter_count", None)
+                    if result[3] != 0:  # Non-zero status means failure
+                        self.last_error = stats.get("return_status", "Unknown error")
+                except Exception:
+                    pass  # Stats not available
+
+            return result
+
+        except Exception as e:
+            self.last_error = str(e)
+            raise
 
     def get_configuration_summary(self) -> dict[str, Any]:
         """Get a summary of the current LLM configuration."""
