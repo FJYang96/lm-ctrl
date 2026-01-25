@@ -119,7 +119,11 @@ Use these physical limits to create realistic constraints."""
             Repair prompt string
         """
         return prompts.create_repair_prompt(
-            command, failed_code, error_message, attempt_number
+            command,
+            failed_code,
+            error_message,
+            attempt_number,
+            initial_height=self.robot_details["initial_height"],
         )
 
     def analyze_trajectory(

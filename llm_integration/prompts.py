@@ -74,45 +74,43 @@ Signature: def name(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
 PRINCIPLE 1: Bounds must be CONTINUOUS across timesteps
 - The optimizer needs a SMOOTH path from start to goal
 - NEVER use if/else branches that create sudden jumps in bounds
-- BAD: if progress < 0.5: lower = 0.1 else: lower = 0.3  (jumps from 0.1 to 0.3!)
-- GOOD: lower = 0.1 + progress * 0.2  (smoothly goes from 0.1 to 0.3)
 - If lower_bound at timestep k+1 > upper_bound at timestep k, optimization FAILS
 
 PRINCIPLE 2: Start from the initial state
 - Robot starts at height={initial_height:.4f}m, all angles=0, all velocities=0
 - At k=0, bounds MUST include these values or optimization fails immediately
-- Use formulas that evaluate to valid bounds at progress=0:
-  - lower = 0.05 (below initial height)
-  - upper = {initial_height:.4f} + 0.3 - progress * 0.2 (starts above, decreases smoothly)
+- Use formulas that evaluate to valid bounds at progress=0
 
 PRINCIPLE 3: Use SMOOTH RAMPS, not step functions
 - Express bounds as linear functions of progress: bound = start_value + progress * change
-- For jump: height_lower = 0.05 + progress * 0.3 (rises from 0.05 to 0.35)
-- For rotation: yaw_lower = progress * target_yaw - tolerance
 - The optimizer will find the optimal trajectory within these smooth bounds
 
 PRINCIPLE 4: One-sided bounds are more robust
 - Use (lower, cs.inf) or (-cs.inf, upper) when possible
 - Only constrain what you NEED - don't over-constrain
-- Example: to force rotation, constrain final yaw only: if progress > 0.9: yaw_lower = 2.5
 
 PRINCIPLE 5: Constrain the GOAL, not the path
 - Don't try to script the entire trajectory with tight bounds at every timestep
 - Instead: loose bounds throughout, tight bounds only at the END
-- Example for 180° turn: yaw_lower = progress * 3.0 - 1.0, yaw_upper = cs.inf
-  (At progress=0: yaw > -1.0, at progress=1: yaw > 2.0, optimizer finds the path)
+
+PRINCIPLE 6: Constraints define FEASIBLE REGIONS, not exact trajectories
+- The optimizer finds the EASIEST path within your constraints
+- If starting state is already valid, optimizer may do nothing
+- To FORCE motion: make constraints that EXCLUDE the starting state (after t=0)
+
+PRINCIPLE 7: Start conservative, fail fast
+- Loose constraints -> optimization succeeds -> check if motion happened
+- Tight constraints -> optimization fails -> you learn nothing
+- Better to succeed with weak motion than fail completely
+
+PRINCIPLE 8: Understand what you're actually constraining
+- A lower bound applies at EVERY timestep, including the start
+- Robot starts at {initial_height:.4f}m - if your lower bound exceeds this at t=0, optimization fails
+- Think about the ENTIRE trajectory, not just the goal state
 
 == AVAILABLE FUNCTIONS ==
 vertcat, horzcat, mtimes, sin, cos, tan, sqrt, exp, log, fabs, fmax, fmin,
 sum1, norm_2, atan2, asin, acos, tanh, MX, DM, cs.inf, pi, np
-
-== BOUND FORMULAS ==
-
-Use linear interpolation for smooth bounds:
-  bound = start_value + progress * (end_value - start_value)
-
-At progress=0 (start): bound = start_value (must include initial state!)
-At progress=1 (end): bound = end_value (enforces goal)
 
 == UNDERSTANDING FEEDBACK ==
 
@@ -162,7 +160,11 @@ Return ONLY Python code."""
 
 
 def create_repair_prompt(
-    command: str, failed_code: str, error_message: str, attempt_number: int
+    command: str,
+    failed_code: str,
+    error_message: str,
+    attempt_number: int,
+    initial_height: float = 0.2117,
 ) -> str:
     """
     Create a prompt to ask the LLM to fix failed MPC configuration code.
@@ -172,6 +174,7 @@ def create_repair_prompt(
         failed_code: The code that failed
         error_message: Error message from SafeExecutor/MPC
         attempt_number: Which attempt this is (1-10)
+        initial_height: Robot initial COM height in meters
 
     Returns:
         Repair prompt string
@@ -202,6 +205,6 @@ Other requirements:
 - Constraint function must have 7 parameters: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)
 - Must return exactly 3 values: (constraint_expr, lower_bound, upper_bound)
 - All return values must be CasADi MX expressions (use vertcat for multiple constraints)
-- CRITICAL: At k=0, bounds must INCLUDE the starting state (height=0.2117m). Constraints that violate t=0 cause immediate failure!
+- CRITICAL: At k=0, bounds must INCLUDE the starting state (height={initial_height:.4f}m). Constraints that violate t=0 cause immediate failure!
 
 Return ONLY corrected Python code."""
