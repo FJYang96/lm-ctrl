@@ -114,21 +114,149 @@ sum1, norm_2, atan2, asin, acos, tanh, MX, DM, cs.inf, pi, np
 
 == UNDERSTANDING FEEDBACK ==
 
-You will receive rich feedback after each iteration:
+You will receive detailed feedback after each iteration. Here's what each section means and how to use it:
 
-1. VISUAL FRAMES: Comparing PLANNED vs SIMULATED trajectory frames.
+--- MPC CONFIGURATION ---
+Shows your current setup:
+- Task name, duration, time step, horizon (number of timesteps)
+- Number of constraints registered
+- Contact phases with timing and patterns ([1,1,1,1]=grounded, [0,0,0,0]=flight)
+USE IT: Verify your contact sequence matches the intended motion phases.
 
-2. TASK PROGRESS TABLE: Shows % completion toward each goal criterion.
-   - If a criterion is at 25%, your constraint for that is too weak.
-   - If a criterion is at 100%, that aspect is working - focus on others.
+--- OPTIMIZATION STATUS ---
+- SUCCESS: Solver found a feasible trajectory within your constraints
+- FAILED: No feasible trajectory exists within your constraints
+  - "Infeasibility": Constraints are mutually exclusive or violate physics
+  - "Max iterations": Problem is too hard; simplify constraints
+  - Check if constraints at k=0 allow the initial state (height={initial_height:.4f}m)
+USE IT: If failed, LOOSEN constraints or check for constraint conflicts. Start simpler.
 
-3. PHASE ANALYSIS: Breakdown by motion phase (stance, flight, landing).
+--- SIMULATION STATUS ---
+- SUCCESS with tracking error: How well the robot followed the planned trajectory
+  - tracking_error < 0.1: Excellent tracking
+  - tracking_error 0.1-0.3: Acceptable
+  - tracking_error > 0.3: Planned trajectory may be unrealistic
+- FAILED: Robot fell, diverged, or hit physical limits
+USE IT: High tracking error means the planned trajectory is hard to execute physically.
 
-4. GROUND REACTION FORCES: Takeoff GRF should be 2-3x body weight for good jumps.
+--- TASK PROGRESS TABLE ---
+Shows % completion for each goal criterion (e.g., height, rotation):
+- 0-25%: Constraint is too weak or wrong direction
+- 25-75%: Constraint is working but needs to be stronger
+- 75-99%: Almost there, minor tuning needed
+- 100%: This criterion is satisfied, focus on others
+USE IT: Focus on the LOWEST percentage criterion first. Strengthen that constraint.
 
-5. ACTUATOR STATUS: Shows if robot is at physical limits.
+--- TRAJECTORY METRICS ---
 
-6. VS PREVIOUS ITERATION: Shows what improved or regressed.
+POSITION:
+- initial/max/min/final height: Track vertical motion through the trajectory
+- height_gain = max_height - initial_height (how high the robot jumped)
+  - Good jump: 0.2-0.4m gain
+  - Weak jump: <0.1m gain (strengthen upward velocity or height constraints)
+- X/Y displacement: Horizontal drift (should be ~0 for pure vertical motions)
+- total_distance: Path length traveled by COM
+USE IT: If height_gain is low, robot isn't jumping high enough. Add stronger vertical velocity constraints during takeoff.
+
+VELOCITY:
+- max_com_velocity: Peak speed achieved (m/s)
+  - Normal motion: 1-3 m/s
+  - Aggressive motion: 3-5 m/s
+- final_com_velocity: Speed at end (should be ~0 for stable landing)
+- max_angular_velocity: Peak rotation speed (rad/s)
+  - Backflip needs ~6-10 rad/s pitch rate
+  - 180 degree turn needs ~3-6 rad/s yaw rate
+- max_acceleration: Peak acceleration (m/s squared)
+USE IT: If rotation is too slow, robot doesn't have enough angular momentum. Increase angular velocity constraints.
+
+ORIENTATION (in radians AND degrees):
+- roll: Rotation around X-axis (side-to-side tilt)
+  - max_roll: Peak roll angle reached
+  - total_roll_change: Final - initial roll
+- pitch: Rotation around Y-axis (forward/backward tilt)
+  - Backflip needs total_pitch_change of about 2*pi (360 degrees) or -2*pi
+  - Front flip: positive pitch change
+  - Back flip: negative pitch change
+- yaw: Rotation around Z-axis (turning left/right)
+  - 180 degree turn needs max_yaw of about pi (3.14 rad)
+  - 90 degree turn needs max_yaw of about pi/2 (1.57 rad)
+USE IT: Compare achieved rotation to target. If total_pitch_change is 1.5 rad but you need 6.28 rad (360 degrees), your pitch constraint is ~4x too weak.
+
+TIMING:
+- duration: Total trajectory time
+- flight_duration: Time with all feet off ground
+  - Good jump: 0.3-0.6s flight
+  - Flip needs: 0.4-0.8s flight (enough time to rotate)
+- flight_start_time: When takeoff occurred
+USE IT: If flight_duration is too short, robot can't complete rotations. Extend flight phase in contact sequence.
+
+JOINTS:
+- max_joint_range: Largest joint motion (rad)
+- avg_joint_range: Average joint motion
+USE IT: If joints barely move, the motion is too conservative.
+
+--- PHASE ANALYSIS ---
+
+PRE-FLIGHT STANCE:
+- duration: Time spent preparing to jump
+- crouch_depth: How much the robot compressed (cm) - deeper = more power
+  - Good crouch: 3-6cm
+- takeoff_velocity: Vertical velocity at liftoff (m/s)
+  - Good takeoff: 1.5-2.5 m/s upward
+  - Weak takeoff: <1.0 m/s (won't get enough height)
+- peak_GRF: Ground reaction force during push-off (Newtons)
+  - Strong takeoff: 2-3x body weight
+USE IT: If takeoff_velocity is low, robot isn't pushing hard enough. Strengthen vertical velocity constraints.
+
+FLIGHT:
+- duration: Time airborne
+- peak_height: Maximum COM height reached
+- roll/pitch/yaw_rate: Average angular velocity during flight (rad/s)
+  - Backflip needs avg_pitch_rate of about 8-12 rad/s
+- roll/pitch/yaw_change: Total rotation during flight
+USE IT: This is where rotations happen. If pitch_change is low but pitch_rate is high, flight is too short.
+
+LANDING:
+- duration: Time in landing phase
+- impact_velocity: Vertical speed at touchdown (m/s)
+  - Safe landing: <1.5 m/s
+  - Hard landing: >2.0 m/s (might fail simulation)
+- impact_GRF: Ground reaction force at landing
+USE IT: High impact_velocity means robot is coming down too fast. May need to constrain final velocity.
+
+--- GROUND REACTION FORCES ---
+- max_total_GRF: Peak force (Newtons)
+- max_GRF_ratio: Peak force as multiple of body weight
+  - Normal standing: ~1x body weight
+  - Jump takeoff: 2-3x body weight
+  - Hard landing: 3-5x body weight
+- GRF_at_takeoff: Force right before liftoff
+- GRF_at_landing: Force at touchdown
+- left_right_asymmetry: Balance between legs (%)
+  - <10%: Symmetric, good
+  - >20%: Unbalanced, may cause rotation issues
+USE IT: If takeoff GRF is only 1x body weight, robot isn't pushing hard enough to jump.
+
+--- ACTUATOR STATUS ---
+- torque_utilization: % of motor torque limit used
+  - <70%: Robot has headroom, can push harder
+  - 70-90%: Good utilization
+  - >90%: At physical limits, can't do more
+- torque_clipping: % of time motors were saturated
+  - >5%: Motors are limiting performance
+- velocity_utilization: % of joint speed limit used
+- saturated_joints: Which joints hit limits most often
+USE IT: If utilization is <50%, robot could move more aggressively. If >90%, you're asking for more than physically possible.
+
+--- VS PREVIOUS ITERATION ---
+Shows changes from last iteration with arrows (up=improved, down=regressed, same=no change):
+- height_gain: Did the robot jump higher or lower?
+- pitch/yaw/roll rotation: Did rotation increase or decrease?
+USE IT: If a metric regressed, your last change made things worse. Revert or try different approach.
+
+--- VISUAL FRAMES ---
+Side-by-side comparison of PLANNED trajectory (from optimizer) vs SIMULATED trajectory (physics simulation).
+USE IT: If they differ significantly, the planned trajectory is unrealistic.
 
 == TASK ==
 Generate MPC configuration and constraints for the requested behavior.
