@@ -19,6 +19,7 @@ from .constraint_generator import ConstraintGenerator
 from .enhanced_feedback import (
     create_visual_feedback,
     generate_enhanced_feedback,
+    generate_failure_feedback,
 )
 from .llm_client import LLMClient
 from .llm_mpc import LLMTaskMPC
@@ -785,10 +786,42 @@ class FeedbackPipeline:
     ) -> str:
         """Create enhanced feedback context for the next LLM iteration.
 
-        Raises:
-            ValueError: If required feedback data is missing or invalid.
+        If optimization failed, generates failure-specific feedback instead of raising.
         """
-        # Extract trajectory data - these are REQUIRED
+        # Check if optimization failed - generate failure feedback instead
+        optimization_converged = optimization_result.get("converged", False)
+        optimization_success = optimization_result.get("success", False)
+
+        if not optimization_converged or not optimization_success:
+            # Get constraint violations from MPC for detailed failure feedback
+            constraint_violations = {}
+            if self.current_task_mpc and self.current_task_mpc.mpc:
+                try:
+                    constraint_violations = (
+                        self.current_task_mpc.mpc.get_constraint_violations()
+                    )
+                except Exception as e:
+                    constraint_violations = {
+                        "summary": [f"Could not analyze violations: {e}"]
+                    }
+
+            # Get whatever trajectory data we have (may be from debug values)
+            state_traj = optimization_result.get("state_trajectory")
+            trajectory_analysis = optimization_result.get("trajectory_analysis", {})
+            optimization_metrics = optimization_result.get("optimization_metrics", {})
+
+            print("📝 Generating failure feedback for LLM...")
+            return generate_failure_feedback(
+                iteration=iteration,
+                command=command,
+                optimization_metrics=optimization_metrics,
+                constraint_violations=constraint_violations,
+                trajectory_analysis=trajectory_analysis,
+                previous_constraints=constraint_code,
+                state_traj=state_traj,
+            )
+
+        # Optimization succeeded - generate normal enhanced feedback
         trajectory_analysis = optimization_result.get("trajectory_analysis")
         if trajectory_analysis is None:
             raise ValueError(
@@ -801,7 +834,7 @@ class FeedbackPipeline:
                 "Enhanced feedback requires optimization_metrics but it was not provided"
             )
 
-        # Get trajectory data for enhanced analysis - REQUIRED
+        # Get trajectory data for enhanced analysis - REQUIRED for success case
         state_traj = optimization_result.get("state_trajectory")
         if state_traj is None or (hasattr(state_traj, "size") and state_traj.size == 0):
             raise ValueError(
@@ -831,13 +864,13 @@ class FeedbackPipeline:
                 "Enhanced feedback requires contact_sequence from LLM MPC but it was not configured"
             )
 
-        # Simulation results - REQUIRED
+        # Simulation results - REQUIRED for success case
         if simulation_result is None:
             raise ValueError(
                 "Enhanced feedback requires simulation_result but it was not provided"
             )
 
-        # Generate enhanced feedback - no fallback
+        # Generate enhanced feedback
         return generate_enhanced_feedback(
             iteration=iteration,
             command=command,

@@ -44,6 +44,18 @@ class QuadrupedMPCOpti:
         )
         self.landing_start = self.pre_flight_steps + self.flight_steps
 
+        # Terminal constraint bounds (used in both constraint setup and violation checking)
+        self.terminal_vz_bounds = (
+            -0.5,
+            0.3,
+        )  # Vertical velocity: not falling too fast, not rising
+        self.terminal_vx_bounds = (-0.5, 0.5)  # Horizontal velocity x
+        self.terminal_vy_bounds = (-0.3, 0.3)  # Horizontal velocity y
+        self.terminal_omega_bounds = (-0.5, 0.5)  # Angular velocities
+        self.terminal_roll_bounds = (-0.2, 0.2)  # Roll angle
+        self.terminal_pitch_bounds = (-0.2, 0.2)  # Pitch angle
+        self.height_bounds = (0.05, 1.0)  # Sanity check for height
+
         # Initialize the Opti optimization environment
         self.opti = cs.Opti()
 
@@ -249,32 +261,31 @@ class QuadrupedMPCOpti:
         x_terminal = self.X[:, self.horizon]
 
         # 1. Terminal vertical velocity should be small (soft landing)
-        # Allow a small downward velocity for landing absorption
         terminal_vz = x_terminal[5]  # z-component of linear velocity
-        self.opti.subject_to(terminal_vz >= -0.5)  # Not falling too fast
-        self.opti.subject_to(terminal_vz <= 0.3)  # Not rising
+        self.opti.subject_to(terminal_vz >= self.terminal_vz_bounds[0])
+        self.opti.subject_to(terminal_vz <= self.terminal_vz_bounds[1])
 
         # 2. Terminal horizontal velocities should be small (stable)
         terminal_vx = x_terminal[3]
         terminal_vy = x_terminal[4]
-        self.opti.subject_to(terminal_vx >= -0.5)
-        self.opti.subject_to(terminal_vx <= 0.5)
-        self.opti.subject_to(terminal_vy >= -0.3)
-        self.opti.subject_to(terminal_vy <= 0.3)
+        self.opti.subject_to(terminal_vx >= self.terminal_vx_bounds[0])
+        self.opti.subject_to(terminal_vx <= self.terminal_vx_bounds[1])
+        self.opti.subject_to(terminal_vy >= self.terminal_vy_bounds[0])
+        self.opti.subject_to(terminal_vy <= self.terminal_vy_bounds[1])
 
         # 3. Terminal angular velocities should be small (stable orientation)
         terminal_omega = x_terminal[9:12]
         for i in range(3):
-            self.opti.subject_to(terminal_omega[i] >= -0.5)
-            self.opti.subject_to(terminal_omega[i] <= 0.5)
+            self.opti.subject_to(terminal_omega[i] >= self.terminal_omega_bounds[0])
+            self.opti.subject_to(terminal_omega[i] <= self.terminal_omega_bounds[1])
 
         # 4. Terminal roll and pitch should be small (upright landing)
         terminal_roll = x_terminal[6]
         terminal_pitch = x_terminal[7]
-        self.opti.subject_to(terminal_roll >= -0.2)
-        self.opti.subject_to(terminal_roll <= 0.2)
-        self.opti.subject_to(terminal_pitch >= -0.2)
-        self.opti.subject_to(terminal_pitch <= 0.2)
+        self.opti.subject_to(terminal_roll >= self.terminal_roll_bounds[0])
+        self.opti.subject_to(terminal_roll <= self.terminal_roll_bounds[1])
+        self.opti.subject_to(terminal_pitch >= self.terminal_pitch_bounds[0])
+        self.opti.subject_to(terminal_pitch <= self.terminal_pitch_bounds[1])
 
     def _setup_solver(self) -> None:
         """Setup the solver options."""
@@ -411,10 +422,121 @@ class QuadrupedMPCOpti:
 
         except Exception as e:
             print(f"Optimization failed: {e}")
-            # Return empty trajectories on failure
-            state_traj = np.zeros((self.horizon + 1, self.states_dim))
-            joint_vel_traj = np.zeros((self.horizon, 12))
-            grf_traj = np.zeros((self.horizon, 12))
+            # Extract the infeasible trajectory using debug values
+            # This gives us the solver's last iterate, useful for debugging
+            try:
+                X_debug = self.opti.debug.value(self.X)
+                U_debug = self.opti.debug.value(self.U)
+                state_traj = X_debug.T  # Shape: (horizon+1, states_dim)
+                joint_vel_traj = U_debug[0:12, :].T  # Shape: (horizon, 12)
+                grf_traj = U_debug[12:24, :].T  # Shape: (horizon, 12)
+                print("📊 Extracted debug trajectory from failed optimization")
+            except Exception:
+                # Fall back to zeros if debug values not available
+                state_traj = np.zeros((self.horizon + 1, self.states_dim))
+                joint_vel_traj = np.zeros((self.horizon, 12))
+                grf_traj = np.zeros((self.horizon, 12))
             status = 1  # Failure
 
         return state_traj, grf_traj, joint_vel_traj, status
+
+    def get_constraint_violations(self) -> dict[str, Any]:
+        """
+        Analyze constraint violations at the current (possibly infeasible) iterate.
+
+        Returns a dictionary with constraint violation information useful for debugging.
+        Uses the same bounds defined for terminal constraints.
+        """
+        violations: dict[str, list[str]] = {
+            "terminal_constraints": [],
+            "state_bounds": [],
+            "summary": [],
+        }
+
+        try:
+            # Get debug values (works even when solve failed)
+            X_debug = self.opti.debug.value(self.X)
+
+            # Check terminal state constraints
+            x_terminal = X_debug[:, -1]
+
+            # Terminal velocity checks (using class attributes)
+            vz = x_terminal[5]
+            if vz < self.terminal_vz_bounds[0]:
+                violations["terminal_constraints"].append(
+                    f"Terminal vz={vz:.3f} < {self.terminal_vz_bounds[0]} (falling too fast)"
+                )
+            if vz > self.terminal_vz_bounds[1]:
+                violations["terminal_constraints"].append(
+                    f"Terminal vz={vz:.3f} > {self.terminal_vz_bounds[1]} (still rising at end)"
+                )
+
+            vx, vy = x_terminal[3], x_terminal[4]
+            if vx < self.terminal_vx_bounds[0] or vx > self.terminal_vx_bounds[1]:
+                violations["terminal_constraints"].append(
+                    f"Terminal vx={vx:.3f} outside [{self.terminal_vx_bounds[0]}, {self.terminal_vx_bounds[1]}]"
+                )
+            if vy < self.terminal_vy_bounds[0] or vy > self.terminal_vy_bounds[1]:
+                violations["terminal_constraints"].append(
+                    f"Terminal vy={vy:.3f} outside [{self.terminal_vy_bounds[0]}, {self.terminal_vy_bounds[1]}]"
+                )
+
+            # Terminal orientation checks (using class attributes)
+            roll, pitch = x_terminal[6], x_terminal[7]
+            if (
+                roll < self.terminal_roll_bounds[0]
+                or roll > self.terminal_roll_bounds[1]
+            ):
+                violations["terminal_constraints"].append(
+                    f"Terminal roll={roll:.3f}rad outside [{self.terminal_roll_bounds[0]}, {self.terminal_roll_bounds[1]}]"
+                )
+            if (
+                pitch < self.terminal_pitch_bounds[0]
+                or pitch > self.terminal_pitch_bounds[1]
+            ):
+                violations["terminal_constraints"].append(
+                    f"Terminal pitch={pitch:.3f}rad outside [{self.terminal_pitch_bounds[0]}, {self.terminal_pitch_bounds[1]}]"
+                )
+
+            # Terminal angular velocity checks (using class attributes)
+            omega = x_terminal[9:12]
+            for i, name in enumerate(["omega_x", "omega_y", "omega_z"]):
+                if (
+                    omega[i] < self.terminal_omega_bounds[0]
+                    or omega[i] > self.terminal_omega_bounds[1]
+                ):
+                    violations["terminal_constraints"].append(
+                        f"Terminal {name}={omega[i]:.3f} outside [{self.terminal_omega_bounds[0]}, {self.terminal_omega_bounds[1]}]"
+                    )
+
+            # Check for state bounds violations along trajectory (using class attributes)
+            for k in range(X_debug.shape[1]):
+                height = X_debug[2, k]
+                if height < self.height_bounds[0]:
+                    violations["state_bounds"].append(
+                        f"Step {k}: height={height:.3f}m < {self.height_bounds[0]}m (robot underground!)"
+                    )
+                if height > self.height_bounds[1]:
+                    violations["state_bounds"].append(
+                        f"Step {k}: height={height:.3f}m > {self.height_bounds[1]}m (unrealistically high)"
+                    )
+
+            # Generate summary
+            if violations["terminal_constraints"]:
+                violations["summary"].append(
+                    f"Terminal constraint issues: {len(violations['terminal_constraints'])}"
+                )
+            if violations["state_bounds"]:
+                violations["summary"].append(
+                    f"State bound violations: {len(violations['state_bounds'])}"
+                )
+
+            if not violations["summary"]:
+                violations["summary"].append(
+                    "No obvious constraint violations detected - may be LLM constraint issue"
+                )
+
+        except Exception as e:
+            violations["summary"].append(f"Could not analyze violations: {e}")
+
+        return violations
