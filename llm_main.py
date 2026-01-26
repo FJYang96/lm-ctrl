@@ -103,7 +103,7 @@ Examples:
         # Import and run pipeline
         print("Loading pipeline components...")
         import config
-        from llm_integration.feedback_pipeline import FeedbackPipeline
+        from llm_integration import FeedbackPipeline
 
         # Update config for the selected mode
         config.CONSTRAINT_MODE = args.config
