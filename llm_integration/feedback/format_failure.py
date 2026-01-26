@@ -4,6 +4,8 @@ from typing import Any
 
 import numpy as np
 
+from .format_metrics import format_terminal_state_section
+
 
 def generate_failure_feedback(
     iteration: int,
@@ -128,6 +130,9 @@ def generate_failure_feedback(
             if abs(trajectory_analysis.get("max_yaw", 0)) > 0.5:
                 lines.append("\n  ℹ️ Solver was attempting significant yaw rotation")
 
+            # Terminal state section (for constraint tuning)
+            lines.extend(format_terminal_state_section(trajectory_analysis))
+
     # Common failure patterns and fixes
     lines.append("\n" + "-" * 60)
     lines.append("LIKELY CAUSES & SUGGESTED FIXES")
@@ -137,14 +142,11 @@ def generate_failure_feedback(
     violations_text = str(constraint_violations)
 
     if "terminal" in violations_text.lower() or "landing" in violations_text.lower():
-        lines.append("\n🔧 TERMINAL STATE CONFLICT:")
-        lines.append("  Your constraints may conflict with landing requirements.")
-        lines.append("  The robot MUST land with:")
-        lines.append("    - vz in [-0.5, 0.3] m/s (not falling too fast)")
-        lines.append("    - roll, pitch in [-0.2, 0.2] rad (upright)")
-        lines.append("    - angular velocities in [-0.5, 0.5] rad/s")
-        lines.append("  FIX: Relax your constraints near the end of the trajectory")
-        lines.append("       or only apply constraints during flight phase.")
+        lines.append("\n🔧 TERMINAL STATE ISSUE:")
+        lines.append("  There may be an issue with your terminal constraints.")
+        lines.append("  Remember: YOU specify what the terminal state should be.")
+        lines.append("  FIX: Check that your terminal constraints match the task goal")
+        lines.append("       and that they're physically achievable.")
 
     if "underground" in violations_text.lower() or "height" in violations_text.lower():
         lines.append("\n🔧 HEIGHT CONSTRAINT CONFLICT:")
@@ -181,6 +183,21 @@ def generate_failure_feedback(
     lines.append("4. LOOSEN BOUNDS: If in doubt, make bounds 2x wider")
     lines.append("5. FINAL STATE ONLY: Consider constraining only the final state")
     lines.append("   Example: if k == horizon - 1:  # Only at the end")
+
+    # Critical simplification warning
+    lines.append("\n" + "!" * 60)
+    lines.append("⚠️  CRITICAL: YOUR NEXT ITERATION MUST BE SIMPLER")
+    lines.append("!" * 60)
+    lines.append("The solver FAILED. This means your constraints define an")
+    lines.append("INFEASIBLE or NEARLY-INFEASIBLE region. You MUST:")
+    lines.append("")
+    lines.append("  1. REMOVE at least half your constraints")
+    lines.append("  2. DOUBLE the width of remaining bounds")
+    lines.append("  3. Try a FUNDAMENTALLY DIFFERENT approach")
+    lines.append("")
+    lines.append("DO NOT make small tweaks to the same approach.")
+    lines.append("DO NOT tighten any bounds.")
+    lines.append("DO NOT add new constraints.")
 
     # Initial state reminder
     lines.append("\n" + "-" * 60)

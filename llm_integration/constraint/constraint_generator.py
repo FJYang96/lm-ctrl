@@ -181,6 +181,14 @@ Use these physical limits to create realistic constraints."""
                     np.max(np.linalg.norm(angular_velocities, axis=1))
                 ),
                 "final_com_velocity": float(np.linalg.norm(com_velocities[-1, :])),
+                # Terminal velocity components (for terminal constraint tuning)
+                "final_vx": float(com_velocities[-1, 0]),
+                "final_vy": float(com_velocities[-1, 1]),
+                "final_vz": float(com_velocities[-1, 2]),
+                # Terminal angular velocity components
+                "final_wx": float(angular_velocities[-1, 0]),
+                "final_wy": float(angular_velocities[-1, 1]),
+                "final_wz": float(angular_velocities[-1, 2]),
                 # Displacement analysis
                 "com_displacement_x": float(com_positions[-1, 0] - com_positions[0, 0]),
                 "com_displacement_y": float(com_positions[-1, 1] - com_positions[0, 1]),

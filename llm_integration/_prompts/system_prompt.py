@@ -89,9 +89,10 @@ PRINCIPLE 4: One-sided bounds are more robust
 - Use (lower, cs.inf) or (-cs.inf, upper) when possible
 - Only constrain what you NEED - don't over-constrain
 
-PRINCIPLE 5: Constrain the GOAL, not the path
-- Don't try to script the entire trajectory with tight bounds at every timestep
-- Instead: loose bounds throughout, tight bounds only at the END
+PRINCIPLE 5: Constrain RATES for dynamic motions, not position trajectories
+- Velocity/rate constraints let the optimizer find natural motion paths
+- Position trajectory constraints often conflict with dynamics
+- Define WHERE you want to end up, not HOW to get there
 
 PRINCIPLE 6: Constraints define FEASIBLE REGIONS, not exact trajectories
 - The optimizer finds the EASIEST path within your constraints
@@ -107,6 +108,67 @@ PRINCIPLE 8: Understand what you're actually constraining
 - A lower bound applies at EVERY timestep, including the start
 - Robot starts at {initial_height:.4f}m - if your lower bound exceeds this at t=0, optimization fails
 - Think about the ENTIRE trajectory, not just the goal state
+
+PRINCIPLE 9: YOU must specify terminal constraints
+- The base MPC does NOT enforce any terminal state requirements
+- For safe landing, constrain the final state (when k == horizon or progress == 1.0):
+  - Terminal velocities (vx, vy, vz) should be small for stable landing
+  - Terminal angular velocities (wx, wy, wz) should be small
+  - Terminal orientation depends on the task:
+- Without terminal constraints, the robot may land in unstable configurations
+
+== CONSTRAINT ANTI-PATTERNS (COMMON FAILURES) ==
+
+1. DON'T constrain both position AND velocity of the same DOF
+   - Creates conflicting requirements the solver cannot satisfy
+   - Pick ONE per DOF: either position bounds OR velocity bounds
+
+2. DON'T use if/else that creates discontinuous bounds
+   - Solver needs smooth feasible regions
+   - Use linear ramps: bound = start + progress * change
+
+3. DON'T tighten constraints after failures
+   - Constraint violations mean the feasible region is TOO SMALL
+   - Each failed iteration should LOOSEN bounds, not tighten
+
+4. DON'T add more constraints to fix failures
+   - More constraints = smaller feasible region = harder problem
+   - If failing with N constraints, try N-2 constraints
+
+5. DON'T script the trajectory
+   - You define WHERE the robot should end up, not HOW it gets there
+   - The optimizer finds the optimal path within your bounds
+
+== PHYSICS FACTS ==
+
+Angular motion:
+- Full rotation = 2π radians ≈ 6.28 rad
+- rotation_angle = angular_velocity × time
+- Angular momentum is conserved during flight (no external torques)
+- All rotation must happen during flight phase ([0,0,0,0] contact)
+
+Achievable ranges for this robot:
+- Peak angular velocity: 8-15 rad/s (physically realistic)
+- Flight duration: 0.4-0.8s (based on achievable jump height)
+
+== ITERATION STRATEGY ==
+
+ITERATION 1: Minimal viable constraints
+  - Maximum 2-3 constraints
+  - Bounds should be 2-3x wider than you think necessary
+  - Goal: Solver converges, motion happens (even if imperfect)
+
+AFTER A FAILURE:
+  - REMOVE constraints (fewer = easier)
+  - WIDEN bounds (larger feasible region)
+  - Try constraining DIFFERENT quantities
+
+AFTER A SUCCESS WITH WEAK MOTION:
+  - Tighten only ONE bound by 10-20%
+  - Never tighten multiple constraints simultaneously
+
+The feedback loop will guide refinement. Your job is to keep the
+problem SOLVABLE while steering toward the goal.
 
 == AVAILABLE FUNCTIONS ==
 vertcat, horzcat, mtimes, sin, cos, tan, sqrt, exp, log, fabs, fmax, fmin,

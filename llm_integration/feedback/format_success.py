@@ -7,6 +7,7 @@ from .format_metrics import (
     format_comparison_section,
     format_grf_section,
     format_phase_analysis_section,
+    format_terminal_state_section,
     format_trajectory_metrics_section,
 )
 from .format_status import (
@@ -64,6 +65,9 @@ def format_enhanced_feedback(
 
     # Trajectory Metrics
     lines.extend(format_trajectory_metrics_section(trajectory_analysis))
+
+    # Terminal State (for constraint tuning)
+    lines.extend(format_terminal_state_section(trajectory_analysis))
 
     # Phase Analysis
     lines.extend(format_phase_analysis_section(phase_metrics))

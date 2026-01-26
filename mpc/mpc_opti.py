@@ -8,11 +8,15 @@ from .dynamics.model import KinoDynamic_Model
 
 class QuadrupedMPCOpti:
     """
-    Hopping MPC implementation using CasADi's Opti framework.
+    Quadruped MPC implementation using CasADi's Opti framework.
 
-    This class transcribes the Acados-based trajectory optimization into
-    a more intuitive Opti formulation that mirrors the mathematical structure
-    of the optimization problem directly.
+    This class implements trajectory optimization with universal physics constraints
+    (friction cone, no-slip, foot height, dynamics). Task-specific constraints
+    including terminal state requirements should be added by the LLM.
+
+    This design allows the LLM to specify appropriate terminal constraints for
+    different tasks (e.g., backflip needs terminal pitch ~2π, simple jump needs
+    terminal pitch ~0).
     """
 
     def __init__(
@@ -43,18 +47,6 @@ class QuadrupedMPCOpti:
             config.mpc_config.flight_duration / config.mpc_config.mpc_dt
         )
         self.landing_start = self.pre_flight_steps + self.flight_steps
-
-        # Terminal constraint bounds (used in both constraint setup and violation checking)
-        self.terminal_vz_bounds = (
-            -0.5,
-            0.3,
-        )  # Vertical velocity: not falling too fast, not rising
-        self.terminal_vx_bounds = (-0.5, 0.5)  # Horizontal velocity x
-        self.terminal_vy_bounds = (-0.3, 0.3)  # Horizontal velocity y
-        self.terminal_omega_bounds = (-0.5, 0.5)  # Angular velocities
-        self.terminal_roll_bounds = (-0.2, 0.2)  # Roll angle
-        self.terminal_pitch_bounds = (-0.2, 0.2)  # Pitch angle
-        self.height_bounds = (0.05, 1.0)  # Sanity check for height
 
         # Initialize the Opti optimization environment
         self.opti = cs.Opti()
@@ -246,46 +238,10 @@ class QuadrupedMPCOpti:
                 self.opti.subject_to(constraint_expr >= constraint_l)
                 self.opti.subject_to(constraint_expr <= constraint_u)
 
-        # Add terminal landing constraints for proper landing behavior
-        self._setup_terminal_landing_constraints()
-
-    def _setup_terminal_landing_constraints(self) -> None:
-        """Setup terminal constraints to ensure proper landing.
-
-        These constraints ensure:
-        1. Terminal vertical velocity is small (soft landing)
-        2. Terminal height is close to initial height
-        3. Terminal angular velocities are small (stable landing)
-        """
-        # Terminal state
-        x_terminal = self.X[:, self.horizon]
-
-        # 1. Terminal vertical velocity should be small (soft landing)
-        terminal_vz = x_terminal[5]  # z-component of linear velocity
-        self.opti.subject_to(terminal_vz >= self.terminal_vz_bounds[0])
-        self.opti.subject_to(terminal_vz <= self.terminal_vz_bounds[1])
-
-        # 2. Terminal horizontal velocities should be small (stable)
-        terminal_vx = x_terminal[3]
-        terminal_vy = x_terminal[4]
-        self.opti.subject_to(terminal_vx >= self.terminal_vx_bounds[0])
-        self.opti.subject_to(terminal_vx <= self.terminal_vx_bounds[1])
-        self.opti.subject_to(terminal_vy >= self.terminal_vy_bounds[0])
-        self.opti.subject_to(terminal_vy <= self.terminal_vy_bounds[1])
-
-        # 3. Terminal angular velocities should be small (stable orientation)
-        terminal_omega = x_terminal[9:12]
-        for i in range(3):
-            self.opti.subject_to(terminal_omega[i] >= self.terminal_omega_bounds[0])
-            self.opti.subject_to(terminal_omega[i] <= self.terminal_omega_bounds[1])
-
-        # 4. Terminal roll and pitch should be small (upright landing)
-        terminal_roll = x_terminal[6]
-        terminal_pitch = x_terminal[7]
-        self.opti.subject_to(terminal_roll >= self.terminal_roll_bounds[0])
-        self.opti.subject_to(terminal_roll <= self.terminal_roll_bounds[1])
-        self.opti.subject_to(terminal_pitch >= self.terminal_pitch_bounds[0])
-        self.opti.subject_to(terminal_pitch <= self.terminal_pitch_bounds[1])
+        # NOTE: Terminal landing constraints have been removed from the base MPC.
+        # The LLM should specify task-specific terminal constraints.
+        # For a backflip, terminal pitch needs to be ~2π, not constrained to ±0.2 rad.
+        # For a simple jump, the LLM can add terminal upright constraints.
 
     def _setup_solver(self) -> None:
         """Setup the solver options."""
@@ -442,14 +398,14 @@ class QuadrupedMPCOpti:
 
     def get_constraint_violations(self) -> dict[str, Any]:
         """
-        Analyze constraint violations at the current (possibly infeasible) iterate.
+        Analyze the current (possibly infeasible) iterate for debugging.
 
-        Returns a dictionary with constraint violation information useful for debugging.
-        Uses the same bounds defined for terminal constraints.
+        Returns a dictionary with trajectory information useful for debugging.
+        Note: Terminal constraints are LLM-specified, so we only report values, not violations.
         """
-        violations: dict[str, list[str]] = {
-            "terminal_constraints": [],
-            "state_bounds": [],
+        info: dict[str, Any] = {
+            "terminal_state": {},
+            "trajectory_info": [],
             "summary": [],
         }
 
@@ -457,86 +413,47 @@ class QuadrupedMPCOpti:
             # Get debug values (works even when solve failed)
             X_debug = self.opti.debug.value(self.X)
 
-            # Check terminal state constraints
+            # Report terminal state values (not violations - LLM decides what's valid)
             x_terminal = X_debug[:, -1]
+            info["terminal_state"] = {
+                "position": {
+                    "x": x_terminal[0],
+                    "y": x_terminal[1],
+                    "z": x_terminal[2],
+                },
+                "velocity": {
+                    "vx": x_terminal[3],
+                    "vy": x_terminal[4],
+                    "vz": x_terminal[5],
+                },
+                "orientation": {
+                    "roll": x_terminal[6],
+                    "pitch": x_terminal[7],
+                    "yaw": x_terminal[8],
+                },
+                "angular_velocity": {
+                    "wx": x_terminal[9],
+                    "wy": x_terminal[10],
+                    "wz": x_terminal[11],
+                },
+            }
 
-            # Terminal velocity checks (using class attributes)
-            vz = x_terminal[5]
-            if vz < self.terminal_vz_bounds[0]:
-                violations["terminal_constraints"].append(
-                    f"Terminal vz={vz:.3f} < {self.terminal_vz_bounds[0]} (falling too fast)"
-                )
-            if vz > self.terminal_vz_bounds[1]:
-                violations["terminal_constraints"].append(
-                    f"Terminal vz={vz:.3f} > {self.terminal_vz_bounds[1]} (still rising at end)"
-                )
-
-            vx, vy = x_terminal[3], x_terminal[4]
-            if vx < self.terminal_vx_bounds[0] or vx > self.terminal_vx_bounds[1]:
-                violations["terminal_constraints"].append(
-                    f"Terminal vx={vx:.3f} outside [{self.terminal_vx_bounds[0]}, {self.terminal_vx_bounds[1]}]"
-                )
-            if vy < self.terminal_vy_bounds[0] or vy > self.terminal_vy_bounds[1]:
-                violations["terminal_constraints"].append(
-                    f"Terminal vy={vy:.3f} outside [{self.terminal_vy_bounds[0]}, {self.terminal_vy_bounds[1]}]"
-                )
-
-            # Terminal orientation checks (using class attributes)
-            roll, pitch = x_terminal[6], x_terminal[7]
-            if (
-                roll < self.terminal_roll_bounds[0]
-                or roll > self.terminal_roll_bounds[1]
-            ):
-                violations["terminal_constraints"].append(
-                    f"Terminal roll={roll:.3f}rad outside [{self.terminal_roll_bounds[0]}, {self.terminal_roll_bounds[1]}]"
-                )
-            if (
-                pitch < self.terminal_pitch_bounds[0]
-                or pitch > self.terminal_pitch_bounds[1]
-            ):
-                violations["terminal_constraints"].append(
-                    f"Terminal pitch={pitch:.3f}rad outside [{self.terminal_pitch_bounds[0]}, {self.terminal_pitch_bounds[1]}]"
-                )
-
-            # Terminal angular velocity checks (using class attributes)
-            omega = x_terminal[9:12]
-            for i, name in enumerate(["omega_x", "omega_y", "omega_z"]):
-                if (
-                    omega[i] < self.terminal_omega_bounds[0]
-                    or omega[i] > self.terminal_omega_bounds[1]
-                ):
-                    violations["terminal_constraints"].append(
-                        f"Terminal {name}={omega[i]:.3f} outside [{self.terminal_omega_bounds[0]}, {self.terminal_omega_bounds[1]}]"
-                    )
-
-            # Check for state bounds violations along trajectory (using class attributes)
+            # Basic sanity checks (physics violations, not task-specific)
             for k in range(X_debug.shape[1]):
                 height = X_debug[2, k]
-                if height < self.height_bounds[0]:
-                    violations["state_bounds"].append(
-                        f"Step {k}: height={height:.3f}m < {self.height_bounds[0]}m (robot underground!)"
-                    )
-                if height > self.height_bounds[1]:
-                    violations["state_bounds"].append(
-                        f"Step {k}: height={height:.3f}m > {self.height_bounds[1]}m (unrealistically high)"
+                if height < 0.0:
+                    info["trajectory_info"].append(
+                        f"Step {k}: height={height:.3f}m (robot underground!)"
                     )
 
-            # Generate summary
-            if violations["terminal_constraints"]:
-                violations["summary"].append(
-                    f"Terminal constraint issues: {len(violations['terminal_constraints'])}"
-                )
-            if violations["state_bounds"]:
-                violations["summary"].append(
-                    f"State bound violations: {len(violations['state_bounds'])}"
-                )
-
-            if not violations["summary"]:
-                violations["summary"].append(
-                    "No obvious constraint violations detected - may be LLM constraint issue"
+            if not info["trajectory_info"]:
+                info["summary"].append("No physics violations detected")
+            else:
+                info["summary"].append(
+                    f"Physics issues: {len(info['trajectory_info'])}"
                 )
 
         except Exception as e:
-            violations["summary"].append(f"Could not analyze violations: {e}")
+            info["summary"].append(f"Could not analyze trajectory: {e}")
 
-        return violations
+        return info

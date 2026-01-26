@@ -1,5 +1,6 @@
 """Metrics section formatters for feedback generation."""
 
+import math
 from typing import Any
 
 
@@ -81,6 +82,68 @@ def format_trajectory_metrics_section(trajectory_analysis: dict[str, Any]) -> li
     lines.append(
         f"  Avg joint range: {trajectory_analysis.get('avg_joint_range', 0):.2f} rad"
     )
+
+    return lines
+
+
+def format_terminal_state_section(trajectory_analysis: dict[str, Any]) -> list[str]:
+    """Format terminal state section for constraint tuning feedback.
+
+    This section shows the final state values so the LLM can adjust terminal constraints.
+    Critical for tasks like backflips where terminal pitch should be ~2*pi.
+    """
+    lines = []
+    lines.append("\n" + "-" * 60)
+    lines.append("TERMINAL STATE (for terminal constraint tuning)")
+    lines.append("-" * 60)
+
+    # Final position
+    final_z = trajectory_analysis.get("final_com_height", 0)
+    lines.append(f"Position: z={final_z:.3f}m")
+
+    # Final orientation (absolute values - critical for backflips)
+    final_roll = trajectory_analysis.get("final_roll", 0)
+    final_pitch = trajectory_analysis.get("final_pitch", 0)
+    final_yaw = trajectory_analysis.get("final_yaw", 0)
+    lines.append(
+        f"Orientation: roll={final_roll:.2f} rad ({final_roll * 57.3:.0f}°), "
+        f"pitch={final_pitch:.2f} rad ({final_pitch * 57.3:.0f}°), "
+        f"yaw={final_yaw:.2f} rad ({final_yaw * 57.3:.0f}°)"
+    )
+
+    # Helpful hint for backflip
+    if abs(final_pitch) > 0.5:  # Significant pitch rotation
+        target_2pi = 2 * math.pi
+        diff_from_2pi = abs(abs(final_pitch) - target_2pi)
+        if diff_from_2pi < 1.0:  # Within 1 rad of full rotation
+            lines.append(
+                f"  -> Pitch is {diff_from_2pi:.2f} rad "
+                f"({diff_from_2pi * 57.3:.0f}°) from full rotation (2*pi)"
+            )
+
+    # Final linear velocity components
+    final_vx = trajectory_analysis.get("final_vx", 0)
+    final_vy = trajectory_analysis.get("final_vy", 0)
+    final_vz = trajectory_analysis.get("final_vz", 0)
+    lines.append(
+        f"Velocity: vx={final_vx:.2f}, vy={final_vy:.2f}, vz={final_vz:.2f} m/s"
+    )
+
+    # Final angular velocity components
+    final_wx = trajectory_analysis.get("final_wx", 0)
+    final_wy = trajectory_analysis.get("final_wy", 0)
+    final_wz = trajectory_analysis.get("final_wz", 0)
+    lines.append(
+        f"Angular vel: wx={final_wx:.2f}, wy={final_wy:.2f}, wz={final_wz:.2f} rad/s"
+    )
+
+    # Landing stability assessment
+    vel_magnitude = (final_vx**2 + final_vy**2 + final_vz**2) ** 0.5
+    omega_magnitude = (final_wx**2 + final_wy**2 + final_wz**2) ** 0.5
+    if vel_magnitude > 1.0 or omega_magnitude > 1.0:
+        lines.append(
+            "  -> WARNING: High terminal velocity/rotation may cause unstable landing"
+        )
 
     return lines
 
