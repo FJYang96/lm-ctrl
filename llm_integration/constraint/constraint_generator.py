@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from . import prompts
+from .._prompts import create_repair_prompt, get_system_prompt, get_user_prompt
 
 
 class ConstraintGenerator:
@@ -70,7 +70,7 @@ class ConstraintGenerator:
             System prompt string with accurate robot details from config
         """
         # Pass actual robot details to the prompt generator
-        base_prompt = prompts.get_system_prompt(
+        base_prompt = get_system_prompt(
             mass=self.robot_details["mass"],
             initial_height=self.robot_details["initial_height"],
         )
@@ -101,7 +101,7 @@ Use these physical limits to create realistic constraints."""
         Returns:
             Formatted user prompt
         """
-        return prompts.get_user_prompt(command)
+        return get_user_prompt(command)
 
     def create_repair_prompt(
         self, command: str, failed_code: str, error_message: str, attempt_number: int
@@ -118,7 +118,7 @@ Use these physical limits to create realistic constraints."""
         Returns:
             Repair prompt string
         """
-        return prompts.create_repair_prompt(
+        return create_repair_prompt(
             command,
             failed_code,
             error_message,

@@ -1,0 +1,162 @@
+"""Constraint generation with LLM retry logic."""
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .feedback_pipeline import FeedbackPipeline
+
+
+def generate_constraints_with_retry(
+    self: "FeedbackPipeline",
+    system_prompt: str,
+    user_message: str,
+    context: str | None = None,
+    command: str = "",
+    max_attempts: int = 10,
+    images: list[str] | None = None,
+) -> tuple[str, str, list[dict[str, Any]]]:
+    """
+    Generate constraints using the LLM with comprehensive auto-retry on failures.
+
+    This implements the full repair loop with detailed error feedback to the LLM.
+    Uses vision API when images are provided for enhanced feedback.
+
+    Returns:
+        Tuple of (final_code, function_name, attempt_log)
+    """
+    from ..mpc import LLMTaskMPC
+
+    attempts: list[dict[str, Any]] = []
+    mpc_config_code = ""  # Initialize for exception handling
+
+    for attempt in range(1, max_attempts + 1):
+        print(f"🔄 Constraint generation attempt {attempt}/{max_attempts}")
+
+        try:
+            # Generate code from LLM
+            if attempt == 1:
+                # First attempt uses original prompt
+                prompt = user_message
+                if context:
+                    prompt = f"{context}\n\n{user_message}"
+            else:
+                # Subsequent attempts use repair prompts with detailed error feedback
+                failed_code = attempts[-1]["code"]
+                error_msg = attempts[-1]["error"]
+                prompt = self.constraint_generator.create_repair_prompt(
+                    command, failed_code, error_msg, attempt
+                )
+
+            # Call LLM with vision if images available, otherwise standard call
+            if images and len(images) > 0:
+                response = self.llm_client.generate_constraints_with_vision(
+                    system_prompt, prompt, None, images
+                )
+            else:
+                response = self.llm_client.generate_constraints(
+                    system_prompt, prompt, None
+                )
+
+            # Extract code from response with improved extraction
+            mpc_config_code = self.llm_client.extract_raw_code(response)
+
+            if not mpc_config_code.strip():
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "code": mpc_config_code,
+                        "error": "No code extracted from LLM response - check response format",
+                        "success": False,
+                    }
+                )
+                continue
+
+            # Create fresh LLM MPC instance for this attempt
+            task_mpc = LLMTaskMPC(self.kindyn_model, self.config)
+
+            # Test the MPC configuration code with SafeExecutor
+            success, error_msg = self.safe_executor.execute_mpc_configuration_code(
+                mpc_config_code, task_mpc
+            )
+
+            if not success:
+                # Log detailed failure reason
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "code": mpc_config_code,
+                        "error": error_msg,
+                        "success": False,
+                        "failure_stage": "mpc_configuration",
+                    }
+                )
+                continue
+
+            # Store the configured MPC for later use
+            self.current_task_mpc = task_mpc
+            self.llm_mpc_code = mpc_config_code
+
+            # Get configuration summary for logging
+            config_summary = task_mpc.get_configuration_summary()
+            task_name = config_summary.get("task_name", "unknown")
+
+            # Success!
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "code": mpc_config_code,
+                    "error": "",
+                    "success": True,
+                    "task_name": task_name,
+                    "failure_stage": "none",
+                    "config_summary": config_summary,
+                }
+            )
+
+            print(f"✅ MPC configuration successful on attempt {attempt}")
+            print(f"   Task: {task_name}")
+            print(f"   Duration: {config_summary.get('duration', 0):.2f}s")
+            print(f"   Constraints: {config_summary.get('num_constraints', 0)}")
+            print(f"   Contact phases: {len(config_summary.get('contact_phases', []))}")
+            return mpc_config_code, task_name, attempts
+
+        except Exception as e:
+            # Catch any unexpected errors and provide details
+            import traceback
+
+            error_details = (
+                f"Unexpected error: {str(e)}\nTraceback: {traceback.format_exc()}"
+            )
+
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "code": mpc_config_code,
+                    "error": error_details,
+                    "success": False,
+                    "failure_stage": "unexpected_exception",
+                }
+            )
+            print(f"❌ Attempt {attempt} failed with unexpected error: {str(e)}")
+            continue
+
+    # All attempts failed - provide comprehensive failure summary
+    print(f"❌ All {max_attempts} constraint generation attempts failed")
+
+    # Analyze failure patterns
+    failure_stages = [attempt.get("failure_stage", "unknown") for attempt in attempts]
+    common_errors: dict[str, int] = {}
+    for attempt_dict in attempts:
+        error = attempt_dict.get("error", "")[:100]  # First 100 chars
+        common_errors[error] = common_errors.get(error, 0) + 1
+
+    print("Failure analysis:")
+    print(f"  Failure stages: {set(failure_stages)}")
+    print(f"  Most common errors: {list(common_errors.keys())[:3]}")
+
+    last_error = attempts[-1]["error"] if attempts else "No attempts recorded"
+    raise ValueError(
+        f"Failed to generate valid constraints after {max_attempts} attempts.\n"
+        f"Last error: {last_error}\n"
+        f"Common failure stages: {set(failure_stages)}"
+    )
