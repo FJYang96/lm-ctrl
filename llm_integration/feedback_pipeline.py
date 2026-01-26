@@ -838,6 +838,8 @@ class FeedbackPipeline:
             optimization_metrics = optimization_result.get("optimization_metrics", {})
 
             print("📝 Generating failure feedback for LLM...")
+            # Get initial height from config
+            initial_height = float(self.config.experiment.initial_qpos[2])
             return generate_failure_feedback(
                 iteration=iteration,
                 command=command,
@@ -846,6 +848,7 @@ class FeedbackPipeline:
                 trajectory_analysis=trajectory_analysis,
                 previous_constraints=constraint_code,
                 state_traj=state_traj,
+                initial_height=initial_height,
             )
 
         # Optimization succeeded - generate normal enhanced feedback
@@ -898,6 +901,7 @@ class FeedbackPipeline:
             )
 
         # Generate enhanced feedback
+        initial_height = float(self.config.experiment.initial_qpos[2])
         return generate_enhanced_feedback(
             iteration=iteration,
             command=command,
@@ -913,6 +917,7 @@ class FeedbackPipeline:
             previous_constraints=constraint_code,
             previous_iteration_analysis=self.previous_iteration_analysis,
             robot_mass=self.config.robot_data.mass,
+            initial_height=initial_height,
         )
 
     def _score_iteration(self, iteration_result: dict[str, Any]) -> float:

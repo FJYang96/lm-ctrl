@@ -467,9 +467,13 @@ def format_enhanced_feedback(
     task_progress: dict[str, Any],
     previous_constraints: str,
     previous_iteration_analysis: dict[str, Any] | None = None,
+    initial_height: float = 0.2117,
 ) -> str:
     """
     Format all feedback into a structured string for the LLM.
+
+    Args:
+        initial_height: Robot's initial COM height from config
 
     Returns:
         Formatted feedback string
@@ -525,7 +529,7 @@ def format_enhanced_feedback(
         lines.append("")
         lines.append("COMMON FAILURE CAUSES:")
         lines.append(
-            "  1. Constraints violate initial state (t=0) - robot starts at height=0.2117m"
+            f"  1. Constraints violate initial state (t=0) - robot starts at height={initial_height:.4f}m"
         )
         lines.append(
             "  2. Mutually exclusive constraints (e.g., height>0.5 AND height<0.3)"
@@ -795,7 +799,9 @@ def format_enhanced_feedback(
     lines.append("\n" + "-" * 60)
     lines.append("REMINDER: INITIAL STATE")
     lines.append("-" * 60)
-    lines.append("Robot starts at: height=0.2117m, roll=0, pitch=0, yaw=0")
+    lines.append(
+        f"Robot starts at: height={initial_height:.4f}m, roll=0, pitch=0, yaw=0"
+    )
     lines.append("Constraints at k=0 MUST allow this state!")
 
     # Previous code
@@ -859,11 +865,15 @@ def generate_enhanced_feedback(
     previous_constraints: str,
     previous_iteration_analysis: dict[str, Any] | None = None,
     robot_mass: float = 15.0,
+    initial_height: float = 0.2117,
 ) -> str:
     """
     Generate comprehensive enhanced feedback for the LLM.
 
     This is the main entry point that combines all analysis.
+
+    Args:
+        initial_height: Robot's initial COM height from config
 
     Returns:
         Formatted feedback string
@@ -895,6 +905,7 @@ def generate_enhanced_feedback(
         task_progress=task_progress,
         previous_constraints=previous_constraints,
         previous_iteration_analysis=previous_iteration_analysis,
+        initial_height=initial_height,
     )
 
 
@@ -906,6 +917,7 @@ def generate_failure_feedback(
     trajectory_analysis: dict[str, Any] | None,
     previous_constraints: str,
     state_traj: np.ndarray | None = None,
+    initial_height: float = 0.2117,
 ) -> str:
     """
     Generate feedback when optimization fails to converge.
@@ -921,6 +933,7 @@ def generate_failure_feedback(
         trajectory_analysis: Analysis of the (infeasible) trajectory if available
         previous_constraints: The constraint code that failed
         state_traj: The debug trajectory from failed optimization (if available)
+        initial_height: Robot's initial COM height from config
 
     Returns:
         Formatted feedback string for the LLM
@@ -1051,7 +1064,7 @@ def generate_failure_feedback(
         lines.append("  Your custom constraints are likely the issue.")
         lines.append("  Common problems:")
         lines.append(
-            "    1. Constraints at k=0 don't allow initial state (height=0.2117m)"
+            f"    1. Constraints at k=0 don't allow initial state (height={initial_height:.4f}m)"
         )
         lines.append(
             "    2. Mutually exclusive bounds (e.g., height>0.5 AND height<0.3)"
@@ -1064,7 +1077,9 @@ def generate_failure_feedback(
     lines.append("GENERAL DEBUGGING TIPS")
     lines.append("-" * 60)
     lines.append("1. START SIMPLE: Use only 1-2 constraints, not many")
-    lines.append("2. CHECK k=0: Your constraints MUST allow height=0.2117m at k=0")
+    lines.append(
+        f"2. CHECK k=0: Your constraints MUST allow height={initial_height:.4f}m at k=0"
+    )
     lines.append("3. USE PHASES: Apply constraints only during relevant phases")
     lines.append("   Example: if contact_k.sum() == 0:  # Only during flight")
     lines.append("4. LOOSEN BOUNDS: If in doubt, make bounds 2x wider")
@@ -1075,7 +1090,9 @@ def generate_failure_feedback(
     lines.append("\n" + "-" * 60)
     lines.append("REMINDER: INITIAL STATE")
     lines.append("-" * 60)
-    lines.append("Robot starts at: height=0.2117m, roll=0, pitch=0, yaw=0")
+    lines.append(
+        f"Robot starts at: height={initial_height:.4f}m, roll=0, pitch=0, yaw=0"
+    )
     lines.append("Constraints at k=0 MUST allow this state!")
 
     # Previous code
