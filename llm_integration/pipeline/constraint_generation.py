@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any
 
+from ..logging_config import logger
+
 if TYPE_CHECKING:
     from .feedback_pipeline import FeedbackPipeline
 
@@ -30,8 +32,6 @@ def generate_constraints_with_retry(
     mpc_config_code = ""  # Initialize for exception handling
 
     for attempt in range(1, max_attempts + 1):
-        print(f"🔄 Constraint generation attempt {attempt}/{max_attempts}")
-
         try:
             # Generate code from LLM
             if attempt == 1:
@@ -113,11 +113,7 @@ def generate_constraints_with_retry(
                 }
             )
 
-            print(f"✅ MPC configuration successful on attempt {attempt}")
-            print(f"   Task: {task_name}")
-            print(f"   Duration: {config_summary.get('duration', 0):.2f}s")
-            print(f"   Constraints: {config_summary.get('num_constraints', 0)}")
-            print(f"   Contact phases: {len(config_summary.get('contact_phases', []))}")
+            logger.info(f"Constraints generated (attempt {attempt})")
             return mpc_config_code, task_name, attempts
 
         except Exception as e:
@@ -137,22 +133,18 @@ def generate_constraints_with_retry(
                     "failure_stage": "unexpected_exception",
                 }
             )
-            print(f"❌ Attempt {attempt} failed with unexpected error: {str(e)}")
+            logger.error(f"Attempt {attempt} failed: {str(e)[:100]}")
             continue
 
-    # All attempts failed - provide comprehensive failure summary
-    print(f"❌ All {max_attempts} constraint generation attempts failed")
+    # All attempts failed
+    logger.error(f"All {max_attempts} constraint attempts failed")
 
     # Analyze failure patterns
     failure_stages = [attempt.get("failure_stage", "unknown") for attempt in attempts]
     common_errors: dict[str, int] = {}
     for attempt_dict in attempts:
-        error = attempt_dict.get("error", "")[:100]  # First 100 chars
+        error = attempt_dict.get("error", "")[:100]
         common_errors[error] = common_errors.get(error, 0) + 1
-
-    print("Failure analysis:")
-    print(f"  Failure stages: {set(failure_stages)}")
-    print(f"  Most common errors: {list(common_errors.keys())[:3]}")
 
     last_error = attempts[-1]["error"] if attempts else "No attempts recorded"
     raise ValueError(

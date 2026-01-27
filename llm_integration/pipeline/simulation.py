@@ -10,6 +10,8 @@ from utils.inv_dyn import compute_joint_torques
 from utils.simulation import simulate_trajectory
 from utils.visualization import render_and_save_planned_trajectory
 
+from ..logging_config import logger
+
 if TYPE_CHECKING:
     from .feedback_pipeline import FeedbackPipeline
 
@@ -44,13 +46,11 @@ def execute_simulation(
         # Create input trajectory for rendering
         input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
 
-        print("🎬 Creating planned trajectory visualization...")
         # Render planned trajectory
         planned_traj_images = render_and_save_planned_trajectory(
             state_traj, input_traj, self.env, f"_iter_{iteration}"
         )
 
-        print("🔧 Computing joint torques via inverse dynamics...")
         # Use LLM MPC's contact sequence if available
         if self.current_task_mpc and self.current_task_mpc.contact_sequence is not None:
             contact_seq = self.current_task_mpc.contact_sequence
@@ -72,7 +72,6 @@ def execute_simulation(
         # Store for enhanced feedback
         self.current_joint_torques = joint_torques_traj
 
-        print("🏃 Executing trajectory in physics simulation...")
         # Execute in simulation
         qpos_traj, qvel_traj, sim_grf_traj, sim_images = simulate_trajectory(
             self.env, joint_torques_traj, planned_traj_images
@@ -89,14 +88,12 @@ def execute_simulation(
         )
 
         # Save simulation video
-        print("💾 Saving simulation video...")
         if sim_images:
             import imageio
 
             fps = 1 / self.config.experiment.sim_dt
             video_path = run_dir / f"simulation_iter_{iteration}.mp4"
             imageio.mimsave(str(video_path), sim_images, fps=fps)
-            print(f"  Saved: {video_path}")
 
         # Also save planned trajectory video if available
         if planned_traj_images:
@@ -105,7 +102,6 @@ def execute_simulation(
             fps = 1 / self.config.experiment.sim_dt
             planned_video_path = run_dir / f"planned_traj_iter_{iteration}.mp4"
             imageio.mimsave(str(planned_video_path), planned_traj_images, fps=fps)
-            print(f"  Saved: {planned_video_path}")
 
         result = {
             "success": True,
@@ -172,7 +168,7 @@ def calculate_tracking_error(
         return float(error)
 
     except Exception as e:
-        print(f"Error calculating tracking error: {e}")
+        logger.warning(f"Error calculating tracking error: {e}")
         return float("inf")
 
 

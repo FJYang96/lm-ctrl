@@ -1,9 +1,13 @@
 """Video frame extraction utilities for visual feedback."""
 
 import base64
+import logging
 from pathlib import Path
 
 import numpy as np
+
+# Use module-level logger (can't import from logging_config at module load time)
+logger = logging.getLogger("llm_integration.video_extraction")
 
 # Try to import cv2 for video frame extraction
 try:
@@ -12,7 +16,7 @@ try:
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
-    print("Warning: OpenCV not available. Video frame extraction disabled.")
+    logger.warning("OpenCV not available. Video frame extraction disabled.")
 
 
 def extract_key_frames(
@@ -61,7 +65,7 @@ def extract_key_frames(
         return frames_base64
 
     except Exception as e:
-        print(f"Warning: Failed to extract frames from {video_path}: {e}")
+        logger.warning(f"Failed to extract frames from {video_path}: {e}")
         return []
 
 

@@ -71,7 +71,6 @@ def create_feedback_context(
         trajectory_analysis = optimization_result.get("trajectory_analysis", {})
         optimization_metrics = optimization_result.get("optimization_metrics", {})
 
-        print("📝 Generating failure feedback for LLM...")
         # Get initial height from config
         initial_height = float(self.config.experiment.initial_qpos[2])
         return generate_failure_feedback(
@@ -83,6 +82,7 @@ def create_feedback_context(
             previous_constraints=constraint_code,
             state_traj=state_traj,
             initial_height=initial_height,
+            iteration_summaries=self.iteration_summaries,
         )
 
     # Optimization succeeded - generate normal enhanced feedback
@@ -152,4 +152,5 @@ def create_feedback_context(
         previous_iteration_analysis=self.previous_iteration_analysis,
         robot_mass=self.config.robot_data.mass,
         initial_height=initial_height,
+        iteration_summaries=self.iteration_summaries,
     )

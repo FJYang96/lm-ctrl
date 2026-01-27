@@ -5,6 +5,11 @@ from .formatter import (
     generate_enhanced_feedback,
     generate_failure_feedback,
 )
+from .llm_evaluation import (
+    evaluate_iteration,
+    get_evaluator,
+    summarize_iteration,
+)
 from .task_progress import compute_task_progress
 from .trajectory_analysis import (
     analyze_actuator_saturation,
@@ -23,4 +28,7 @@ __all__ = [
     "format_enhanced_feedback",
     "generate_enhanced_feedback",
     "generate_failure_feedback",
+    "evaluate_iteration",
+    "summarize_iteration",
+    "get_evaluator",
 ]

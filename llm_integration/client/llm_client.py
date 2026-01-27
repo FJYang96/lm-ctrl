@@ -6,6 +6,7 @@ from typing import Any
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
+from ..logging_config import logger
 from .code_extraction import extract_code_blocks, extract_raw_code
 
 
@@ -68,7 +69,7 @@ class LLMClient:
             return response_text
 
         except Exception as e:
-            print(f"Error calling Claude API: {e}")
+            logger.error(f"Error calling Claude API: {e}")
             raise
 
     def generate_constraints_with_vision(
@@ -174,5 +175,5 @@ class LLMClient:
             return response_text
 
         except Exception as e:
-            print(f"Error calling Claude API with vision: {e}")
+            logger.error(f"Error calling Claude API with vision: {e}")
             raise

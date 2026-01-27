@@ -1,7 +1,11 @@
 """Restricted globals and import processing for safe code execution."""
 
 import ast
+import logging
 from typing import Any
+
+# Use module-level logger
+logger = logging.getLogger("llm_integration.executor.globals")
 
 # Allowed imports for constraint generation
 ALLOWED_IMPORTS = {
@@ -183,7 +187,7 @@ def create_restricted_globals(
             )
 
     except ImportError as e:
-        print(f"Warning: Could not import required modules: {e}")
+        logger.warning(f"Could not import required modules: {e}")
 
     return restricted_globals
 
@@ -233,7 +237,7 @@ def process_dynamic_imports(
                                 globals_dict[alias_name] = attr
 
         except Exception as e:
-            print(f"Warning: Could not process import '{import_request}': {e}")
+            logger.warning(f"Could not process import '{import_request}': {e}")
 
 
 def extract_imports_from_code(code: str) -> list[str]:

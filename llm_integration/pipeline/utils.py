@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ..logging_config import logger
+
 if TYPE_CHECKING:
     from .feedback_pipeline import FeedbackPipeline
 
@@ -51,35 +53,20 @@ def inject_llm_constraints_to_mpc(self: "FeedbackPipeline") -> None:
     existing MPC constraint system, rather than directly to the Opti problem.
     """
     if not self.llm_constraints:
-        print("Warning: No LLM constraints to inject")
         return
 
-    constraint_func = self.llm_constraints[0]  # Use the current constraint
+    constraint_func = self.llm_constraints[0]
 
     try:
-        print("🔧 Adding LLM constraint to MPC path constraints...")
-
-        # Add the LLM constraint to the MPC's path constraint list
-        # This ensures it's applied consistently with the existing constraint system
         if hasattr(self.config, "mpc_config") and hasattr(
             self.config.mpc_config, "path_constraints"
         ):
-            # Add the LLM constraint to the path constraints list
             self.config.mpc_config.path_constraints.append(constraint_func)
-            print("✅ Added LLM constraint to path constraints list")
-            print(
-                f"   Total path constraints: {len(self.config.mpc_config.path_constraints)}"
-            )
         else:
-            # Fallback: inject directly into the Opti problem (less preferred)
-            print("Warning: Using direct Opti injection as fallback")
             inject_llm_constraints_direct(self)
 
     except Exception as e:
-        print(f"Error: Failed to inject LLM constraints: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"Constraint injection failed: {e}")
 
 
 def inject_llm_constraints_direct(self: "FeedbackPipeline") -> None:
@@ -93,8 +80,6 @@ def inject_llm_constraints_direct(self: "FeedbackPipeline") -> None:
     constraint_func = self.llm_constraints[0]
 
     try:
-        print(f"🔧 Direct injection for {self.mpc.horizon} time steps...")
-
         constraints_added = 0
         for k in range(self.mpc.horizon):
             try:
@@ -102,7 +87,6 @@ def inject_llm_constraints_direct(self: "FeedbackPipeline") -> None:
                 u_k = self.mpc.U[:, k]
                 contact_k = self.mpc.P_contact[:, k]
 
-                # Apply the constraint function
                 constraint_result = constraint_func(
                     x_k, u_k, self.kindyn_model, self.config, contact_k
                 )
@@ -111,30 +95,20 @@ def inject_llm_constraints_direct(self: "FeedbackPipeline") -> None:
                     not isinstance(constraint_result, tuple)
                     or len(constraint_result) != 3
                 ):
-                    print(f"Warning: Invalid constraint result at time step {k}")
                     continue
 
                 constraint_expr, constraint_l, constraint_u = constraint_result
 
                 if constraint_expr is not None:
-                    # Add lower and upper bound constraints
                     self.mpc.opti.subject_to(constraint_expr >= constraint_l)
                     self.mpc.opti.subject_to(constraint_expr <= constraint_u)
                     constraints_added += 1
 
-            except Exception as step_error:
-                print(f"Warning: Failed to process time step {k}: {step_error}")
+            except Exception:
                 continue
 
-        print(
-            f"✅ Direct injection completed: {constraints_added} constraint sets added"
-        )
-
     except Exception as e:
-        print(f"Error: Direct constraint injection failed: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"Direct injection failed: {e}")
 
 
 def make_json_safe(self: "FeedbackPipeline", obj: Any) -> Any:

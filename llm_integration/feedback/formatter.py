@@ -40,6 +40,7 @@ def generate_enhanced_feedback(
     previous_iteration_analysis: dict[str, Any] | None = None,
     robot_mass: float = 15.0,
     initial_height: float = 0.2117,
+    iteration_summaries: list[dict[str, Any]] | list[str] | None = None,
 ) -> str:
     """
     Generate comprehensive enhanced feedback for the LLM.
@@ -48,6 +49,7 @@ def generate_enhanced_feedback(
 
     Args:
         initial_height: Robot's initial COM height from config
+        iteration_summaries: List of LLM-generated summaries from previous iterations
 
     Returns:
         Formatted feedback string
@@ -80,4 +82,5 @@ def generate_enhanced_feedback(
         previous_constraints=previous_constraints,
         previous_iteration_analysis=previous_iteration_analysis,
         initial_height=initial_height,
+        iteration_summaries=iteration_summaries,
     )

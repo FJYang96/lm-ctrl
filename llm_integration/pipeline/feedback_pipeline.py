@@ -14,7 +14,8 @@ from mpc.mpc_opti import QuadrupedMPCOpti
 from ..client import LLMClient
 from ..constraint import ConstraintGenerator
 from ..executor import SafeConstraintExecutor
-from ..feedback import create_visual_feedback
+from ..feedback import create_visual_feedback, evaluate_iteration, summarize_iteration
+from ..logging_config import logger
 from ..mpc import LLMTaskMPC
 from .constraint_generation import generate_constraints_with_retry
 from .feedback_context import create_feedback_context
@@ -35,7 +36,7 @@ from .utils import (
 try:
     from gym_quadruped.quadruped_env import QuadrupedEnv
 except ImportError:
-    print("Warning: gym_quadruped not available. Simulation features may be limited.")
+    logger.warning("gym_quadruped not available. Simulation features may be limited.")
     QuadrupedEnv = None
 import config
 
@@ -110,7 +111,7 @@ class FeedbackPipeline:
                 sim_dt=self.config.experiment.sim_dt,
             )
         else:
-            print("Warning: Simulation environment not available")
+            logger.warning("Simulation environment not available")
             self.env = None
 
         # Pipeline state
@@ -124,6 +125,9 @@ class FeedbackPipeline:
         self.current_joint_torques: np.ndarray | None = None
         self.current_images: list[str] = []
 
+        # LLM-based iteration history
+        self.iteration_summaries: list[dict[str, Any]] = []
+
     def run_pipeline(self, command: str) -> dict[str, Any]:
         """
         Run the complete LLM feedback pipeline for a given command.
@@ -134,7 +138,7 @@ class FeedbackPipeline:
         Returns:
             Dictionary containing complete pipeline results
         """
-        print(f"Starting LLM Feedback Pipeline for command: '{command}'")
+        logger.info(f"Pipeline started: '{command}'")
 
         # Create results directory for this run
         timestamp = int(time.time())
@@ -143,6 +147,7 @@ class FeedbackPipeline:
 
         # Initialize pipeline state
         self.iteration_results = []
+        self.iteration_summaries = []
         self.previous_iteration_analysis = None
         self.current_images = []
         context = None
@@ -154,11 +159,10 @@ class FeedbackPipeline:
         initial_user_message = self.constraint_generator.get_user_prompt(command)
 
         for iteration in range(1, self.max_iterations + 1):
-            print(f"\n=== ITERATION {iteration} ===")
+            logger.info(f"--- Iteration {iteration} ---")
 
             try:
                 # Step 3: Generate constraints using LLM with auto-retry
-                print("Generating constraints with LLM...")
                 constraint_code, function_name, attempt_log = (
                     self._generate_constraints_with_retry(
                         system_prompt,
@@ -170,13 +174,11 @@ class FeedbackPipeline:
                 )
 
                 # Step 4: Solve optimization problem with new constraints
-                print("Solving trajectory optimization...")
                 optimization_result = self._solve_trajectory_optimization(
                     constraint_code, function_name, iteration, run_dir
                 )
 
                 # Step 5: Execute trajectory in simulation
-                print("Executing trajectory in simulation...")
                 simulation_result = self._execute_simulation(
                     optimization_result, iteration, run_dir
                 )
@@ -193,9 +195,6 @@ class FeedbackPipeline:
 
                 # Extract visual feedback for next iteration
                 self.current_images = create_visual_feedback(run_dir, iteration)
-                print(
-                    f"📸 Extracted {len(self.current_images)} frames for visual feedback"
-                )
 
                 # Track previous iteration analysis for comparison
                 self.previous_iteration_analysis = optimization_result.get(
@@ -222,35 +221,156 @@ class FeedbackPipeline:
 
                 # Use feedback for next iteration
                 if iteration < self.max_iterations:
-                    print("\n" + "=" * 60)
-                    print("FEEDBACK FOR NEXT ITERATION:")
-                    print("=" * 60)
-                    print(feedback_context)
-                    print("=" * 60 + "\n")
                     context = feedback_context
 
-                # Track best result based on success score
-                score = self._score_iteration(iteration_result)
+                # Use LLM-based evaluation for scoring
+                trajectory_analysis = optimization_result.get("trajectory_analysis", {})
+                opt_success = optimization_result.get("success", False)
+
+                if opt_success and trajectory_analysis:
+                    # LLM evaluates the successful iteration
+                    llm_eval = evaluate_iteration(
+                        command=command,
+                        trajectory_analysis=trajectory_analysis,
+                        constraint_code=constraint_code,
+                        images=self.current_images,
+                    )
+                    score = llm_eval.get("score", 0.5)
+                    iteration_result["llm_evaluation"] = llm_eval
+
+                    # Log detailed success evaluation
+                    logger.info("=== LLM Evaluation (SUCCESS) ===")
+                    logger.info(f"  Score: {score:.2f}")
+                    logger.info("  Trajectory Metrics:")
+                    logger.info(
+                        f"    Pitch: {trajectory_analysis.get('total_pitch_rotation', 0):.2f} rad ({trajectory_analysis.get('total_pitch_rotation', 0) * 57.3:.0f}°)"
+                    )
+                    logger.info(
+                        f"    Height gain: {trajectory_analysis.get('height_gain', 0):.3f}m"
+                    )
+                    logger.info(
+                        f"    Yaw: {trajectory_analysis.get('max_yaw', 0):.2f} rad"
+                    )
+                    logger.info(
+                        f"    Flight duration: {trajectory_analysis.get('flight_duration', 0):.2f}s"
+                    )
+                    logger.info("  Criteria:")
+                    for criterion in llm_eval.get("criteria", []):
+                        progress = criterion.get("progress", 0)
+                        status = "✓" if progress >= 0.8 else "✗"
+                        logger.info(
+                            f"    {status} {criterion.get('name')}: {criterion.get('achieved')} (target: {criterion.get('target')}, {progress:.0%})"
+                        )
+                    if llm_eval.get("warnings"):
+                        logger.info("  Warnings:")
+                        for warning in llm_eval.get("warnings", []):
+                            logger.info(f"    ⚠ {warning}")
+                    summary = llm_eval.get(
+                        "summary", f"Iteration {iteration} completed"
+                    )
+                    logger.info(f"  Summary: {summary}")
+                else:
+                    # Fallback scoring for failed optimization
+                    score = self._score_iteration(iteration_result)
+                    error_info = optimization_result.get("optimization_metrics", {})
+                    trajectory_analysis = optimization_result.get(
+                        "trajectory_analysis", {}
+                    )
+
+                    # Log detailed failure evaluation
+                    logger.info("=== LLM Evaluation (FAILED) ===")
+                    logger.info(f"  Score: {score:.2f}")
+                    if error_info.get("error_message"):
+                        logger.info(f"  Error: {error_info.get('error_message')}")
+                    if error_info.get("solver_iterations"):
+                        logger.info(
+                            f"  Solver iterations: {error_info.get('solver_iterations')}"
+                        )
+                    if trajectory_analysis:
+                        logger.info("  Last attempt metrics:")
+                        logger.info(
+                            f"    Pitch: {trajectory_analysis.get('total_pitch_rotation', 0):.2f} rad ({trajectory_analysis.get('total_pitch_rotation', 0) * 57.3:.0f}°)"
+                        )
+                        logger.info(
+                            f"    Height gain: {trajectory_analysis.get('height_gain', 0):.3f}m"
+                        )
+
+                    # Get LLM summary for failed optimization
+                    summary = summarize_iteration(
+                        command=command,
+                        constraint_code=constraint_code,
+                        success=False,
+                        error_info=error_info,
+                        trajectory_analysis=trajectory_analysis,
+                    )
+                    logger.info(f"  Summary: {summary}")
+
+                # Add detailed iteration info to history
+                iteration_history_entry = {
+                    "iteration": iteration,
+                    "success": opt_success,
+                    "score": score,
+                    "summary": summary,
+                    "metrics": {
+                        "pitch": trajectory_analysis.get("total_pitch_rotation", 0),
+                        "height_gain": trajectory_analysis.get("height_gain", 0),
+                        "yaw": trajectory_analysis.get("max_yaw", 0),
+                        "flight_duration": trajectory_analysis.get(
+                            "flight_duration", 0
+                        ),
+                    },
+                    "criteria": llm_eval.get("criteria", [])
+                    if opt_success and "llm_eval" in locals()
+                    else [],
+                    "warnings": llm_eval.get("warnings", [])
+                    if opt_success and "llm_eval" in locals()
+                    else [],
+                    "error": error_info.get("error_message", "")
+                    if not opt_success
+                    else "",
+                }
+                self.iteration_summaries.append(iteration_history_entry)
+                iteration_result["summary"] = summary
+
                 if score > best_score:
                     best_score = score
                     best_result = iteration_result
 
-                print(f"Iteration {iteration} score: {score:.3f}")
-
                 # Early stopping if we achieve excellent results
-                # Raised threshold for task-specific scoring
                 if score > 0.95:
-                    print(
-                        f"Achieved excellent results (score: {score:.3f}), stopping early."
-                    )
+                    logger.info(f"Early stop: score {score:.2f}")
                     break
 
             except Exception as e:
-                print(f"Error in iteration {iteration}: {e}")
+                logger.error(f"Iteration {iteration} error: {e}")
+
+                # Generate summary for failed iteration
+                error_info = {"error_message": str(e)}
+                code = constraint_code if "constraint_code" in locals() else ""
+                summary = summarize_iteration(
+                    command=command,
+                    constraint_code=code,
+                    success=False,
+                    error_info=error_info,
+                )
+                # Add detailed error info to history
+                iteration_history_entry = {
+                    "iteration": iteration,
+                    "success": False,
+                    "score": 0.0,
+                    "summary": summary,
+                    "metrics": {},
+                    "criteria": [],
+                    "warnings": [],
+                    "error": str(e)[:300],
+                }
+                self.iteration_summaries.append(iteration_history_entry)
+
                 error_result = {
                     "iteration": iteration,
                     "command": command,
                     "error": str(e),
+                    "summary": summary,
                     "constraint_code": constraint_code
                     if "constraint_code" in locals()
                     else None,
@@ -280,8 +400,6 @@ class FeedbackPipeline:
             json_safe_results = self._make_json_safe(final_results)
             json.dump(json_safe_results, f, indent=2)
 
-        print("\\n=== PIPELINE COMPLETE ===")
-        print(f"Best score achieved: {best_score:.3f}")
-        print(f"Results saved to: {run_dir}")
+        logger.info(f"Pipeline complete: best_score={best_score:.2f}")
 
         return final_results

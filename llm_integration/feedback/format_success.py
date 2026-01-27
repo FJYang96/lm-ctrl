@@ -19,6 +19,70 @@ from .format_status import (
 )
 
 
+def format_iteration_history(
+    iteration_summaries: list[dict[str, Any]] | list[str] | None,
+) -> list[str]:
+    """Format detailed iteration history section."""
+    lines: list[str] = []
+    if not iteration_summaries or len(iteration_summaries) == 0:
+        return lines
+
+    lines.append("\n" + "-" * 60)
+    lines.append("ITERATION HISTORY")
+    lines.append("-" * 60)
+
+    for item in iteration_summaries:
+        # Handle both old format (strings) and new format (dicts)
+        if isinstance(item, str):
+            lines.append(f"  {item}")
+        elif isinstance(item, dict):
+            iter_num = item.get("iteration", "?")
+            score = item.get("score", 0)
+            success = item.get("success", False)
+            status = "SUCCESS" if success else "FAILED"
+
+            lines.append(f"\n  Iter {iter_num} [{status}] Score: {score:.2f}")
+
+            # Show key metrics
+            metrics = item.get("metrics", {})
+            if metrics:
+                pitch = metrics.get("pitch", 0)
+                height = metrics.get("height_gain", 0)
+                lines.append(
+                    f"    Metrics: pitch={pitch:.2f}rad ({pitch * 57.3:.0f}°), height_gain={height:.3f}m"
+                )
+
+            # Show criteria evaluation
+            criteria = item.get("criteria", [])
+            if criteria:
+                lines.append("    Criteria:")
+                for c in criteria:
+                    progress = c.get("progress", 0)
+                    status_mark = "✓" if progress >= 0.8 else "✗"
+                    lines.append(
+                        f"      {status_mark} {c.get('name')}: {c.get('achieved')} ({progress:.0%})"
+                    )
+
+            # Show warnings
+            warnings = item.get("warnings", [])
+            if warnings:
+                lines.append("    Warnings:")
+                for w in warnings:
+                    lines.append(f"      ⚠ {w}")
+
+            # Show summary
+            summary = item.get("summary", "")
+            if summary:
+                lines.append(f"    Summary: {summary}")
+
+            # Show error for failed iterations
+            error = item.get("error", "")
+            if error and not success:
+                lines.append(f"    Error: {error[:200]}")
+
+    return lines
+
+
 def format_enhanced_feedback(
     iteration: int,
     command: str,
@@ -32,12 +96,14 @@ def format_enhanced_feedback(
     previous_constraints: str,
     previous_iteration_analysis: dict[str, Any] | None = None,
     initial_height: float = 0.2117,
+    iteration_summaries: list[dict[str, Any]] | list[str] | None = None,
 ) -> str:
     """
     Format all feedback into a structured string for the LLM.
 
     Args:
         initial_height: Robot's initial COM height from config
+        iteration_summaries: List of LLM-generated summaries from previous iterations
 
     Returns:
         Formatted feedback string
@@ -48,6 +114,9 @@ def format_enhanced_feedback(
     lines.append("=" * 60)
     lines.append(f"ITERATION {iteration} FEEDBACK")
     lines.append("=" * 60)
+
+    # Iteration History (what was tried before)
+    lines.extend(format_iteration_history(iteration_summaries))
 
     # MPC Configuration Summary
     lines.extend(format_mpc_config_section(optimization_status))

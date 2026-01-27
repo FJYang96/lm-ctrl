@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any
 
+from ..logging_config import logger
+
 if TYPE_CHECKING:
     from .feedback_pipeline import FeedbackPipeline
 
@@ -137,5 +139,5 @@ def score_task_specific_behavior(
             return min(1.0, motion_score)
 
     except Exception as e:
-        print(f"Warning: Task scoring failed: {e}")
+        logger.warning(f"Task scoring failed: {e}")
         return 0.0

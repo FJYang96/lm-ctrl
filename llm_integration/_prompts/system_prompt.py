@@ -111,17 +111,37 @@ PRINCIPLE 8: Understand what you're actually constraining
 
 PRINCIPLE 9: YOU must specify terminal constraints
 - The base MPC does NOT enforce any terminal state requirements
-- For safe landing, constrain the final state (when k == horizon or progress == 1.0):
+- For safe landing, you need bounds that TIGHTEN as progress approaches 1.0:
   - Terminal velocities (vx, vy, vz) should be small for stable landing
   - Terminal angular velocities (wx, wy, wz) should be small
-  - Terminal orientation depends on the task:
+  - Terminal orientation depends on the task
+- Use fmax to create smooth late-activation: fmax(0, (progress - threshold) / width) gives a ramp from 0 to 1
+  - Example: activation = fmax(0, (progress - 0.8) / 0.2) is 0 until progress=0.8, then ramps to 1
 - Without terminal constraints, the robot may land in unstable configurations
+
+== CRITICAL: AVOID CONTACT-BASED STEP FUNCTIONS ==
+
+DO NOT use contact_k to create step-function bounds like:
+  upper = (1.0 - contact_k[0]) * X + contact_k[0] * Y  # BAD
+
+This creates SHARP DISCONTINUITIES at phase boundaries that the optimizer struggles with.
+
+INSTEAD, always use progress-based bounds with SMOOTH functions (polynomials, quadratics, or Gaussians).
+
+When using Gaussian dips (exp(-((progress - center)/width)^2)) to force behavior during a phase:
+- Make the constraint STRONG ENOUGH to actually force the motion (weak constraints get ignored)
+- But keep bounds PHYSICALLY ACHIEVABLE - check the physics limits in this prompt and don't exceed them
+- For velocity constraints, "excluding zero" means one bound must cross zero:
+  - To force POSITIVE velocity: make LOWER bound positive (> 0)
+  - To force NEGATIVE velocity: make UPPER bound negative (< 0)
+- Consider adding supporting constraints (height, terminal velocity) to help guide the optimizer
 
 == CONSTRAINT ANTI-PATTERNS (COMMON FAILURES) ==
 
-1. DON'T constrain both position AND velocity of the same DOF
-   - Creates conflicting requirements the solver cannot satisfy
-   - Pick ONE per DOF: either position bounds OR velocity bounds
+1. DON'T constrain the same variable in multiple constraint functions
+   - Even if constraints are meant for different phases, ALL bounds apply at ALL timesteps
+   - If one constraint has upper=5.0 and another has upper=2.0 on the same variable, the tighter bound (2.0) wins everywhere
+   - Combine phase-specific logic into ONE constraint function per variable
 
 2. DON'T use if/else that creates discontinuous bounds
    - Solver needs smooth feasible regions

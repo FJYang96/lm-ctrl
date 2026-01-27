@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from .format_metrics import format_terminal_state_section
+from .format_success import format_iteration_history  # Use shared detailed format
 
 
 def generate_failure_feedback(
@@ -16,6 +17,7 @@ def generate_failure_feedback(
     previous_constraints: str,
     state_traj: np.ndarray | None = None,
     initial_height: float = 0.2117,
+    iteration_summaries: list[dict[str, Any]] | list[str] | None = None,
 ) -> str:
     """
     Generate feedback when optimization fails to converge.
@@ -32,6 +34,7 @@ def generate_failure_feedback(
         previous_constraints: The constraint code that failed
         state_traj: The debug trajectory from failed optimization (if available)
         initial_height: Robot's initial COM height from config
+        iteration_summaries: List of LLM-generated summaries from previous iterations
 
     Returns:
         Formatted feedback string for the LLM
@@ -43,6 +46,9 @@ def generate_failure_feedback(
     lines.append(f"ITERATION {iteration} - OPTIMIZATION FAILED")
     lines.append("=" * 60)
     lines.append(f"Task: {command}")
+
+    # Iteration History (what was tried before)
+    lines.extend(format_iteration_history(iteration_summaries))
 
     # Solver status
     lines.append("\n" + "-" * 60)
@@ -184,20 +190,27 @@ def generate_failure_feedback(
     lines.append("5. FINAL STATE ONLY: Consider constraining only the final state")
     lines.append("   Example: if k == horizon - 1:  # Only at the end")
 
-    # Critical simplification warning
+    # Simplification suggestions
     lines.append("\n" + "!" * 60)
-    lines.append("⚠️  CRITICAL: YOUR NEXT ITERATION MUST BE SIMPLER")
     lines.append("!" * 60)
     lines.append("The solver FAILED. This means your constraints define an")
-    lines.append("INFEASIBLE or NEARLY-INFEASIBLE region. You MUST:")
+    lines.append("INFEASIBLE or NEARLY-INFEASIBLE region. You MAY:")
     lines.append("")
     lines.append("  1. REMOVE at least half your constraints")
     lines.append("  2. DOUBLE the width of remaining bounds")
-    lines.append("  3. Try a FUNDAMENTALLY DIFFERENT approach")
+    lines.append(
+        "  3. MOST IMPORTANT: YOU MAY HAVE TO TRY a FUNDAMENTALLY DIFFERENT approach"
+    )
     lines.append("")
-    lines.append("DO NOT make small tweaks to the same approach.")
-    lines.append("DO NOT tighten any bounds.")
-    lines.append("DO NOT add new constraints.")
+    lines.append(
+        "DO NOT FEEL FORCED TO make small tweaks to the same approach if you are not getting anywhere."
+    )
+    lines.append(
+        "DO NOT FEEL FORCED TO tighten any bounds if you are not getting anywhere."
+    )
+    lines.append(
+        "DO NOT FEEL FORCED TO add new constraints if you are not getting anywhere."
+    )
 
     # Initial state reminder
     lines.append("\n" + "-" * 60)
