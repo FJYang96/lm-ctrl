@@ -25,11 +25,8 @@ def execute_simulation(
     """Execute the optimized trajectory in simulation."""
 
     if not optimization_result["success"]:
-        return {
-            "success": False,
-            "error": "Cannot simulate - optimization failed",
-            "tracking_error": float("inf"),
-        }
+        # Still render the debug trajectory for visualization/debugging
+        return render_failed_trajectory(self, optimization_result, iteration, run_dir)
 
     if self.env is None:
         return {
@@ -224,3 +221,101 @@ def analyze_simulation_quality(
         analysis["issues"].append(f"Analysis failed: {str(e)}")
 
     return analysis
+
+
+def render_failed_trajectory(
+    self: "FeedbackPipeline",
+    optimization_result: dict[str, Any],
+    iteration: int,
+    run_dir: Path,
+) -> dict[str, Any]:
+    """
+    Render the debug trajectory from a failed optimization for debugging.
+
+    Even when the solver doesn't converge, the debug trajectory shows what
+    the solver was attempting. This is invaluable for understanding if the
+    approach was on the right track (e.g., 77% of a backflip).
+    """
+
+    if self.env is None:
+        return {
+            "success": False,
+            "error": "Cannot render - environment not available",
+            "tracking_error": float("inf"),
+            "debug_video_saved": False,
+        }
+
+    # Check if we have a debug trajectory
+    state_traj = optimization_result.get("state_trajectory")
+    if state_traj is None or (hasattr(state_traj, "size") and state_traj.size == 0):
+        return {
+            "success": False,
+            "error": "Optimization failed - no debug trajectory available",
+            "tracking_error": float("inf"),
+            "debug_video_saved": False,
+        }
+
+    # Check if trajectory has any meaningful data (not all zeros)
+    if np.allclose(state_traj, 0):
+        return {
+            "success": False,
+            "error": "Optimization failed - debug trajectory is all zeros",
+            "tracking_error": float("inf"),
+            "debug_video_saved": False,
+        }
+
+    try:
+        # Get whatever trajectory data we have
+        grf_traj = optimization_result.get(
+            "grf_trajectory", np.zeros((max(1, state_traj.shape[0] - 1), 12))
+        )
+        joint_vel_traj = optimization_result.get(
+            "joint_vel_trajectory", np.zeros((max(1, state_traj.shape[0] - 1), 12))
+        )
+
+        # Create input trajectory for rendering
+        input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
+
+        # Render the debug trajectory (what solver was attempting)
+        logger.info("Rendering debug trajectory from failed optimization...")
+        debug_traj_images = render_and_save_planned_trajectory(
+            state_traj, input_traj, self.env, f"_iter_{iteration}_DEBUG"
+        )
+
+        video_path = None
+        if debug_traj_images and len(debug_traj_images) > 0:
+            import imageio
+
+            fps = 1 / self.config.experiment.sim_dt
+            video_path = run_dir / f"debug_trajectory_iter_{iteration}.mp4"
+            imageio.mimsave(str(video_path), debug_traj_images, fps=fps)
+            logger.info(f"Saved debug trajectory video: {video_path}")
+
+        # Extract trajectory metrics for the feedback
+        trajectory_analysis = optimization_result.get("trajectory_analysis", {})
+        pitch_achieved = abs(trajectory_analysis.get("total_pitch_rotation", 0))
+        height_gain = trajectory_analysis.get("height_gain", 0)
+
+        return {
+            "success": False,  # Still marked as failed (optimization didn't converge)
+            "error": "Optimization failed - debug trajectory rendered for analysis",
+            "tracking_error": float("inf"),
+            "debug_video_saved": video_path is not None,
+            "debug_video_path": str(video_path) if video_path else None,
+            "debug_trajectory_metrics": {
+                "pitch_achieved_rad": pitch_achieved,
+                "pitch_achieved_pct": (pitch_achieved / 6.28) * 100
+                if pitch_achieved > 0
+                else 0,
+                "height_gain_m": height_gain,
+            },
+        }
+
+    except Exception as e:
+        logger.warning(f"Could not render debug trajectory: {e}")
+        return {
+            "success": False,
+            "error": f"Optimization failed, debug render also failed: {e}",
+            "tracking_error": float("inf"),
+            "debug_video_saved": False,
+        }

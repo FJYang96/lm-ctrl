@@ -180,9 +180,20 @@ Evaluate how well this trajectory achieves the commanded task."""
         constraint_code: str,
         error_info: dict[str, Any],
         trajectory_analysis: dict[str, Any] | None = None,
+        images: list[str] | None = None,
     ) -> str:
-        """Generate a detailed summary for a failed iteration."""
+        """Generate a detailed summary for a failed iteration.
+
+        Args:
+            command: The task command
+            constraint_code: The constraint code that failed
+            error_info: Error information from the solver
+            trajectory_analysis: Metrics from the debug trajectory (if available)
+            images: Video frames from the debug trajectory (if available)
+        """
         system_prompt = """You are analyzing a FAILED robot trajectory optimization attempt. Generate a detailed 4-5 sentence technical analysis.
+
+If video frames are provided, USE THEM to understand what the solver was attempting before it gave up.
 
 === REQUIRED CONTENT ===
 
@@ -193,9 +204,10 @@ Evaluate how well this trajectory achieves the commanded task."""
    - Contact phase handling
 
 2. PARTIAL PROGRESS: What did the solver achieve before failing?
+   - Look at the video frames to see what motion was attempted
    - Rotation achieved (if any trajectory data)
    - Height reached
-   - Point of failure
+   - Was the solver on the right track? How can it make a better trajectory that matches the command in fewer iterations?
 
 3. FAILURE DIAGNOSIS: Identify the specific technical failure mode
    - Infeasibility at initial state (k=0)
@@ -203,16 +215,21 @@ Evaluate how well this trajectory achieves the commanded task."""
    - Conflicting/mutually exclusive bounds
    - Bounds too tight for feasible trajectory
    - Solver divergence or numerical issues
+   - OR: Solver was making good progress but ran out of iterations
 
 4. ROOT CAUSE ANALYSIS: Explain WHY this approach failed
    - Code bug vs physics impossibility
    - Unrealistic constraint values
    - Contact sequence mismatch
+   - Solver needed more iterations (if significant progress was made)
 
 5. SPECIFIC FIX RECOMMENDATION: What exact changes would fix this?
    - Specific parameter values to try
    - Alternative constraint approaches
    - Bounds adjustments needed
+
+DON'T JUST SAY THE SOLVER NEEDED MORE ITERATIONS; FIX THE CONSTRAINT CODE SO THAT THE SOLVER CAN CONVERGE IN FEWER ITERATIONS.
+ANALYZE THE CONSTRAINT CODE AND THE TRAJECTORY METRICS TO FIND THE ROOT CAUSE OF THE FAILURE AND FIX IT.
 
 Return ONLY the analysis text, no quotes or markdown."""
 
@@ -227,7 +244,7 @@ Return ONLY the analysis text, no quotes or markdown."""
 
 CONSTRAINT CODE:
 ```python
-{constraint_code[:2000]}
+{constraint_code[:200000]}
 ```
 
 TRAJECTORY METRICS (from solver's last attempt):
@@ -236,7 +253,7 @@ TRAJECTORY METRICS (from solver's last attempt):
 ERROR:
 {error_text}"""
 
-        response = self._call_llm(system_prompt, user_message)
+        response = self._call_llm(system_prompt, user_message, images)
         return response.strip().strip('"').strip("'")
 
     def summarize_successful_iteration(
@@ -322,13 +339,13 @@ Score: {score:.2f}"""
         max_yaw = ta.get("max_yaw", 0)
         total_roll = ta.get("total_roll_rotation", 0)
 
-        return f"""Height: initial={ta.get('initial_com_height', 0):.3f}m, max={ta.get('max_com_height', 0):.3f}m, gain={ta.get('height_gain', 0):.3f}m
+        return f"""Height: initial={ta.get("initial_com_height", 0):.3f}m, max={ta.get("max_com_height", 0):.3f}m, gain={ta.get("height_gain", 0):.3f}m
 Pitch rotation: {total_pitch:.2f} rad ({abs(total_pitch) * 57.3:.0f} degrees)
 Yaw rotation: {max_yaw:.2f} rad ({abs(max_yaw) * 57.3:.0f} degrees)
 Roll rotation: {total_roll:.2f} rad ({abs(total_roll) * 57.3:.0f} degrees)
-Max angular velocity: {ta.get('max_angular_vel', 0):.2f} rad/s
-Flight duration: {ta.get('flight_duration', 0):.2f}s
-Final COM velocity: {ta.get('final_com_velocity', 0):.2f} m/s"""
+Max angular velocity: {ta.get("max_angular_vel", 0):.2f} rad/s
+Flight duration: {ta.get("flight_duration", 0):.2f}s
+Final COM velocity: {ta.get("final_com_velocity", 0):.2f} m/s"""
 
     def _format_metrics_brief(self, ta: dict[str, Any]) -> str:
         """Format key metrics briefly."""
@@ -394,8 +411,13 @@ def summarize_iteration(
     error_info: dict[str, Any] | None = None,
     trajectory_analysis: dict[str, Any] | None = None,
     score: float = 0.0,
+    images: list[str] | None = None,
 ) -> str:
-    """Generate an iteration summary for history."""
+    """Generate an iteration summary for history.
+
+    Args:
+        images: Video frames (used for failed iterations to show what solver attempted)
+    """
     evaluator = get_evaluator()
     if success and trajectory_analysis:
         return evaluator.summarize_successful_iteration(
@@ -403,5 +425,9 @@ def summarize_iteration(
         )
     else:
         return evaluator.summarize_failed_iteration(
-            command, constraint_code, error_info or {}, trajectory_analysis or {}
+            command,
+            constraint_code,
+            error_info or {},
+            trajectory_analysis or {},
+            images,
         )

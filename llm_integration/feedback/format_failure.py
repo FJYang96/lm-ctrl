@@ -23,7 +23,8 @@ def generate_failure_feedback(
     Generate feedback when optimization fails to converge.
 
     This provides the LLM with actionable information about why the optimization
-    failed and what to try differently.
+    failed and what to try differently. Video frames from the debug trajectory
+    are sent separately via the vision API.
 
     Args:
         iteration: Current iteration number

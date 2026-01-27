@@ -295,13 +295,14 @@ class FeedbackPipeline:
                             f"    Height gain: {trajectory_analysis.get('height_gain', 0):.3f}m"
                         )
 
-                    # Get LLM summary for failed optimization
+                    # Get LLM summary for failed optimization (with video frames)
                     summary = summarize_iteration(
                         command=command,
                         constraint_code=constraint_code,
                         success=False,
                         error_info=error_info,
                         trajectory_analysis=trajectory_analysis,
+                        images=self.current_images,
                     )
                     logger.info(f"  Summary: {summary}")
 
@@ -352,6 +353,7 @@ class FeedbackPipeline:
                     constraint_code=code,
                     success=False,
                     error_info=error_info,
+                    images=self.current_images if self.current_images else None,
                 )
                 # Add detailed error info to history
                 iteration_history_entry = {

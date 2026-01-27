@@ -75,26 +75,40 @@ def create_visual_feedback(
     """
     Extract key frames from planned and simulated trajectory videos.
 
+    Also extracts from debug trajectory videos when optimization fails,
+    which is crucial for understanding what the solver was attempting.
+
     Args:
         run_dir: Directory containing iteration results
         iteration: Iteration number
         num_frames: Number of frames to extract per video
 
     Returns:
-        List of base64-encoded images (planned frames first, then simulated)
+        List of base64-encoded images (planned frames first, then simulated, then debug)
     """
     images: list[str] = []
 
-    # Extract from planned trajectory
+    # Extract from planned trajectory (successful optimization)
     planned_video = run_dir / f"planned_traj_iter_{iteration}.mp4"
     if planned_video.exists():
         planned_frames = extract_key_frames(planned_video, num_frames)
         images.extend(planned_frames)
 
-    # Extract from simulation
+    # Extract from simulation (successful optimization)
     sim_video = run_dir / f"simulation_iter_{iteration}.mp4"
     if sim_video.exists():
         sim_frames = extract_key_frames(sim_video, num_frames)
         images.extend(sim_frames)
+
+    # Extract from debug trajectory (failed optimization)
+    # This shows what the solver was attempting before it gave up
+    debug_video = run_dir / f"debug_trajectory_iter_{iteration}.mp4"
+    if debug_video.exists():
+        debug_frames = extract_key_frames(debug_video, num_frames)
+        if debug_frames:
+            logger.info(
+                f"Extracted {len(debug_frames)} frames from debug trajectory for LLM feedback"
+            )
+            images.extend(debug_frames)
 
     return images

@@ -73,6 +73,7 @@ def create_feedback_context(
 
         # Get initial height from config
         initial_height = float(self.config.experiment.initial_qpos[2])
+
         return generate_failure_feedback(
             iteration=iteration,
             command=command,
