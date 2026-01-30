@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Quadruped Control</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --bg: #0f172a;
+            --bg-card: #1e293b;
+            --bg-input: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #475569;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--primary), #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        header p {
+            color: var(--text-muted);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            margin-top: 1rem;
+        }
+
+        .status-badge.ready {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+
+        .status-badge.error {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--error);
+        }
+
+        .status-badge.running {
+            background: rgba(99, 102, 241, 0.2);
+            color: var(--primary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .status-badge.running .status-dot {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 900px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .card h2 {
+            font-size: 1.125rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card h2 .icon {
+            font-size: 1.25rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 1rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .form-group .hint {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+
+        .btn-danger {
+            background: var(--error);
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #dc2626;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .btn-group .btn {
+            flex: 1;
+        }
+
+        .examples {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .example-btn {
+            padding: 0.375rem 0.75rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-size: 0.8125rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .example-btn:hover {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .progress-section {
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: var(--bg-input);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #a855f7);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .log-container {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.8125rem;
+        }
+
+        .log-entry {
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid rgba(71, 85, 105, 0.3);
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-timestamp {
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .log-message {
+            word-break: break-word;
+        }
+
+        .log-entry.info .log-message { color: var(--text); }
+        .log-entry.success .log-message { color: var(--success); }
+        .log-entry.warning .log-message { color: var(--warning); }
+        .log-entry.error .log-message { color: var(--error); }
+
+        .results-card {
+            margin-top: 1.5rem;
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1rem;
+        }
+
+        .result-item {
+            background: var(--bg);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .result-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--primary);
+        }
+
+        .result-value.success { color: var(--success); }
+        .result-value.warning { color: var(--warning); }
+
+        .result-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--text-muted);
+        }
+
+        .empty-state .icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        /* Video Section Styles */
+        .video-section {
+            margin-top: 1.5rem;
+        }
+
+        .video-container {
+            display: flex;
+            gap: 1.5rem;
+        }
+
+        .video-sidebar {
+            width: 250px;
+            flex-shrink: 0;
+        }
+
+        .video-list {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .video-item {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid rgba(71, 85, 105, 0.3);
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .video-item:last-child {
+            border-bottom: none;
+        }
+
+        .video-item:hover {
+            background: var(--bg-input);
+        }
+
+        .video-item.active {
+            background: var(--primary);
+        }
+
+        .video-item-name {
+            font-size: 0.875rem;
+            font-weight: 500;
+            word-break: break-all;
+        }
+
+        .video-item-meta {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .video-item.active .video-item-meta {
+            color: rgba(255,255,255,0.7);
+        }
+
+        .video-type-badge {
+            display: inline-block;
+            padding: 0.125rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.6875rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .video-type-badge.planned-debug {
+            background: rgba(168, 85, 247, 0.2);
+            color: #a855f7;
+        }
+
+        .video-type-badge.simulation {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+
+        .video-type-badge.planned {
+            background: rgba(99, 102, 241, 0.2);
+            color: var(--primary);
+        }
+
+        .video-type-badge.debug {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+        }
+
+        /* Current Iteration Video Styles */
+        .current-video-section {
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .current-video-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .current-video-header h3 {
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .current-video-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            background: rgba(99, 102, 241, 0.2);
+            color: var(--primary);
+        }
+
+        .current-video-badge.new {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .current-video-player {
+            width: 100%;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            aspect-ratio: 16/9;
+        }
+
+        .current-video-empty {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 0.5rem;
+            color: var(--text-muted);
+        }
+
+        .video-player-container {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .video-player {
+            width: 100%;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            aspect-ratio: 16/9;
+        }
+
+        .video-player-empty {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 0.5rem;
+            color: var(--text-muted);
+        }
+
+        .video-player-empty .icon {
+            font-size: 3rem;
+            opacity: 0.5;
+        }
+
+        .video-info {
+            margin-top: 0.75rem;
+            padding: 0.75rem 1rem;
+            background: var(--bg);
+            border-radius: 8px;
+            font-size: 0.875rem;
+        }
+
+        .video-info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .video-controls {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+
+        .video-controls .btn {
+            width: auto;
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+        }
+
+        .btn-secondary {
+            background: var(--bg-input);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--border);
+        }
+
+        .iteration-filter {
+            margin-bottom: 1rem;
+        }
+
+        .iteration-filter select {
+            width: 100%;
+            padding: 0.5rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 LLM Quadruped Control</h1>
+            <p>Generate robot behaviors through natural language commands</p>
+            <div id="system-status" class="status-badge">
+                <span class="status-dot"></span>
+                <span>Checking...</span>
+            </div>
+        </header>
+
+        <div class="grid">
+            <!-- Control Panel -->
+            <div class="card">
+                <h2><span class="icon">⚙️</span> Control Panel</h2>
+                
+                <form id="pipeline-form">
+                    <div class="form-group">
+                        <label for="command">Robot Command</label>
+                        <textarea 
+                            id="command" 
+                            name="command" 
+                            placeholder="Enter a natural language command for the robot..."
+                            required
+                        ></textarea>
+                        <div class="examples">
+                            <button type="button" class="example-btn" data-command="do a backflip">backflip</button>
+                            <button type="button" class="example-btn" data-command="jump as high as possible">high jump</button>
+                            <button type="button" class="example-btn" data-command="perform a front flip">front flip</button>
+                            <button type="button" class="example-btn" data-command="spin in a circle">spin</button>
+                            <button type="button" class="example-btn" data-command="jump forward">jump forward</button>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="max_iterations">Max LLM Iterations</label>
+                            <input 
+                                type="number" 
+                                id="max_iterations" 
+                                name="max_iterations" 
+                                value="5" 
+                                min="1" 
+                                max="100"
+                            >
+                            <div class="hint">LLM refinement iterations</div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="solver_max_iter">Solver Max Iterations</label>
+                            <input 
+                                type="number" 
+                                id="solver_max_iter" 
+                                name="solver_max_iter" 
+                                placeholder="Unlimited"
+                                min="1" 
+                                max="10000"
+                            >
+                            <div class="hint">IPOPT iterations per solve (empty = unlimited)</div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="config_mode">Config Mode</label>
+                            <select id="config_mode" name="config_mode">
+                                <option value="complementarity" selected>Complementarity</option>
+                                <option value="standard">Standard</option>
+                            </select>
+                            <div class="hint">MPC configuration mode</div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="results_dir">Results Directory</label>
+                            <input 
+                                type="text" 
+                                id="results_dir" 
+                                name="results_dir" 
+                                value="results/llm_iterations"
+                            >
+                        </div>
+                    </div>
+
+                    <div class="btn-group">
+                        <button type="submit" id="run-btn" class="btn btn-primary">
+                            <span>▶️ Run Pipeline</span>
+                        </button>
+                        <button type="button" id="stop-btn" class="btn btn-danger" disabled>
+                            <span>⏹️ Stop</span>
+                        </button>
+                    </div>
+                </form>
+
+                <div id="progress-section" class="progress-section" style="display: none;">
+                    <div class="progress-header">
+                        <span id="progress-text">Iteration 0 / 0</span>
+                        <span id="elapsed-time">0s</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Current Iteration Video (shows during pipeline run) -->
+                <div id="current-video-section" class="current-video-section" style="display: none;">
+                    <div class="current-video-header">
+                        <h3>🎬 Latest Iteration Video</h3>
+                        <span id="current-video-badge" class="current-video-badge">Iteration 0</span>
+                    </div>
+                    <div id="current-video-wrapper">
+                        <div class="current-video-empty">
+                            <div class="icon" style="font-size: 2rem; opacity: 0.5;">⏳</div>
+                            <p>Waiting for first iteration to complete...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logs Panel -->
+            <div class="card">
+                <h2><span class="icon">📋</span> Logs</h2>
+                <div id="log-container" class="log-container">
+                    <div class="empty-state">
+                        <div class="icon">📝</div>
+                        <p>Logs will appear here when you run the pipeline</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Panel -->
+            <div id="results-card" class="card full-width results-card" style="display: none;">
+                <h2><span class="icon">📊</span> Results</h2>
+                <div id="results-content" class="results-grid">
+                </div>
+            </div>
+
+            <!-- Video Panel -->
+            <div id="video-card" class="card full-width video-section" style="display: none;">
+                <h2><span class="icon">🎬</span> Trajectory Videos</h2>
+                <div class="video-container">
+                    <div class="video-sidebar">
+                        <div class="iteration-filter">
+                            <select id="iteration-filter">
+                                <option value="all">All Iterations</option>
+                            </select>
+                        </div>
+                        <div id="video-list" class="video-list">
+                            <div class="empty-state" style="padding: 1.5rem;">
+                                <p>No videos available</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="video-player-container">
+                        <div id="video-player-wrapper">
+                            <div class="video-player-empty">
+                                <div class="icon">🎥</div>
+                                <p>Select a video to play</p>
+                            </div>
+                        </div>
+                        <div id="video-info" class="video-info" style="display: none;">
+                            <div class="video-info-row">
+                                <span id="video-current-name">-</span>
+                                <span id="video-current-type" class="video-type-badge">-</span>
+                            </div>
+                        </div>
+                        <div class="video-controls">
+                            <button id="prev-video-btn" class="btn btn-secondary" disabled>⬅️ Previous</button>
+                            <button id="next-video-btn" class="btn btn-secondary" disabled>Next ➡️</button>
+                            <button id="refresh-videos-btn" class="btn btn-secondary">🔄 Refresh</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const form = document.getElementById('pipeline-form');
+        const commandInput = document.getElementById('command');
+        const runBtn = document.getElementById('run-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const systemStatus = document.getElementById('system-status');
+        const logContainer = document.getElementById('log-container');
+        const progressSection = document.getElementById('progress-section');
+        const progressText = document.getElementById('progress-text');
+        const progressFill = document.getElementById('progress-fill');
+        const elapsedTime = document.getElementById('elapsed-time');
+        const resultsCard = document.getElementById('results-card');
+        const resultsContent = document.getElementById('results-content');
+        
+        // Current iteration video elements
+        const currentVideoSection = document.getElementById('current-video-section');
+        const currentVideoWrapper = document.getElementById('current-video-wrapper');
+        const currentVideoBadge = document.getElementById('current-video-badge');
+
+        let statusInterval = null;
+        let isRunning = false;
+        let lastShownIteration = -1;  // Track which iteration video is currently shown
+        let lastShownVideoType = null;  // Track which video type is currently shown
+
+        // Check system configuration on load
+        async function checkConfig() {
+            try {
+                const response = await fetch('/api/check-config');
+                const data = await response.json();
+                
+                if (data.ready) {
+                    systemStatus.className = 'status-badge ready';
+                    systemStatus.innerHTML = '<span class="status-dot"></span><span>Ready</span>';
+                } else {
+                    systemStatus.className = 'status-badge error';
+                    systemStatus.innerHTML = `<span class="status-dot"></span><span>${data.api_key_message}</span>`;
+                }
+            } catch (error) {
+                systemStatus.className = 'status-badge error';
+                systemStatus.innerHTML = '<span class="status-dot"></span><span>Connection Error</span>';
+            }
+        }
+
+        // Add log entry to the container
+        function addLogEntry(log) {
+            if (log.heartbeat) return;
+            
+            // Clear empty state if present
+            const emptyState = logContainer.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${log.level}`;
+            entry.innerHTML = `
+                <span class="log-timestamp">${log.timestamp}</span>
+                <span class="log-message">${escapeHtml(log.message)}</span>
+            `;
+            logContainer.appendChild(entry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Update progress UI
+        function updateProgress(current, max, elapsed) {
+            progressSection.style.display = 'block';
+            progressText.textContent = `Iteration ${current} / ${max}`;
+            const percent = max > 0 ? (current / max) * 100 : 0;
+            progressFill.style.width = `${percent}%`;
+            if (elapsed !== null) {
+                elapsedTime.textContent = `${elapsed}s`;
+            }
+        }
+
+        // Fetch and display the latest iteration video
+        async function fetchLatestIterationVideo() {
+            try {
+                const response = await fetch('/api/latest-iteration-video');
+                const data = await response.json();
+                
+                if (data.found && data.video) {
+                    const video = data.video;
+                    const iteration = video.iteration;
+                    const videoType = video.type;  // 'planned', 'debug', or 'simulation'
+                    
+                    // Only update if this is a new iteration or better video type
+                    if (iteration > lastShownIteration || (iteration === lastShownIteration && videoType !== lastShownVideoType)) {
+                        lastShownIteration = iteration;
+                        lastShownVideoType = videoType;
+                        
+                        // Show the video section
+                        currentVideoSection.style.display = 'block';
+                        
+                        // Update badge with animation and type indicator
+                        let typeLabel = videoType === 'debug' ? ' (Debug)' : (videoType === 'simulation' ? ' (Sim)' : '');
+                        currentVideoBadge.textContent = `Iteration ${iteration}${typeLabel}`;
+                        currentVideoBadge.className = `badge badge-${videoType === 'debug' ? 'warning' : (videoType === 'simulation' ? 'info' : 'success')} new`;
+                        setTimeout(() => currentVideoBadge.classList.remove('new'), 500);
+                        
+                        // Determine the video URL - all videos now come from video_dir
+                        let videoUrl = `/api/video-by-name/${encodeURIComponent(video.name)}`;
+                        
+                        // Update the video player
+                        currentVideoWrapper.innerHTML = `
+                            <video class="current-video-player" controls autoplay muted loop>
+                                <source src="${videoUrl}" type="video/mp4">
+                                Your browser does not support the video tag.
+                            </video>
+                        `;
+                    }
+                } else if (isRunning) {
+                    // Pipeline is running but no video yet
+                    currentVideoSection.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Error fetching latest iteration video:', error);
+            }
+        }
+
+        // Display results
+        function displayResults(results) {
+            resultsCard.style.display = 'block';
+            
+            const successClass = results.pipeline_success ? 'success' : 'warning';
+            const successText = results.pipeline_success ? 'Yes ✓' : 'No ⚠';
+            
+            resultsContent.innerHTML = `
+                <div class="result-item">
+                    <div class="result-value">${results.total_iterations}</div>
+                    <div class="result-label">Total Iterations</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-value">${results.best_score?.toFixed(3) || 'N/A'}</div>
+                    <div class="result-label">Best Score</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-value ${successClass}">${successText}</div>
+                    <div class="result-label">Success</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-value">${results.elapsed_time}s</div>
+                    <div class="result-label">Total Time</div>
+                </div>
+            `;
+        }
+
+        // Poll status
+        async function pollStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                if (data.running) {
+                    updateProgress(data.current_iteration, data.max_iterations, data.elapsed_time);
+                    systemStatus.className = 'status-badge running';
+                    systemStatus.innerHTML = '<span class="status-dot"></span><span>Running...</span>';
+                    
+                    // Fetch latest iteration video during run
+                    await fetchLatestIterationVideo();
+                } else {
+                    if (isRunning) {
+                        // Just finished
+                        isRunning = false;
+                        clearInterval(statusInterval);
+                        statusInterval = null;
+                        
+                        runBtn.disabled = false;
+                        runBtn.innerHTML = '<span>▶️ Run Pipeline</span>';
+                        stopBtn.disabled = true;
+                        
+                        systemStatus.className = 'status-badge ready';
+                        systemStatus.innerHTML = '<span class="status-dot"></span><span>Ready</span>';
+                        
+                        // Hide current video section (it will be shown in the full video panel)
+                        currentVideoSection.style.display = 'none';
+                        lastShownIteration = -1;
+                        lastShownVideoType = null;
+                        
+                        if (data.results) {
+                            displayResults(data.results);
+                            // Fetch videos after pipeline completes
+                            setTimeout(fetchVideos, 500);
+                        }
+                        
+                        if (data.error) {
+                            addLogEntry({
+                                timestamp: new Date().toLocaleTimeString(),
+                                level: 'error',
+                                message: data.error
+                            });
+                            // Still try to fetch videos even on error (debug videos may exist)
+                            setTimeout(fetchVideos, 500);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Status poll error:', error);
+            }
+        }
+
+        // Fetch and display logs
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                const data = await response.json();
+                
+                // Clear container
+                logContainer.innerHTML = '';
+                
+                if (data.logs.length === 0) {
+                    logContainer.innerHTML = `
+                        <div class="empty-state">
+                            <div class="icon">📝</div>
+                            <p>Logs will appear here when you run the pipeline</p>
+                        </div>
+                    `;
+                } else {
+                    data.logs.forEach(log => addLogEntry(log));
+                }
+            } catch (error) {
+                console.error('Log fetch error:', error);
+            }
+        }
+
+        // Form submission
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const solverMaxIterVal = document.getElementById('solver_max_iter').value;
+            
+            const formData = {
+                command: commandInput.value.trim(),
+                max_iterations: parseInt(document.getElementById('max_iterations').value),
+                config_mode: document.getElementById('config_mode').value,
+                results_dir: document.getElementById('results_dir').value,
+                solver_max_iter: solverMaxIterVal ? parseInt(solverMaxIterVal) : null
+            };
+
+            if (!formData.command) {
+                alert('Please enter a command');
+                return;
+            }
+
+            try {
+                // Clear previous results
+                resultsCard.style.display = 'none';
+                logContainer.innerHTML = '';
+                progressFill.style.width = '0%';
+                
+                // Reset current iteration video
+                currentVideoSection.style.display = 'none';
+                lastShownIteration = -1;
+                lastShownVideoType = null;
+                currentVideoWrapper.innerHTML = `
+                    <div class="current-video-empty">
+                        <div class="icon" style="font-size: 2rem; opacity: 0.5;">⏳</div>
+                        <p>Waiting for first iteration to complete...</p>
+                    </div>
+                `;
+                
+                runBtn.disabled = true;
+                runBtn.innerHTML = '<div class="spinner"></div><span>Starting...</span>';
+                stopBtn.disabled = false;
+
+                const response = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    isRunning = true;
+                    runBtn.innerHTML = '<div class="spinner"></div><span>Running...</span>';
+                    
+                    // Start polling for status (every 2 seconds to reduce spam)
+                    statusInterval = setInterval(async () => {
+                        await pollStatus();
+                        await fetchLogs();
+                    }, 2000);
+                } else {
+                    alert(data.error || 'Failed to start pipeline');
+                    runBtn.disabled = false;
+                    runBtn.innerHTML = '<span>▶️ Run Pipeline</span>';
+                    stopBtn.disabled = true;
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+                runBtn.disabled = false;
+                runBtn.innerHTML = '<span>▶️ Run Pipeline</span>';
+                stopBtn.disabled = true;
+            }
+        });
+
+        // Stop button
+        stopBtn.addEventListener('click', async () => {
+            try {
+                await fetch('/api/stop', { method: 'POST' });
+                addLogEntry({
+                    timestamp: new Date().toLocaleTimeString(),
+                    level: 'warning',
+                    message: 'Stop requested...'
+                });
+            } catch (error) {
+                console.error('Stop error:', error);
+            }
+        });
+
+        // Example buttons
+        document.querySelectorAll('.example-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                commandInput.value = btn.dataset.command;
+                commandInput.focus();
+            });
+        });
+
+        // ==================== VIDEO SECTION ====================
+        const videoCard = document.getElementById('video-card');
+        const videoList = document.getElementById('video-list');
+        const videoPlayerWrapper = document.getElementById('video-player-wrapper');
+        const videoInfo = document.getElementById('video-info');
+        const videoCurrentName = document.getElementById('video-current-name');
+        const videoCurrentType = document.getElementById('video-current-type');
+        const iterationFilter = document.getElementById('iteration-filter');
+        const prevVideoBtn = document.getElementById('prev-video-btn');
+        const nextVideoBtn = document.getElementById('next-video-btn');
+        const refreshVideosBtn = document.getElementById('refresh-videos-btn');
+
+        let allVideos = [];
+        let filteredVideos = [];
+        let currentVideoIndex = -1;
+
+        // Fetch available videos
+        async function fetchVideos() {
+            try {
+                const response = await fetch('/api/videos');
+                const data = await response.json();
+                
+                allVideos = data.videos || [];
+                
+                if (allVideos.length > 0) {
+                    videoCard.style.display = 'block';
+                    updateIterationFilter();
+                    filterAndDisplayVideos();
+                } else {
+                    videoCard.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error fetching videos:', error);
+            }
+        }
+
+        // Update the iteration filter dropdown
+        function updateIterationFilter() {
+            const iterations = [...new Set(allVideos.map(v => v.iteration))].sort((a, b) => parseInt(b) - parseInt(a));
+            
+            iterationFilter.innerHTML = '<option value="all">All Iterations</option>';
+            iterations.forEach(iter => {
+                const option = document.createElement('option');
+                option.value = iter;
+                option.textContent = `Iteration ${iter}`;
+                iterationFilter.appendChild(option);
+            });
+        }
+
+        // Filter and display videos based on selected iteration
+        function filterAndDisplayVideos() {
+            const selectedIteration = iterationFilter.value;
+            
+            if (selectedIteration === 'all') {
+                filteredVideos = [...allVideos];
+            } else {
+                filteredVideos = allVideos.filter(v => v.iteration === selectedIteration);
+            }
+            
+            renderVideoList();
+        }
+
+        // Render the video list
+        function renderVideoList() {
+            if (filteredVideos.length === 0) {
+                videoList.innerHTML = `
+                    <div class="empty-state" style="padding: 1.5rem;">
+                        <p>No videos available</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            videoList.innerHTML = filteredVideos.map((video, index) => {
+                // Format the video type for display
+                let typeDisplay = video.type;
+                if (video.type === 'planned-debug') {
+                    typeDisplay = 'planned (debug)';
+                }
+                
+                return `
+                    <div class="video-item ${index === currentVideoIndex ? 'active' : ''}" data-index="${index}">
+                        <div class="video-item-name">${video.name}</div>
+                        <div class="video-item-meta">
+                            <span class="video-type-badge ${video.type}">${typeDisplay}</span>
+                            <span>Iter ${video.iteration}</span>
+                            <span>${formatFileSize(video.size)}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            // Add click handlers
+            videoList.querySelectorAll('.video-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const index = parseInt(item.dataset.index);
+                    playVideo(index);
+                });
+            });
+            
+            updateNavigationButtons();
+        }
+
+        // Format file size
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // Play a video by index
+        function playVideo(index) {
+            if (index < 0 || index >= filteredVideos.length) return;
+            
+            currentVideoIndex = index;
+            const video = filteredVideos[index];
+            
+            // All videos come from video_dir via video-by-name endpoint
+            let videoUrl = `/api/video-by-name/${encodeURIComponent(video.name)}`;
+            
+            // Update player
+            videoPlayerWrapper.innerHTML = `
+                <video class="video-player" controls autoplay>
+                    <source src="${videoUrl}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+            `;
+            
+            // Update info
+            videoInfo.style.display = 'block';
+            videoCurrentName.textContent = video.name;
+            
+            // Format the video type for display
+            let typeDisplay = video.type;
+            if (video.type === 'planned-debug') {
+                typeDisplay = 'planned (debug)';
+            }
+            videoCurrentType.textContent = typeDisplay;
+            videoCurrentType.className = `video-type-badge ${video.type}`;
+            
+            // Update list selection
+            videoList.querySelectorAll('.video-item').forEach((item, i) => {
+                item.classList.toggle('active', i === index);
+            });
+            
+            updateNavigationButtons();
+        }
+
+        // Update navigation button states
+        function updateNavigationButtons() {
+            prevVideoBtn.disabled = currentVideoIndex <= 0;
+            nextVideoBtn.disabled = currentVideoIndex >= filteredVideos.length - 1;
+        }
+
+        // Navigation button handlers
+        prevVideoBtn.addEventListener('click', () => {
+            if (currentVideoIndex > 0) {
+                playVideo(currentVideoIndex - 1);
+            }
+        });
+
+        nextVideoBtn.addEventListener('click', () => {
+            if (currentVideoIndex < filteredVideos.length - 1) {
+                playVideo(currentVideoIndex + 1);
+            }
+        });
+
+        refreshVideosBtn.addEventListener('click', () => {
+            fetchVideos();
+        });
+
+        // Iteration filter change handler
+        iterationFilter.addEventListener('change', () => {
+            currentVideoIndex = -1;
+            filterAndDisplayVideos();
+        });
+
+        // Initialize
+        checkConfig();
+    </script>
+</body>
+</html>

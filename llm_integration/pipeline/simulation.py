@@ -1,5 +1,6 @@
 """Simulation execution functions for the feedback pipeline."""
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +15,16 @@ from ..logging_config import logger
 
 if TYPE_CHECKING:
     from .feedback_pipeline import FeedbackPipeline
+
+
+def get_video_dir(run_dir: Path) -> Path:
+    """Get the video directory, using VIDEO_DIR env var if set, otherwise run_dir."""
+    video_dir = os.environ.get("VIDEO_DIR")
+    if video_dir:
+        video_path = Path(video_dir)
+        video_path.mkdir(parents=True, exist_ok=True)
+        return video_path
+    return run_dir
 
 
 def execute_simulation(
@@ -84,12 +95,15 @@ def execute_simulation(
             self, qpos_traj, qvel_traj, sim_grf_traj, tracking_error
         )
 
+        # Get the video directory (uses VIDEO_DIR env var if set)
+        video_dir = get_video_dir(run_dir)
+
         # Save simulation video
         if sim_images:
             import imageio
 
             fps = 1 / self.config.experiment.sim_dt
-            video_path = run_dir / f"simulation_iter_{iteration}.mp4"
+            video_path = video_dir / f"simulation_iter_{iteration}.mp4"
             imageio.mimsave(str(video_path), sim_images, fps=fps)
 
         # Also save planned trajectory video if available
@@ -97,7 +111,7 @@ def execute_simulation(
             import imageio
 
             fps = 1 / self.config.experiment.sim_dt
-            planned_video_path = run_dir / f"planned_traj_iter_{iteration}.mp4"
+            planned_video_path = video_dir / f"planned_traj_iter_{iteration}.mp4"
             imageio.mimsave(str(planned_video_path), planned_traj_images, fps=fps)
 
         result = {
@@ -282,12 +296,15 @@ def render_failed_trajectory(
             state_traj, input_traj, self.env, f"_iter_{iteration}_DEBUG"
         )
 
+        # Get the video directory (uses VIDEO_DIR env var if set)
+        video_dir = get_video_dir(run_dir)
+
         video_path = None
         if debug_traj_images and len(debug_traj_images) > 0:
             import imageio
 
             fps = 1 / self.config.experiment.sim_dt
-            video_path = run_dir / f"debug_trajectory_iter_{iteration}.mp4"
+            video_path = video_dir / f"debug_trajectory_iter_{iteration}.mp4"
             imageio.mimsave(str(video_path), debug_traj_images, fps=fps)
             logger.info(f"Saved debug trajectory video: {video_path}")
 

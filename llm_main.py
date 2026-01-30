@@ -42,8 +42,9 @@ def main() -> int:
 Examples:
   python llm_main.py "do a backflip"
   python llm_main.py "jump as high as possible"
-  python llm_main.py "perform a front flip"
-  python llm_main.py "spin in a circle"
+  python llm_main.py "perform a front flip" --max-iterations 10
+  python llm_main.py "spin in a circle" --solver-max-iter 200
+  python llm_main.py "jump forward" --solver-max-iter 300 --max-iterations 5
         """,
     )
 
@@ -73,6 +74,13 @@ Examples:
         help="MPC configuration mode (default: complementarity)",
     )
 
+    parser.add_argument(
+        "--solver-max-iter",
+        type=int,
+        default=None,
+        help="Maximum IPOPT solver iterations per solve (default: unlimited)",
+    )
+
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
     args = parser.parse_args()
@@ -94,7 +102,8 @@ Examples:
     print("LLM-Enhanced Quadruped Control Pipeline")
     print("=" * 60)
     print(f"Command: '{args.command}'")
-    print(f"Max iterations: {args.max_iterations}")
+    print(f"Max LLM iterations: {args.max_iterations}")
+    print(f"Solver max iterations: {args.solver_max_iter if args.solver_max_iter else 'unlimited'}")
     print(f"Config mode: {args.config}")
     print(f"Results directory: {args.results_dir}")
     print()
@@ -107,6 +116,11 @@ Examples:
 
         # Update config for the selected mode
         config.CONSTRAINT_MODE = args.config
+
+        # Set solver max iterations if specified
+        if args.solver_max_iter:
+            config.solver_config["ipopt.max_iter"] = args.solver_max_iter
+            print(f"IPOPT max_iter set to: {args.solver_max_iter}")
 
         # Initialize and run pipeline
         print("Initializing feedback pipeline...")

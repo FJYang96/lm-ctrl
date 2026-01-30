@@ -2,12 +2,25 @@
 
 import base64
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
 
 # Use module-level logger (can't import from logging_config at module load time)
 logger = logging.getLogger("llm_integration.video_extraction")
+
+
+def get_video_dir(run_dir: Path) -> Path:
+    """Get the directory where videos are stored.
+    
+    Checks VIDEO_DIR environment variable first (set by frontend),
+    otherwise falls back to run_dir.
+    """
+    video_dir = os.environ.get("VIDEO_DIR")
+    if video_dir:
+        return Path(video_dir)
+    return run_dir
 
 # Try to import cv2 for video frame extraction
 try:
@@ -87,22 +100,25 @@ def create_visual_feedback(
         List of base64-encoded images (planned frames first, then simulated, then debug)
     """
     images: list[str] = []
+    
+    # Get the video directory (may be different from run_dir if VIDEO_DIR is set)
+    video_dir = get_video_dir(run_dir)
 
     # Extract from planned trajectory (successful optimization)
-    planned_video = run_dir / f"planned_traj_iter_{iteration}.mp4"
+    planned_video = video_dir / f"planned_traj_iter_{iteration}.mp4"
     if planned_video.exists():
         planned_frames = extract_key_frames(planned_video, num_frames)
         images.extend(planned_frames)
 
     # Extract from simulation (successful optimization)
-    sim_video = run_dir / f"simulation_iter_{iteration}.mp4"
+    sim_video = video_dir / f"simulation_iter_{iteration}.mp4"
     if sim_video.exists():
         sim_frames = extract_key_frames(sim_video, num_frames)
         images.extend(sim_frames)
 
     # Extract from debug trajectory (failed optimization)
     # This shows what the solver was attempting before it gave up
-    debug_video = run_dir / f"debug_trajectory_iter_{iteration}.mp4"
+    debug_video = video_dir / f"debug_trajectory_iter_{iteration}.mp4"
     if debug_video.exists():
         debug_frames = extract_key_frames(debug_video, num_frames)
         if debug_frames:

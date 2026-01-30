@@ -21,6 +21,13 @@ python llm_main.py "jump as high as possible"
 python llm_main.py "spin in a circle"
 ```
 
+## Run the LLM Frontend
+```bash
+cd frontend
+pip install requirements.txt
+python app.py
+```
+
 📖 **See [LLM_INTEGRATION_README.md](LLM_INTEGRATION_README.md) for complete documentation**
 
 ## Quick Start
