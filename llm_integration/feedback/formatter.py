@@ -3,6 +3,8 @@
 This module provides the main entry point for feedback generation.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import numpy as np

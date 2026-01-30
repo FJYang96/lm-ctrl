@@ -103,7 +103,9 @@ Examples:
     print("=" * 60)
     print(f"Command: '{args.command}'")
     print(f"Max LLM iterations: {args.max_iterations}")
-    print(f"Solver max iterations: {args.solver_max_iter if args.solver_max_iter else 'unlimited'}")
+    print(
+        f"Solver max iterations: {args.solver_max_iter if args.solver_max_iter else 'unlimited'}"
+    )
     print(f"Config mode: {args.config}")
     print(f"Results directory: {args.results_dir}")
     print()

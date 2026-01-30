@@ -2,6 +2,8 @@
 Simulation utilities for trajectory execution and data collection.
 """
 
+from __future__ import annotations
+
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
 from tqdm import tqdm
@@ -175,4 +177,4 @@ def _run_simulation_with_rendering(
         )
         images.append(overplotted_image)
 
-    return np.array(qpos_traj), np.array(qvel_traj), np.array(grf_traj), images
+    return np.array(qpos_traj), np.array(qvel_traj), np.array(grf_traj), images  # type: ignore[return-value]

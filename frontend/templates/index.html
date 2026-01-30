@@ -629,13 +629,13 @@
             <!-- Control Panel -->
             <div class="card">
                 <h2><span class="icon">⚙️</span> Control Panel</h2>
-                
+
                 <form id="pipeline-form">
                     <div class="form-group">
                         <label for="command">Robot Command</label>
-                        <textarea 
-                            id="command" 
-                            name="command" 
+                        <textarea
+                            id="command"
+                            name="command"
                             placeholder="Enter a natural language command for the robot..."
                             required
                         ></textarea>
@@ -651,12 +651,12 @@
                     <div class="form-row">
                         <div class="form-group">
                             <label for="max_iterations">Max LLM Iterations</label>
-                            <input 
-                                type="number" 
-                                id="max_iterations" 
-                                name="max_iterations" 
-                                value="5" 
-                                min="1" 
+                            <input
+                                type="number"
+                                id="max_iterations"
+                                name="max_iterations"
+                                value="5"
+                                min="1"
                                 max="100"
                             >
                             <div class="hint">LLM refinement iterations</div>
@@ -664,12 +664,12 @@
 
                         <div class="form-group">
                             <label for="solver_max_iter">Solver Max Iterations</label>
-                            <input 
-                                type="number" 
-                                id="solver_max_iter" 
-                                name="solver_max_iter" 
+                            <input
+                                type="number"
+                                id="solver_max_iter"
+                                name="solver_max_iter"
                                 placeholder="Unlimited"
-                                min="1" 
+                                min="1"
                                 max="10000"
                             >
                             <div class="hint">IPOPT iterations per solve (empty = unlimited)</div>
@@ -688,10 +688,10 @@
 
                         <div class="form-group">
                             <label for="results_dir">Results Directory</label>
-                            <input 
-                                type="text" 
-                                id="results_dir" 
-                                name="results_dir" 
+                            <input
+                                type="text"
+                                id="results_dir"
+                                name="results_dir"
                                 value="results/llm_iterations"
                             >
                         </div>
@@ -804,7 +804,7 @@
         const elapsedTime = document.getElementById('elapsed-time');
         const resultsCard = document.getElementById('results-card');
         const resultsContent = document.getElementById('results-content');
-        
+
         // Current iteration video elements
         const currentVideoSection = document.getElementById('current-video-section');
         const currentVideoWrapper = document.getElementById('current-video-wrapper');
@@ -820,7 +820,7 @@
             try {
                 const response = await fetch('/api/check-config');
                 const data = await response.json();
-                
+
                 if (data.ready) {
                     systemStatus.className = 'status-badge ready';
                     systemStatus.innerHTML = '<span class="status-dot"></span><span>Ready</span>';
@@ -837,7 +837,7 @@
         // Add log entry to the container
         function addLogEntry(log) {
             if (log.heartbeat) return;
-            
+
             // Clear empty state if present
             const emptyState = logContainer.querySelector('.empty-state');
             if (emptyState) {
@@ -877,29 +877,29 @@
             try {
                 const response = await fetch('/api/latest-iteration-video');
                 const data = await response.json();
-                
+
                 if (data.found && data.video) {
                     const video = data.video;
                     const iteration = video.iteration;
                     const videoType = video.type;  // 'planned', 'debug', or 'simulation'
-                    
+
                     // Only update if this is a new iteration or better video type
                     if (iteration > lastShownIteration || (iteration === lastShownIteration && videoType !== lastShownVideoType)) {
                         lastShownIteration = iteration;
                         lastShownVideoType = videoType;
-                        
+
                         // Show the video section
                         currentVideoSection.style.display = 'block';
-                        
+
                         // Update badge with animation and type indicator
                         let typeLabel = videoType === 'debug' ? ' (Debug)' : (videoType === 'simulation' ? ' (Sim)' : '');
                         currentVideoBadge.textContent = `Iteration ${iteration}${typeLabel}`;
                         currentVideoBadge.className = `badge badge-${videoType === 'debug' ? 'warning' : (videoType === 'simulation' ? 'info' : 'success')} new`;
                         setTimeout(() => currentVideoBadge.classList.remove('new'), 500);
-                        
+
                         // Determine the video URL - all videos now come from video_dir
                         let videoUrl = `/api/video-by-name/${encodeURIComponent(video.name)}`;
-                        
+
                         // Update the video player
                         currentVideoWrapper.innerHTML = `
                             <video class="current-video-player" controls autoplay muted loop>
@@ -920,10 +920,10 @@
         // Display results
         function displayResults(results) {
             resultsCard.style.display = 'block';
-            
+
             const successClass = results.pipeline_success ? 'success' : 'warning';
             const successText = results.pipeline_success ? 'Yes ✓' : 'No ⚠';
-            
+
             resultsContent.innerHTML = `
                 <div class="result-item">
                     <div class="result-value">${results.total_iterations}</div>
@@ -949,12 +949,12 @@
             try {
                 const response = await fetch('/api/status');
                 const data = await response.json();
-                
+
                 if (data.running) {
                     updateProgress(data.current_iteration, data.max_iterations, data.elapsed_time);
                     systemStatus.className = 'status-badge running';
                     systemStatus.innerHTML = '<span class="status-dot"></span><span>Running...</span>';
-                    
+
                     // Fetch latest iteration video during run
                     await fetchLatestIterationVideo();
                 } else {
@@ -963,25 +963,25 @@
                         isRunning = false;
                         clearInterval(statusInterval);
                         statusInterval = null;
-                        
+
                         runBtn.disabled = false;
                         runBtn.innerHTML = '<span>▶️ Run Pipeline</span>';
                         stopBtn.disabled = true;
-                        
+
                         systemStatus.className = 'status-badge ready';
                         systemStatus.innerHTML = '<span class="status-dot"></span><span>Ready</span>';
-                        
+
                         // Hide current video section (it will be shown in the full video panel)
                         currentVideoSection.style.display = 'none';
                         lastShownIteration = -1;
                         lastShownVideoType = null;
-                        
+
                         if (data.results) {
                             displayResults(data.results);
                             // Fetch videos after pipeline completes
                             setTimeout(fetchVideos, 500);
                         }
-                        
+
                         if (data.error) {
                             addLogEntry({
                                 timestamp: new Date().toLocaleTimeString(),
@@ -1003,10 +1003,10 @@
             try {
                 const response = await fetch('/api/logs');
                 const data = await response.json();
-                
+
                 // Clear container
                 logContainer.innerHTML = '';
-                
+
                 if (data.logs.length === 0) {
                     logContainer.innerHTML = `
                         <div class="empty-state">
@@ -1025,9 +1025,9 @@
         // Form submission
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
             const solverMaxIterVal = document.getElementById('solver_max_iter').value;
-            
+
             const formData = {
                 command: commandInput.value.trim(),
                 max_iterations: parseInt(document.getElementById('max_iterations').value),
@@ -1046,7 +1046,7 @@
                 resultsCard.style.display = 'none';
                 logContainer.innerHTML = '';
                 progressFill.style.width = '0%';
-                
+
                 // Reset current iteration video
                 currentVideoSection.style.display = 'none';
                 lastShownIteration = -1;
@@ -1057,7 +1057,7 @@
                         <p>Waiting for first iteration to complete...</p>
                     </div>
                 `;
-                
+
                 runBtn.disabled = true;
                 runBtn.innerHTML = '<div class="spinner"></div><span>Starting...</span>';
                 stopBtn.disabled = false;
@@ -1073,7 +1073,7 @@
                 if (response.ok) {
                     isRunning = true;
                     runBtn.innerHTML = '<div class="spinner"></div><span>Running...</span>';
-                    
+
                     // Start polling for status (every 2 seconds to reduce spam)
                     statusInterval = setInterval(async () => {
                         await pollStatus();
@@ -1136,9 +1136,9 @@
             try {
                 const response = await fetch('/api/videos');
                 const data = await response.json();
-                
+
                 allVideos = data.videos || [];
-                
+
                 if (allVideos.length > 0) {
                     videoCard.style.display = 'block';
                     updateIterationFilter();
@@ -1154,7 +1154,7 @@
         // Update the iteration filter dropdown
         function updateIterationFilter() {
             const iterations = [...new Set(allVideos.map(v => v.iteration))].sort((a, b) => parseInt(b) - parseInt(a));
-            
+
             iterationFilter.innerHTML = '<option value="all">All Iterations</option>';
             iterations.forEach(iter => {
                 const option = document.createElement('option');
@@ -1167,13 +1167,13 @@
         // Filter and display videos based on selected iteration
         function filterAndDisplayVideos() {
             const selectedIteration = iterationFilter.value;
-            
+
             if (selectedIteration === 'all') {
                 filteredVideos = [...allVideos];
             } else {
                 filteredVideos = allVideos.filter(v => v.iteration === selectedIteration);
             }
-            
+
             renderVideoList();
         }
 
@@ -1187,14 +1187,14 @@
                 `;
                 return;
             }
-            
+
             videoList.innerHTML = filteredVideos.map((video, index) => {
                 // Format the video type for display
                 let typeDisplay = video.type;
                 if (video.type === 'planned-debug') {
                     typeDisplay = 'planned (debug)';
                 }
-                
+
                 return `
                     <div class="video-item ${index === currentVideoIndex ? 'active' : ''}" data-index="${index}">
                         <div class="video-item-name">${video.name}</div>
@@ -1206,7 +1206,7 @@
                     </div>
                 `;
             }).join('');
-            
+
             // Add click handlers
             videoList.querySelectorAll('.video-item').forEach(item => {
                 item.addEventListener('click', () => {
@@ -1214,7 +1214,7 @@
                     playVideo(index);
                 });
             });
-            
+
             updateNavigationButtons();
         }
 
@@ -1228,13 +1228,13 @@
         // Play a video by index
         function playVideo(index) {
             if (index < 0 || index >= filteredVideos.length) return;
-            
+
             currentVideoIndex = index;
             const video = filteredVideos[index];
-            
+
             // All videos come from video_dir via video-by-name endpoint
             let videoUrl = `/api/video-by-name/${encodeURIComponent(video.name)}`;
-            
+
             // Update player
             videoPlayerWrapper.innerHTML = `
                 <video class="video-player" controls autoplay>
@@ -1242,11 +1242,11 @@
                     Your browser does not support the video tag.
                 </video>
             `;
-            
+
             // Update info
             videoInfo.style.display = 'block';
             videoCurrentName.textContent = video.name;
-            
+
             // Format the video type for display
             let typeDisplay = video.type;
             if (video.type === 'planned-debug') {
@@ -1254,12 +1254,12 @@
             }
             videoCurrentType.textContent = typeDisplay;
             videoCurrentType.className = `video-type-badge ${video.type}`;
-            
+
             // Update list selection
             videoList.querySelectorAll('.video-item').forEach((item, i) => {
                 item.classList.toggle('active', i === index);
             });
-            
+
             updateNavigationButtons();
         }
 

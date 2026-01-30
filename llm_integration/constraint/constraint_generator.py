@@ -1,5 +1,7 @@
 """Constraint generation system using LLM feedback."""
 
+from __future__ import annotations
+
 from typing import Any
 
 import numpy as np

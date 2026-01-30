@@ -1,5 +1,7 @@
 """LLM client for constraint generation using Anthropic's Claude."""
 
+from __future__ import annotations
+
 import os
 from typing import Any
 
@@ -167,7 +169,7 @@ class LLMClient:
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
                 system=system_prompt,
-                messages=[{"role": "user", "content": content}],
+                messages=[{"role": "user", "content": content}],  # type: ignore[typeddict-item]
             ) as stream:
                 for text in stream.text_stream:
                     response_text += text

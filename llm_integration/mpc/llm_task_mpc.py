@@ -13,6 +13,8 @@ The LLM generates both the MPC configuration and constraints together,
 creating a cohesive optimization setup for each unique behavior.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import Any
 

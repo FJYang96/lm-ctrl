@@ -1,5 +1,7 @@
 """Video frame extraction utilities for visual feedback."""
 
+from __future__ import annotations
+
 import base64
 import logging
 import os
@@ -13,7 +15,7 @@ logger = logging.getLogger("llm_integration.video_extraction")
 
 def get_video_dir(run_dir: Path) -> Path:
     """Get the directory where videos are stored.
-    
+
     Checks VIDEO_DIR environment variable first (set by frontend),
     otherwise falls back to run_dir.
     """
@@ -21,6 +23,7 @@ def get_video_dir(run_dir: Path) -> Path:
     if video_dir:
         return Path(video_dir)
     return run_dir
+
 
 # Try to import cv2 for video frame extraction
 try:
@@ -71,7 +74,7 @@ def extract_key_frames(
                 # Resize for efficiency
                 frame = cv2.resize(frame, resize)
                 _, buffer = cv2.imencode(".png", frame)
-                img_base64 = base64.b64encode(buffer).decode("utf-8")
+                img_base64 = base64.b64encode(buffer.tobytes()).decode("utf-8")
                 frames_base64.append(img_base64)
 
         cap.release()
@@ -100,7 +103,7 @@ def create_visual_feedback(
         List of base64-encoded images (planned frames first, then simulated, then debug)
     """
     images: list[str] = []
-    
+
     # Get the video directory (may be different from run_dir if VIDEO_DIR is set)
     video_dir = get_video_dir(run_dir)
 

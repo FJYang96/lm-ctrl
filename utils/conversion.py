@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 
 QPOS_BASE_POS = slice(0, 3)
@@ -48,7 +50,7 @@ def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
     return np.array([roll, pitch, yaw])
 
 
-def sim_to_mpc(qpos: np.ndarray, qvel: np.ndarray) -> np.ndarray:
+def sim_to_mpc(qpos: np.ndarray, qvel: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Converts the qpos and qvel in the simulation format to the MPC state and input.
     """

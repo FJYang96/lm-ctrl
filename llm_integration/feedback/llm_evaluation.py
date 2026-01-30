@@ -4,6 +4,8 @@ Replaces manual string matching with LLM-based semantic analysis
 for scoring, progress tracking, and diagnostic warnings.
 """
 
+from __future__ import annotations
+
 import json
 import os
 from typing import Any
@@ -83,7 +85,7 @@ class LLMEvaluator:
             max_tokens=self.max_tokens,
             temperature=0.0,
             system=system_prompt,
-            messages=[{"role": "user", "content": content}],
+            messages=[{"role": "user", "content": content}],  # type: ignore[typeddict-item]
         ) as stream:
             for text in stream.text_stream:
                 response_text += text

@@ -1,5 +1,7 @@
 """Main feedback pipeline implementing Algorithm 1 from the PDF."""
 
+from __future__ import annotations
+
 import json
 import os
 import time

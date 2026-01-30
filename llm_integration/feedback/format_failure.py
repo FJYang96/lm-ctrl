@@ -1,5 +1,7 @@
 """Format failure feedback for optimization failures."""
 
+from __future__ import annotations
+
 from typing import Any
 
 import numpy as np

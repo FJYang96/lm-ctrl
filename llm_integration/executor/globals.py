@@ -1,5 +1,7 @@
 """Restricted globals and import processing for safe code execution."""
 
+from __future__ import annotations
+
 import ast
 import logging
 from typing import Any
@@ -125,15 +127,15 @@ def create_restricted_globals(
         from liecasadi import SO3
 
         # Add main module references
-        restricted_globals["cs"] = cs
-        restricted_globals["np"] = np
+        restricted_globals["cs"] = cs  # type: ignore[assignment]
+        restricted_globals["np"] = np  # type: ignore[assignment]
         restricted_globals["math"] = math  # type: ignore[assignment]
-        restricted_globals["SO3"] = SO3
+        restricted_globals["SO3"] = SO3  # type: ignore[assignment]
 
         # Make liecasadi module available too
         import liecasadi
 
-        restricted_globals["liecasadi"] = liecasadi
+        restricted_globals["liecasadi"] = liecasadi  # type: ignore[assignment]
 
         # Add ALL commonly used CasADi functions directly
         restricted_globals["vertcat"] = cs.vertcat
@@ -167,8 +169,8 @@ def create_restricted_globals(
         restricted_globals["logic_or"] = cs.logic_or
 
         # Constants
-        restricted_globals["inf"] = cs.inf
-        restricted_globals["pi"] = np.pi
+        restricted_globals["inf"] = cs.inf  # type: ignore[assignment]
+        restricted_globals["pi"] = np.pi  # type: ignore[assignment]
 
         # CasADi types
         restricted_globals["MX"] = cs.MX

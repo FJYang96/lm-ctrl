@@ -1,5 +1,7 @@
 """Simulation execution functions for the feedback pipeline."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -104,7 +106,7 @@ def execute_simulation(
 
             fps = 1 / self.config.experiment.sim_dt
             video_path = video_dir / f"simulation_iter_{iteration}.mp4"
-            imageio.mimsave(str(video_path), sim_images, fps=fps)
+            imageio.mimsave(str(video_path), sim_images, fps=fps)  # type: ignore[arg-type]
 
         # Also save planned trajectory video if available
         if planned_traj_images:
@@ -112,7 +114,7 @@ def execute_simulation(
 
             fps = 1 / self.config.experiment.sim_dt
             planned_video_path = video_dir / f"planned_traj_iter_{iteration}.mp4"
-            imageio.mimsave(str(planned_video_path), planned_traj_images, fps=fps)
+            imageio.mimsave(str(planned_video_path), planned_traj_images, fps=fps)  # type: ignore[arg-type]
 
         result = {
             "success": True,
@@ -305,7 +307,7 @@ def render_failed_trajectory(
 
             fps = 1 / self.config.experiment.sim_dt
             video_path = video_dir / f"debug_trajectory_iter_{iteration}.mp4"
-            imageio.mimsave(str(video_path), debug_traj_images, fps=fps)
+            imageio.mimsave(str(video_path), debug_traj_images, fps=fps)  # type: ignore[arg-type]
             logger.info(f"Saved debug trajectory video: {video_path}")
 
         # Extract trajectory metrics for the feedback
