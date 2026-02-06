@@ -177,4 +177,4 @@ def _run_simulation_with_rendering(
         )
         images.append(overplotted_image)
 
-    return np.array(qpos_traj), np.array(qvel_traj), np.array(grf_traj), images  # type: ignore[return-value]
+    return np.array(qpos_traj), np.array(qvel_traj), np.array(grf_traj), images

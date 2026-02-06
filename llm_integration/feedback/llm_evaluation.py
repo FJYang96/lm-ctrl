@@ -85,7 +85,7 @@ class LLMEvaluator:
             max_tokens=self.max_tokens,
             temperature=0.0,
             system=system_prompt,
-            messages=[{"role": "user", "content": content}],  # type: ignore[typeddict-item]
+            messages=[{"role": "user", "content": content}],
         ) as stream:
             for text in stream.text_stream:
                 response_text += text

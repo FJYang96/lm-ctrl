@@ -127,15 +127,15 @@ def create_restricted_globals(
         from liecasadi import SO3
 
         # Add main module references
-        restricted_globals["cs"] = cs  # type: ignore[assignment]
-        restricted_globals["np"] = np  # type: ignore[assignment]
+        restricted_globals["cs"] = cs
+        restricted_globals["np"] = np
         restricted_globals["math"] = math  # type: ignore[assignment]
-        restricted_globals["SO3"] = SO3  # type: ignore[assignment]
+        restricted_globals["SO3"] = SO3
 
         # Make liecasadi module available too
         import liecasadi
 
-        restricted_globals["liecasadi"] = liecasadi  # type: ignore[assignment]
+        restricted_globals["liecasadi"] = liecasadi
 
         # Add ALL commonly used CasADi functions directly
         restricted_globals["vertcat"] = cs.vertcat
@@ -169,8 +169,8 @@ def create_restricted_globals(
         restricted_globals["logic_or"] = cs.logic_or
 
         # Constants
-        restricted_globals["inf"] = cs.inf  # type: ignore[assignment]
-        restricted_globals["pi"] = np.pi  # type: ignore[assignment]
+        restricted_globals["inf"] = cs.inf
+        restricted_globals["pi"] = np.pi
 
         # CasADi types
         restricted_globals["MX"] = cs.MX

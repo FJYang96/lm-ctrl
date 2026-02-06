@@ -26,7 +26,7 @@ class LLMClient:
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
         self.model = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-5-20251101")
         self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "40000"))
-        self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+        self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.0"))
 
         if not self.api_key or self.api_key == "your_api_key_here":
             raise ValueError(
@@ -169,7 +169,7 @@ class LLMClient:
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
                 system=system_prompt,
-                messages=[{"role": "user", "content": content}],  # type: ignore[typeddict-item]
+                messages=[{"role": "user", "content": content}],
             ) as stream:
                 for text in stream.text_stream:
                     response_text += text

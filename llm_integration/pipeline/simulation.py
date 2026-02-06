@@ -30,7 +30,7 @@ def get_video_dir(run_dir: Path) -> Path:
 
 
 def execute_simulation(
-    self: "FeedbackPipeline",
+    self: FeedbackPipeline,
     optimization_result: dict[str, Any],
     iteration: int,
     run_dir: Path,
@@ -106,7 +106,7 @@ def execute_simulation(
 
             fps = 1 / self.config.experiment.sim_dt
             video_path = video_dir / f"simulation_iter_{iteration}.mp4"
-            imageio.mimsave(str(video_path), sim_images, fps=fps)  # type: ignore[arg-type]
+            imageio.mimsave(str(video_path), sim_images, fps=fps)
 
         # Also save planned trajectory video if available
         if planned_traj_images:
@@ -114,7 +114,7 @@ def execute_simulation(
 
             fps = 1 / self.config.experiment.sim_dt
             planned_video_path = video_dir / f"planned_traj_iter_{iteration}.mp4"
-            imageio.mimsave(str(planned_video_path), planned_traj_images, fps=fps)  # type: ignore[arg-type]
+            imageio.mimsave(str(planned_video_path), planned_traj_images, fps=fps)
 
         result = {
             "success": True,
@@ -137,7 +137,7 @@ def execute_simulation(
 
 
 def calculate_tracking_error(
-    self: "FeedbackPipeline",
+    self: FeedbackPipeline,
     planned_state: np.ndarray,
     sim_qpos: np.ndarray,
     sim_qvel: np.ndarray,
@@ -186,7 +186,7 @@ def calculate_tracking_error(
 
 
 def analyze_simulation_quality(
-    self: "FeedbackPipeline",
+    self: FeedbackPipeline,
     qpos_traj: np.ndarray,
     qvel_traj: np.ndarray,
     grf_traj: np.ndarray,
@@ -240,7 +240,7 @@ def analyze_simulation_quality(
 
 
 def render_failed_trajectory(
-    self: "FeedbackPipeline",
+    self: FeedbackPipeline,
     optimization_result: dict[str, Any],
     iteration: int,
     run_dir: Path,
@@ -307,7 +307,7 @@ def render_failed_trajectory(
 
             fps = 1 / self.config.experiment.sim_dt
             video_path = video_dir / f"debug_trajectory_iter_{iteration}.mp4"
-            imageio.mimsave(str(video_path), debug_traj_images, fps=fps)  # type: ignore[arg-type]
+            imageio.mimsave(str(video_path), debug_traj_images, fps=fps)
             logger.info(f"Saved debug trajectory video: {video_path}")
 
         # Extract trajectory metrics for the feedback
