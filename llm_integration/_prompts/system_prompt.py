@@ -59,6 +59,14 @@ Required calls:
   mpc.set_contact_sequence(contact_array)
   mpc.add_constraint(constraint_function)
 
+Optional calls:
+  mpc.set_slack_weights({{"constraint_name": weight, ...}})
+    # Adjust how strictly each constraint type is enforced
+    # Higher weight = harder constraint (solver avoids violating it)
+    # Lower weight = softer constraint (solver may relax it for feasibility)
+    # Default weights: friction_cone=1e5, foot_height=1e4, complementarity=1e2
+    # Example: mpc.set_slack_weights({{"contact_aware_constraint": 1e4}})
+
 Contact patterns:
 - [1,1,1,1] = all feet grounded (walking, turning, squatting)
 - [0,0,0,0] = flight phase (jumping, flipping)
@@ -339,6 +347,31 @@ USE IT: If a metric regressed, your last change made things worse. Revert or try
 --- VISUAL FRAMES ---
 Side-by-side comparison of PLANNED trajectory (from optimizer) vs SIMULATED trajectory (physics simulation).
 USE IT: If they differ significantly, the planned trajectory is unrealistic.
+
+== CONSTRAINT HARDNESS ANALYSIS ==
+
+After each solve, you will receive a CONSTRAINT HARDNESS ANALYSIS section in the feedback.
+This uses a slack formulation to measure how difficult each constraint is to satisfy.
+
+Severity levels:
+- CRITICAL (slack > 0.1): Constraint bounds are VIOLATED. The solver had to relax them significantly.
+- HIGH (slack > 0.01): Constraint is strained. Consider relaxing bounds.
+- MEDIUM (slack > 0.001): Minor tension. Usually acceptable.
+- OK (slack < 0.001): Constraint is easily satisfied.
+
+How to use this information:
+1. If YOUR constraints (contact_aware_constraint) show CRITICAL slack:
+   - Your bounds are too tight for the requested motion
+   - Widen bounds at the timesteps shown in the "Violated at" field
+   - Use phase-aware bounds (different for stance vs flight)
+2. If SYSTEM constraints show CRITICAL slack:
+   - The motion itself is physically difficult
+   - Adjust contact_sequence timing or motion parameters
+   - body_clearance violations often mean too much rotation during ground contact
+3. You can adjust constraint priority with mpc.set_slack_weights():
+   - Lower weight = solver relaxes that constraint more easily
+   - Higher weight = solver tries harder to satisfy it
+   - Use this to prioritize which constraints matter most for your motion
 
 == TASK ==
 Generate MPC configuration and constraints for the requested behavior.

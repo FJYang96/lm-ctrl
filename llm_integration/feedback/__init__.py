@@ -1,5 +1,10 @@
 """Feedback submodule for enhanced LLM feedback generation."""
 
+from .format_hardness import (
+    format_hardness_report,
+    format_hardness_suggestions,
+    get_hardness_summary,
+)
 from .formatter import (
     format_enhanced_feedback,
     generate_enhanced_feedback,
@@ -28,6 +33,9 @@ __all__ = [
     "format_enhanced_feedback",
     "generate_enhanced_feedback",
     "generate_failure_feedback",
+    "format_hardness_report",
+    "format_hardness_suggestions",
+    "get_hardness_summary",
     "evaluate_iteration",
     "summarize_iteration",
     "get_evaluator",

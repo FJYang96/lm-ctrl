@@ -10,6 +10,11 @@ from typing import Any
 import numpy as np
 
 from .format_failure import generate_failure_feedback
+from .format_hardness import (
+    format_hardness_report,
+    format_hardness_suggestions,
+    get_hardness_summary,
+)
 from .format_success import format_enhanced_feedback
 from .task_progress import compute_task_progress
 from .trajectory_analysis import (
@@ -23,6 +28,9 @@ __all__ = [
     "format_enhanced_feedback",
     "generate_failure_feedback",
     "generate_enhanced_feedback",
+    "format_hardness_report",
+    "format_hardness_suggestions",
+    "get_hardness_summary",
 ]
 
 
@@ -43,6 +51,8 @@ def generate_enhanced_feedback(
     robot_mass: float = 15.0,
     initial_height: float = 0.2117,
     iteration_summaries: list[dict[str, Any]] | list[str] | None = None,
+    hardness_report: dict[str, dict[str, Any]] | None = None,
+    current_slack_weights: dict[str, float] | None = None,
 ) -> str:
     """
     Generate comprehensive enhanced feedback for the LLM.
@@ -52,6 +62,8 @@ def generate_enhanced_feedback(
     Args:
         initial_height: Robot's initial COM height from config
         iteration_summaries: List of LLM-generated summaries from previous iterations
+        hardness_report: Constraint hardness analysis from slack formulation
+        current_slack_weights: Current slack weights set by LLM
 
     Returns:
         Formatted feedback string
@@ -71,7 +83,7 @@ def generate_enhanced_feedback(
     task_progress = compute_task_progress(command, trajectory_analysis)
 
     # Format everything
-    return format_enhanced_feedback(
+    feedback = format_enhanced_feedback(
         iteration=iteration,
         command=command,
         optimization_status=optimization_status,
@@ -86,3 +98,15 @@ def generate_enhanced_feedback(
         initial_height=initial_height,
         iteration_summaries=iteration_summaries,
     )
+
+    # Append constraint hardness analysis if available
+    if hardness_report:
+        hardness_section = format_hardness_report(
+            hardness_report,
+            dt=mpc_dt,
+            current_slack_weights=current_slack_weights,
+        )
+        if hardness_section:
+            feedback += hardness_section
+
+    return feedback

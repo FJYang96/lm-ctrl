@@ -22,6 +22,7 @@ import numpy as np
 
 from mpc.dynamics.model import KinoDynamic_Model
 from mpc.mpc_opti import QuadrupedMPCOpti
+from mpc.mpc_opti_slack import QuadrupedMPCOptiSlack
 
 from .config_management import create_task_config, restore_base_config
 from .constraint_wrapper import (
@@ -51,16 +52,23 @@ class LLMTaskMPC:
         wrap_constraint_for_contact_phases
     )
 
-    def __init__(self, kindyn_model: KinoDynamic_Model, base_config: Any):
+    def __init__(
+        self,
+        kindyn_model: KinoDynamic_Model,
+        base_config: Any,
+        use_slack: bool = True,
+    ):
         """
         Initialize LLM Task MPC.
 
         Args:
             kindyn_model: Robot kinodynamic model
             base_config: Base configuration (will be modified by LLM)
+            use_slack: Whether to use slack formulation for robust optimization
         """
         self.kindyn_model = kindyn_model
         self.base_config = base_config
+        self.use_slack = use_slack
 
         # LLM-configurable parameters
         self.task_name = "unknown"
@@ -70,8 +78,12 @@ class LLMTaskMPC:
         self.mpc_dt = 0.02
         self.phases: dict[str, dict[str, float | list[int]]] = {}
 
+        # Slack formulation settings
+        self.slack_weights: dict[str, float] = {}
+        self.last_hardness_report: dict[str, dict[str, Any]] | None = None
+
         # MPC instance (created when configured)
-        self.mpc: QuadrupedMPCOpti | None = None
+        self.mpc: QuadrupedMPCOpti | QuadrupedMPCOptiSlack | None = None
         self.is_configured = False
 
         # Solver info for feedback (populated after solve)
@@ -123,6 +135,21 @@ class LLMTaskMPC:
             if not self.constraint_functions:
                 return False, "No constraints specified. Use mpc.add_constraint()"
 
+            # Auto-fix contact_sequence dimensions if needed
+            expected_horizon = int(self.mpc_duration / self.mpc_dt)
+            if self.contact_sequence.shape[1] != expected_horizon:
+                # Resize contact_sequence to match expected horizon
+                old_seq = self.contact_sequence
+                new_seq = np.zeros((4, expected_horizon))
+                copy_len = min(old_seq.shape[1], expected_horizon)
+                new_seq[:, :copy_len] = old_seq[:, :copy_len]
+                # Repeat last column for any remaining timesteps
+                if copy_len < expected_horizon:
+                    new_seq[:, copy_len:] = old_seq[:, -1:].repeat(
+                        expected_horizon - copy_len, axis=1
+                    )
+                self.contact_sequence = new_seq
+
             # Create MPC with LLM configuration
             success, error = self._build_mpc()
             if not success:
@@ -155,6 +182,19 @@ class LLMTaskMPC:
     def set_task_name(self, name: str) -> None:
         """Set the task name for this MPC."""
         self.task_name = name
+
+    def set_slack_weights(self, weights: dict[str, float]) -> None:
+        """
+        Set custom slack penalty weights for constraint types.
+
+        Higher weight = harder constraint (solver avoids using slack).
+        Lower weight = softer constraint (solver uses slack more freely).
+
+        Args:
+            weights: Dict mapping constraint names to penalty weights.
+                     e.g. {"friction_cone_constraints": 1e6, "contact_aware_constraint": 1e4}
+        """
+        self.slack_weights.update(weights)
 
     def add_phase(
         self, name: str, start_time: float, duration: float, contact_pattern: list[int]
@@ -200,9 +240,18 @@ class LLMTaskMPC:
             task_config = create_task_config(self)
 
             # Build MPC with task configuration
-            self.mpc = QuadrupedMPCOpti(
-                model=self.kindyn_model, config=task_config, build=True
-            )
+            if self.use_slack:
+                self.mpc = QuadrupedMPCOptiSlack(
+                    model=self.kindyn_model,
+                    config=task_config,
+                    build=True,
+                    use_slack=True,
+                    slack_weights=self.slack_weights if self.slack_weights else None,
+                )
+            else:
+                self.mpc = QuadrupedMPCOpti(
+                    model=self.kindyn_model, config=task_config, build=True
+                )
 
             # Restore base config to prevent pollution between iterations
             restore_base_config(self)
@@ -234,10 +283,25 @@ class LLMTaskMPC:
         if self.contact_sequence is None:
             raise ValueError("Contact sequence not set. Configure MPC first.")
 
+        # Auto-fix contact_sequence column count to match MPC horizon
+        if hasattr(self.mpc, "horizon"):
+            expected_cols = self.mpc.horizon
+            if self.contact_sequence.shape[1] != expected_cols:
+                old_seq = self.contact_sequence
+                new_seq = np.zeros((4, expected_cols))
+                copy_len = min(old_seq.shape[1], expected_cols)
+                new_seq[:, :copy_len] = old_seq[:, :copy_len]
+                if copy_len < expected_cols:
+                    new_seq[:, copy_len:] = old_seq[:, -1:].repeat(
+                        expected_cols - copy_len, axis=1
+                    )
+                self.contact_sequence = new_seq
+
         # Reset solver info before solving
         self.solver_iterations = None
         self.last_error = None
         self.infeasibility_info = None
+        self.last_hardness_report = None
 
         try:
             result = self.mpc.solve_trajectory(
@@ -254,10 +318,23 @@ class LLMTaskMPC:
                 except Exception:
                     pass  # Stats not available
 
+            # Analyze constraint hardness if using slack formulation
+            if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
+                try:
+                    self.last_hardness_report = self.mpc.analyze_constraint_hardness()
+                except Exception:
+                    self.last_hardness_report = None
+
             return result
 
         except Exception as e:
             self.last_error = str(e)
+            # Still try to get hardness report on failure
+            if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
+                try:
+                    self.last_hardness_report = self.mpc.analyze_constraint_hardness()
+                except Exception:
+                    self.last_hardness_report = None
             raise
 
     def get_configuration_summary(self) -> dict[str, Any]:
@@ -278,7 +355,19 @@ class LLMTaskMPC:
             "contact_phases": contact_phases,
             "phases": self.phases,
             "is_configured": self.is_configured,
+            "use_slack": self.use_slack,
         }
+
+    def analyze_constraint_hardness(self) -> dict[str, dict[str, Any]]:
+        """Analyze constraint hardness from the slack formulation."""
+        if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
+            return self.mpc.analyze_constraint_hardness()
+        return {}
+
+    def print_constraint_hardness_report(self) -> None:
+        """Print a formatted constraint hardness report."""
+        if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
+            self.mpc.print_constraint_hardness_report()
 
     def evaluate_constraint_violations(
         self, X_debug: np.ndarray, U_debug: np.ndarray

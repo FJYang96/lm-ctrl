@@ -20,6 +20,8 @@ def generate_failure_feedback(
     state_traj: np.ndarray | None = None,
     initial_height: float = 0.2117,
     iteration_summaries: list[dict[str, Any]] | list[str] | None = None,
+    hardness_report: dict[str, dict[str, Any]] | None = None,
+    mpc_dt: float = 0.02,
 ) -> str:
     """
     Generate feedback when optimization fails to converge.
@@ -223,6 +225,14 @@ def generate_failure_feedback(
         f"Robot starts at: height={initial_height:.4f}m, roll=0, pitch=0, yaw=0"
     )
     lines.append("Constraints at k=0 MUST allow this state!")
+
+    # Constraint hardness analysis (from slack formulation)
+    if hardness_report:
+        from .format_hardness import format_hardness_report
+
+        hardness_section = format_hardness_report(hardness_report, dt=mpc_dt)
+        if hardness_section:
+            lines.append(hardness_section)
 
     # Previous code
     lines.append("\n" + "-" * 60)

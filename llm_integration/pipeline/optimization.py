@@ -71,6 +71,81 @@ def solve_trajectory_optimization(
                 "converged": False,
             }
 
+    # Extract hardness report from slack formulation
+    hardness_report = None
+    if self.current_task_mpc is not None:
+        # Log slack mode status
+        use_slack = getattr(self.current_task_mpc, "use_slack", False)
+        logger.info(f"Slack formulation enabled: {use_slack}")
+
+        # Log objective value decomposition if available
+        mpc = self.current_task_mpc.mpc
+        if mpc is not None:
+            mpc_type = type(mpc).__name__
+            logger.info(f"MPC type: {mpc_type}")
+
+            if hasattr(mpc, "_last_solution") and mpc._last_solution is not None:
+                try:
+                    obj_value = float(mpc._last_solution.value(mpc.opti.f))
+                    logger.info(f"Optimization objective value: {obj_value:.4f}")
+                    if hasattr(mpc, "slack_penalty_cost") and use_slack:
+                        slack_cost = float(
+                            mpc._last_solution.value(mpc.slack_penalty_cost)
+                        )
+                        logger.info(f"Slack penalty cost: {slack_cost:.4f}")
+                        logger.info(
+                            f"Base cost (without slack): {obj_value - slack_cost:.4f}"
+                        )
+                except Exception:
+                    pass
+
+        hardness_report = getattr(self.current_task_mpc, "last_hardness_report", None)
+        mpc_dt = getattr(self.current_task_mpc, "mpc_dt", 0.02)
+        if hardness_report:
+            logger.info("Constraint hardness analysis:")
+            for name, metrics_data in hardness_report.items():
+                max_slack = metrics_data.get("max_slack_Linf", 0)
+                active_timesteps = metrics_data.get("active_timesteps", [])
+                slack_by_timestep = metrics_data.get("slack_by_timestep", {})
+
+                if max_slack > 0.1:
+                    icon = "CRITICAL"
+                elif max_slack > 0.01:
+                    icon = "HIGH"
+                elif max_slack > 1e-6:
+                    icon = "LOW"
+                else:
+                    icon = "OK"
+
+                logger.info(f"  [{icon}] {name}: Max={max_slack:.4f}")
+
+                # Detailed timestep info for problematic constraints
+                if max_slack > 0.01 and active_timesteps:
+                    sorted_steps = sorted(active_timesteps)
+                    start_t = sorted_steps[0] * mpc_dt
+                    end_t = (sorted_steps[-1] + 1) * mpc_dt
+                    logger.info(
+                        f"      Violated at: t={start_t:.2f}-{end_t:.2f}s "
+                        f"({len(active_timesteps)} timesteps)"
+                    )
+
+                    # Show worst timesteps
+                    if slack_by_timestep:
+                        worst = sorted(slack_by_timestep.items(), key=lambda x: -x[1])[
+                            :3
+                        ]
+                        worst_str = ", ".join(
+                            f"k={k}(t={k * mpc_dt:.2f}s, slack={v:.3f})"
+                            for k, v in worst
+                            if v > 1e-6
+                        )
+                        if worst_str:
+                            logger.info(f"      Worst at: {worst_str}")
+        elif use_slack:
+            logger.warning(
+                "No hardness report available - slack analysis may have failed"
+            )
+
     # Create metrics dict
     metrics = {
         "converged": status == 0,
@@ -90,6 +165,8 @@ def solve_trajectory_optimization(
         "infeasibility_info": getattr(self.current_task_mpc, "infeasibility_info", None)
         if self.current_task_mpc and status != 0
         else None,
+        # Constraint hardness from slack formulation
+        "hardness_report": hardness_report,
     }
 
     # Analyze trajectory using LLM MPC time step

@@ -68,14 +68,16 @@ class FeedbackPipeline:
     _make_json_safe = make_json_safe
     _generate_constraints_with_retry = generate_constraints_with_retry
 
-    def __init__(self, config_obj: Any = None):
+    def __init__(self, config_obj: Any = None, use_slack: bool = True):
         """
         Initialize the feedback pipeline.
 
         Args:
             config_obj: Configuration object (uses default config if None)
+            use_slack: Whether to use slack formulation for robust optimization
         """
         self.config = config_obj if config_obj is not None else config
+        self.use_slack = use_slack
 
         # Initialize components
         self.llm_client = LLMClient()
@@ -86,7 +88,9 @@ class FeedbackPipeline:
         self.kindyn_model = KinoDynamic_Model(self.config)
 
         # Initialize LLM-specific MPC (replaces the fixed MPC)
-        self.llm_mpc = LLMTaskMPC(self.kindyn_model, self.config)
+        self.llm_mpc = LLMTaskMPC(
+            self.kindyn_model, self.config, use_slack=self.use_slack
+        )
 
         # Legacy MPC for fallback (in case LLM MPC fails)
         self.fallback_mpc = QuadrupedMPCOpti(
@@ -129,6 +133,9 @@ class FeedbackPipeline:
 
         # LLM-based iteration history
         self.iteration_summaries: list[dict[str, Any]] = []
+
+        # Slack weights tracking (for feedback display)
+        self.current_slack_weights: dict[str, float] = {}
 
     def run_pipeline(self, command: str) -> dict[str, Any]:
         """

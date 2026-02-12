@@ -71,6 +71,10 @@ def create_feedback_context(
         trajectory_analysis = optimization_result.get("trajectory_analysis", {})
         optimization_metrics = optimization_result.get("optimization_metrics", {})
 
+        # Get constraint hardness report from slack formulation
+        hardness_report = optimization_metrics.get("hardness_report")
+        mpc_dt = float(self.config.mpc_config.mpc_dt)
+
         # Get initial height from config
         initial_height = float(self.config.experiment.initial_qpos[2])
 
@@ -84,6 +88,8 @@ def create_feedback_context(
             state_traj=state_traj,
             initial_height=initial_height,
             iteration_summaries=self.iteration_summaries,
+            hardness_report=hardness_report,
+            mpc_dt=mpc_dt,
         )
 
     # Optimization succeeded - generate normal enhanced feedback
@@ -135,6 +141,12 @@ def create_feedback_context(
             "Enhanced feedback requires simulation_result but it was not provided"
         )
 
+    # Extract hardness report and slack weights for feedback
+    hardness_report = optimization_result.get("optimization_metrics", {}).get(
+        "hardness_report", None
+    )
+    current_slack_weights = getattr(self, "current_slack_weights", None)
+
     # Generate enhanced feedback
     initial_height = float(self.config.experiment.initial_qpos[2])
     return generate_enhanced_feedback(
@@ -154,4 +166,6 @@ def create_feedback_context(
         robot_mass=self.config.robot_data.mass,
         initial_height=initial_height,
         iteration_summaries=self.iteration_summaries,
+        hardness_report=hardness_report,
+        current_slack_weights=current_slack_weights,
     )

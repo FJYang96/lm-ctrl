@@ -72,7 +72,12 @@ def generate_constraints_with_retry(
                 continue
 
             # Create fresh LLM MPC instance for this attempt
-            task_mpc = LLMTaskMPC(self.kindyn_model, self.config)
+            use_slack = getattr(self, "use_slack", True)
+            task_mpc = LLMTaskMPC(self.kindyn_model, self.config, use_slack=use_slack)
+
+            # Initialize with previous iteration's slack weights (if any)
+            if hasattr(self, "current_slack_weights") and self.current_slack_weights:
+                task_mpc.slack_weights = self.current_slack_weights.copy()
 
             # Test the MPC configuration code with SafeExecutor
             success, error_msg = self.safe_executor.execute_mpc_configuration_code(
@@ -100,6 +105,10 @@ def generate_constraints_with_retry(
             config_summary = task_mpc.get_configuration_summary()
             task_name = config_summary.get("task_name", "unknown")
 
+            # Save the LLM's slack weights for next iteration
+            if task_mpc.slack_weights:
+                self.current_slack_weights = task_mpc.slack_weights.copy()
+
             # Success!
             attempts.append(
                 {
@@ -110,6 +119,9 @@ def generate_constraints_with_retry(
                     "task_name": task_name,
                     "failure_stage": "none",
                     "config_summary": config_summary,
+                    "slack_weights": task_mpc.slack_weights.copy()
+                    if task_mpc.slack_weights
+                    else {},
                 }
             )
 

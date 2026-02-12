@@ -43,8 +43,8 @@ Examples:
   python llm_main.py "do a backflip"
   python llm_main.py "jump as high as possible"
   python llm_main.py "perform a front flip" --max-iterations 10
-  python llm_main.py "spin in a circle" --solver-max-iter 200
-  python llm_main.py "jump forward" --solver-max-iter 300 --max-iterations 5
+  python llm_main.py "spin in a circle" --no-slack
+  python llm_main.py "jump forward" --max-iterations 5
         """,
     )
 
@@ -75,10 +75,10 @@ Examples:
     )
 
     parser.add_argument(
-        "--solver-max-iter",
-        type=int,
-        default=None,
-        help="Maximum IPOPT solver iterations per solve (default: unlimited)",
+        "--no-slack",
+        action="store_true",
+        default=False,
+        help="Disable slack formulation (use hard constraints instead)",
     )
 
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
@@ -103,9 +103,7 @@ Examples:
     print("=" * 60)
     print(f"Command: '{args.command}'")
     print(f"Max LLM iterations: {args.max_iterations}")
-    print(
-        f"Solver max iterations: {args.solver_max_iter if args.solver_max_iter else 'unlimited'}"
-    )
+    print(f"Slack formulation: {'disabled' if args.no_slack else 'enabled'}")
     print(f"Config mode: {args.config}")
     print(f"Results directory: {args.results_dir}")
     print()
@@ -119,14 +117,10 @@ Examples:
         # Update config for the selected mode
         config.CONSTRAINT_MODE = args.config
 
-        # Set solver max iterations if specified
-        if args.solver_max_iter:
-            config.solver_config["ipopt.max_iter"] = args.solver_max_iter
-            print(f"IPOPT max_iter set to: {args.solver_max_iter}")
-
         # Initialize and run pipeline
+        use_slack = not args.no_slack
         print("Initializing feedback pipeline...")
-        pipeline = FeedbackPipeline(config)
+        pipeline = FeedbackPipeline(config, use_slack=use_slack)
 
         start_time = time.time()
         results = pipeline.run_pipeline(args.command)
