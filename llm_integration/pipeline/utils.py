@@ -72,6 +72,16 @@ def _extract_ref_trajectory_code(full_code: str) -> str:
     return ""
 
 
+def strip_ref_trajectory_code(full_code: str) -> str:
+    """Remove the reference trajectory function from code, returning the rest.
+
+    Re-exported from feedback.code_utils for backward compatibility.
+    """
+    from ..feedback.code_utils import strip_ref_trajectory_code as _strip
+
+    return _strip(full_code)
+
+
 def inject_llm_constraints_to_mpc(self: "FeedbackPipeline") -> None:
     """
     Inject LLM constraints into the MPC problem using the proper MPC constraint interface.

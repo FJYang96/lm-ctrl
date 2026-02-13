@@ -122,18 +122,6 @@ class LLMClient:
                         },
                     }
                 )
-            content.append(
-                {
-                    "type": "text",
-                    "text": (
-                        "IMPORTANT: In your response, before the Python code block, "
-                        "include a brief VISUAL ANALYSIS section summarizing what you "
-                        "observe in the frames above (robot pose, motion progression, "
-                        "any issues like insufficient rotation, height, or stability)."
-                    ),
-                }
-            )
-
         # Add the main text message
         content.append({"type": "text", "text": full_user_message})
 
@@ -155,3 +143,46 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Error calling Claude API with vision: {e}")
             raise
+
+    def summarize_frames(self, images: list[str], task: str) -> str:
+        """Summarize trajectory frames with a short Claude vision call."""
+        if not images:
+            return ""
+
+        content: list[dict[str, Any]] = []
+        for img_base64 in images:
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": img_base64,
+                    },
+                }
+            )
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"These are frames from a planned robot trajectory for: '{task}'. "
+                    "Briefly describe the robot's motion, pose progression, height, "
+                    "rotation, and any issues you observe. Be concise."
+                ),
+            }
+        )
+
+        try:
+            response_text = ""
+            with self.client.messages.stream(
+                model=self.model,
+                max_tokens=1024,
+                temperature=0.0,
+                messages=[{"role": "user", "content": content}],
+            ) as stream:
+                for text in stream.text_stream:
+                    response_text += text
+            return response_text.strip()
+        except Exception as e:
+            logger.error(f"Error summarizing frames: {e}")
+            return ""

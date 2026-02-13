@@ -11,6 +11,7 @@ from .formatter import (
     generate_failure_feedback,
 )
 from .llm_evaluation import (
+    evaluate_failed_iteration,
     evaluate_iteration,
     get_evaluator,
     summarize_iteration,
@@ -37,6 +38,7 @@ __all__ = [
     "format_hardness_suggestions",
     "get_hardness_summary",
     "evaluate_iteration",
+    "evaluate_failed_iteration",
     "summarize_iteration",
     "get_evaluator",
 ]

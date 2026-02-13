@@ -45,7 +45,7 @@ class LLMEvaluator:
         load_dotenv()
 
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
-        self.model = os.getenv("LLM_EVAL_MODEL", "claude-sonnet-4-20250514")
+        self.model = os.getenv("LLM_EVAL_MODEL", "claude-opus-4-5-20251101")
         self.max_tokens = 40000  # Increased to handle full JSON response
 
         if not self.api_key or self.api_key == "your_api_key_here":
@@ -175,6 +175,110 @@ Evaluate how well this trajectory achieves the commanded task."""
                 f"LLM evaluation failed: {type(e).__name__}: {e}", exc_info=True
             )
             return self._default_evaluation()
+
+    def evaluate_failed_iteration(
+        self,
+        command: str,
+        trajectory_analysis: dict[str, Any],
+        constraint_code: str,
+        error_info: dict[str, Any],
+        images: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Evaluate a FAILED optimization iteration using LLM.
+
+        The solver did not converge, but partial progress may have been made.
+        Score based on how close the solver's last attempt was to the goal.
+
+        Returns dict with: score, criteria, warnings, summary
+        """
+        system_prompt = """You are an expert robotics engineer evaluating a quadruped robot trajectory optimization that FAILED (solver did not converge or timed out).
+
+Even though the solver failed, there may be significant partial progress. Score based on what the solver was ATTEMPTING and how close it got.
+
+Return a JSON object with this structure:
+{
+    "score": <float 0.0-1.0>,
+    "criteria": [
+        {
+            "name": "<criterion name>",
+            "target": "<specific numerical target>",
+            "achieved": "<exact numerical result>",
+            "progress": <float 0.0-1.0>
+        }
+    ],
+    "warnings": ["<specific technical warning>"],
+    "summary": "<detailed 4-5 sentence analysis>"
+}
+
+=== EVALUATION REQUIREMENTS ===
+Based on the command, determine what criteria are relevant.
+Look at the trajectory metrics from the solver's LAST ATTEMPT (debug values).
+If the solver was making good progress (e.g., 445° rotation for a backflip), score it highly even though it failed.
+If the solver made no progress (e.g., 3° rotation), score it very low.
+
+=== SCORING GUIDELINES ===
+- 0.0-0.1: No meaningful motion at all, or no trajectory data
+- 0.1-0.3: Some motion but in wrong direction/axis or minimal progress
+- 0.3-0.5: Moderate progress toward goal (e.g., 30-50% of target rotation/height)
+- 0.5-0.7: Significant progress (e.g., 50-80% of target achieved but solver couldn't converge)
+- 0.7-0.85: Nearly achieved the goal but solver ran out of iterations or hit minor infeasibility
+- 0.85-1.0: Reserved for successful iterations only — failures should not exceed 0.85
+
+=== CRITICAL ===
+A timeout after achieving 80%+ of the goal is MUCH better than a quick failure with 0% progress.
+Do NOT score all failures as 0.0 — differentiate based on partial progress.
+
+Return ONLY valid JSON, no markdown, no extra text."""
+
+        metrics_text = (
+            self._format_metrics(trajectory_analysis)
+            if trajectory_analysis
+            else "No trajectory data available"
+        )
+        error_text = self._format_error_info(error_info)
+
+        user_message = f"""COMMAND: {command}
+
+SOLVER STATUS: FAILED
+{error_text}
+
+TRAJECTORY METRICS (from solver's last attempt / debug values):
+{metrics_text}
+
+CONSTRAINT CODE USED:
+```python
+{constraint_code[:1500]}
+```
+
+Score how close the solver's last attempt was to achieving the commanded task, even though it failed."""
+
+        try:
+            response = self._call_llm(system_prompt, user_message, images)
+            json_text = _extract_json_from_response(response)
+            result: dict[str, Any] = json.loads(json_text)
+            # Cap failed iteration scores at 0.85
+            if result.get("score", 0) > 0.85:
+                result["score"] = 0.85
+            return result
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed iteration evaluation: invalid JSON - {e}")
+            return self._default_evaluation_failed()
+        except Exception as e:
+            logger.error(
+                f"LLM failed evaluation error: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            return self._default_evaluation_failed()
+
+    def _default_evaluation_failed(self) -> dict[str, Any]:
+        """Return default evaluation for failed iterations when LLM fails."""
+        return {
+            "score": 0.0,
+            "criteria": [],
+            "warnings": ["Could not parse LLM evaluation for failed iteration"],
+            "summary": "Evaluation failed - using default score of 0.0",
+        }
 
     def summarize_failed_iteration(
         self,
@@ -403,6 +507,19 @@ def evaluate_iteration(
     """Evaluate a successful iteration. Returns: score, criteria, warnings, summary."""
     return get_evaluator().evaluate_successful_iteration(
         command, trajectory_analysis, constraint_code, images
+    )
+
+
+def evaluate_failed_iteration(
+    command: str,
+    trajectory_analysis: dict[str, Any],
+    constraint_code: str,
+    error_info: dict[str, Any],
+    images: list[str] | None = None,
+) -> dict[str, Any]:
+    """Evaluate a failed iteration. Returns: score, criteria, warnings, summary."""
+    return get_evaluator().evaluate_failed_iteration(
+        command, trajectory_analysis, constraint_code, error_info, images
     )
 
 

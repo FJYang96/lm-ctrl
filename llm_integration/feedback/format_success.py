@@ -97,6 +97,7 @@ def format_enhanced_feedback(
     previous_iteration_analysis: dict[str, Any] | None = None,
     initial_height: float = 0.2117,
     iteration_summaries: list[dict[str, Any]] | list[str] | None = None,
+    pivot_signal: str | None = None,
 ) -> str:
     """
     Format all feedback into a structured string for the LLM.
@@ -151,6 +152,33 @@ def format_enhanced_feedback(
     lines.extend(
         format_comparison_section(trajectory_analysis, previous_iteration_analysis)
     )
+
+    # Pivot-aware strategy guidance (for converged-but-bad or stagnating)
+    if pivot_signal == "pivot":
+        lines.append("\n" + "!" * 60)
+        lines.append("!" * 60)
+        lines.append(
+            "MANDATORY PIVOT: Despite convergence, the result is far from the goal."
+        )
+        lines.append(
+            "You MUST start from scratch with a FUNDAMENTALLY DIFFERENT strategy:"
+        )
+        lines.append("")
+        lines.append("  1. Use a COMPLETELY DIFFERENT contact sequence")
+        lines.append("  2. Use DIFFERENT constraint types and bounds")
+        lines.append(
+            "  3. Generate a NEW reference trajectory with different parameters"
+        )
+        lines.append("  4. Do NOT make small tweaks — RETHINK the entire approach")
+    elif pivot_signal == "tweak":
+        lines.append("\n" + "-" * 60)
+        lines.append(
+            "ADJUSTMENT SUGGESTED: Score has not improved. Make targeted changes:"
+        )
+        lines.append("")
+        lines.append("  1. Tighten the most important constraint(s) by 10-20%")
+        lines.append("  2. Add one additional constraint to close loopholes")
+        lines.append("  3. Keep the same general strategy but refine parameters")
 
     # Footer sections (initial state, previous code, instructions)
     lines.extend(format_footer_sections(initial_height, previous_constraints))

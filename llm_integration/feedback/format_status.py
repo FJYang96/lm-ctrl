@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from .code_utils import strip_ref_trajectory_code
+
 
 def format_mpc_config_section(optimization_status: dict[str, Any]) -> list[str]:
     """Format MPC configuration section."""
@@ -140,11 +142,11 @@ def format_footer_sections(
     )
     lines.append("Constraints at k=0 MUST allow this state!")
 
-    # Previous code
+    # Previous code (with reference trajectory stripped to save tokens)
     lines.append("\n" + "-" * 60)
     lines.append("PREVIOUS CODE")
     lines.append("-" * 60)
-    lines.append(previous_constraints)
+    lines.append(strip_ref_trajectory_code(previous_constraints))
 
     # Instructions
     lines.append("\n" + "=" * 60)

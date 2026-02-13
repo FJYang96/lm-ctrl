@@ -17,6 +17,7 @@ def create_feedback_context(
     simulation_result: dict[str, Any],
     constraint_code: str,
     run_dir: Path,
+    pivot_signal: str | None = None,
 ) -> str:
     """Create enhanced feedback context for the next LLM iteration.
 
@@ -90,6 +91,7 @@ def create_feedback_context(
             iteration_summaries=self.iteration_summaries,
             hardness_report=hardness_report,
             mpc_dt=mpc_dt,
+            pivot_signal=pivot_signal,
         )
 
     # Optimization succeeded - generate normal enhanced feedback
@@ -168,4 +170,5 @@ def create_feedback_context(
         iteration_summaries=self.iteration_summaries,
         hardness_report=hardness_report,
         current_slack_weights=current_slack_weights,
+        pivot_signal=pivot_signal,
     )

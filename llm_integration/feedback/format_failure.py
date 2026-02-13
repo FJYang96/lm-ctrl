@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from .code_utils import strip_ref_trajectory_code
 from .format_metrics import format_terminal_state_section
 from .format_success import format_iteration_history  # Use shared detailed format
 
@@ -22,6 +23,7 @@ def generate_failure_feedback(
     iteration_summaries: list[dict[str, Any]] | list[str] | None = None,
     hardness_report: dict[str, dict[str, Any]] | None = None,
     mpc_dt: float = 0.02,
+    pivot_signal: str | None = None,
 ) -> str:
     """
     Generate feedback when optimization fails to converge.
@@ -195,27 +197,36 @@ def generate_failure_feedback(
     lines.append("5. FINAL STATE ONLY: Consider constraining only the final state")
     lines.append("   Example: if k == horizon - 1:  # Only at the end")
 
-    # Simplification suggestions
+    # Pivot-aware strategy guidance
     lines.append("\n" + "!" * 60)
     lines.append("!" * 60)
-    lines.append("The solver FAILED. This means your constraints define an")
-    lines.append("INFEASIBLE or NEARLY-INFEASIBLE region. You MAY:")
-    lines.append("")
-    lines.append("  1. REMOVE at least half your constraints")
-    lines.append("  2. DOUBLE the width of remaining bounds")
-    lines.append(
-        "  3. MOST IMPORTANT: YOU MAY HAVE TO TRY a FUNDAMENTALLY DIFFERENT approach"
-    )
-    lines.append("")
-    lines.append(
-        "DO NOT FEEL FORCED TO make small tweaks to the same approach if you are not getting anywhere."
-    )
-    lines.append(
-        "DO NOT FEEL FORCED TO tighten any bounds if you are not getting anywhere."
-    )
-    lines.append(
-        "DO NOT FEEL FORCED TO add new constraints if you are not getting anywhere."
-    )
+    if pivot_signal == "pivot":
+        lines.append("MANDATORY PIVOT: Your current approach is NOT working.")
+        lines.append(
+            "You MUST start from scratch with a FUNDAMENTALLY DIFFERENT strategy:"
+        )
+        lines.append("")
+        lines.append("  1. Use a COMPLETELY DIFFERENT contact sequence")
+        lines.append("  2. Use DIFFERENT constraint types and bounds")
+        lines.append(
+            "  3. Generate a NEW reference trajectory with different parameters"
+        )
+        lines.append("  4. Do NOT make small tweaks — RETHINK the entire approach")
+    elif pivot_signal == "tweak":
+        lines.append("TWEAK MODE: Your approach may be close. Make SMALL adjustments:")
+        lines.append("")
+        lines.append("  1. Loosen bounds by 20-50%")
+        lines.append("  2. Remove the most restrictive constraint(s)")
+        lines.append("  3. Keep the same general strategy but adjust parameters")
+    else:
+        lines.append("The solver FAILED. This means your constraints define an")
+        lines.append("INFEASIBLE or NEARLY-INFEASIBLE region. You MAY:")
+        lines.append("")
+        lines.append("  1. REMOVE at least half your constraints")
+        lines.append("  2. DOUBLE the width of remaining bounds")
+        lines.append(
+            "  3. MOST IMPORTANT: YOU MAY HAVE TO TRY a FUNDAMENTALLY DIFFERENT approach"
+        )
 
     # Initial state reminder
     lines.append("\n" + "-" * 60)
@@ -234,11 +245,11 @@ def generate_failure_feedback(
         if hardness_section:
             lines.append(hardness_section)
 
-    # Previous code
+    # Previous code (with reference trajectory stripped to save tokens)
     lines.append("\n" + "-" * 60)
     lines.append("PREVIOUS CODE (FAILED)")
     lines.append("-" * 60)
-    lines.append(previous_constraints)
+    lines.append(strip_ref_trajectory_code(previous_constraints))
 
     # Instructions
     lines.append("\n" + "=" * 60)

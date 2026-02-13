@@ -53,6 +53,7 @@ def generate_enhanced_feedback(
     iteration_summaries: list[dict[str, Any]] | list[str] | None = None,
     hardness_report: dict[str, dict[str, Any]] | None = None,
     current_slack_weights: dict[str, float] | None = None,
+    pivot_signal: str | None = None,
 ) -> str:
     """
     Generate comprehensive enhanced feedback for the LLM.
@@ -97,6 +98,7 @@ def generate_enhanced_feedback(
         previous_iteration_analysis=previous_iteration_analysis,
         initial_height=initial_height,
         iteration_summaries=iteration_summaries,
+        pivot_signal=pivot_signal,
     )
 
     # Append constraint hardness analysis if available

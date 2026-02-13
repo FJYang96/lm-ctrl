@@ -3,7 +3,6 @@
 from .feedback_context import create_feedback_context
 from .feedback_pipeline import FeedbackPipeline
 from .optimization import solve_trajectory_optimization
-from .scoring import score_iteration, score_task_specific_behavior
 from .simulation import (
     analyze_simulation_quality,
     calculate_tracking_error,
@@ -23,8 +22,6 @@ __all__ = [
     "calculate_tracking_error",
     "analyze_simulation_quality",
     "create_feedback_context",
-    "score_iteration",
-    "score_task_specific_behavior",
     "save_iteration_results",
     "inject_llm_constraints_to_mpc",
     "inject_llm_constraints_direct",

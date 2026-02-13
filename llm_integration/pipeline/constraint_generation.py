@@ -57,14 +57,6 @@ def generate_constraints_with_retry(
                     system_prompt, prompt, None
                 )
 
-            # Extract visual analysis (text before first code block)
-            code_marker = "```python"
-            if code_marker in response:
-                pre_code_text = response[: response.index(code_marker)].strip()
-            else:
-                pre_code_text = ""
-            self.last_visual_analysis = pre_code_text if pre_code_text else None
-
             # Extract code from response with improved extraction
             mpc_config_code = self.llm_client.extract_raw_code(response)
 
