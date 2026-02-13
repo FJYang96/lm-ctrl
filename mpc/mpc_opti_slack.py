@@ -6,12 +6,18 @@ This module extends the base MPC with slack variables to:
 2. Measure the "hardness" of each constraint by examining slack values
 """
 
+from __future__ import annotations
+
+import logging
 from typing import Any
 
 import casadi as cs
 import numpy as np
 
 from .dynamics.model import KinoDynamic_Model
+from .mpc_opti import _interpolate_warmstart
+
+logger = logging.getLogger("llm_integration")
 
 
 class QuadrupedMPCOptiSlack:
@@ -310,6 +316,7 @@ class QuadrupedMPCOptiSlack:
         initial_state: np.ndarray,
         ref: np.ndarray,
         contact_sequence: np.ndarray,
+        warmstart: dict[str, Any] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """Solve the trajectory optimization problem."""
         # Set parameter values
@@ -323,25 +330,51 @@ class QuadrupedMPCOptiSlack:
         self.opti.set_value(self.P_mass, self.config.robot_data.mass)
         self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
 
-        # Initial guess
+        # Initial guess for states (heuristic)
         X_init = np.zeros((self.states_dim, self.horizon + 1))
         for i in range(self.horizon + 1):
             X_init[:, i] = initial_state.copy()
-        self.opti.set_initial(self.X, X_init)
 
-        U_init = np.zeros((self.inputs_dim, self.horizon))
-        for i in range(self.horizon):
-            U_init[0:12, i] = 0.001 * np.sin(np.arange(12) * 0.1)
-            contact_i = (
-                contact_sequence[:, i]
-                if i < contact_sequence.shape[1]
-                else contact_sequence[:, -1]
+        # Attempt warm-start from previous solution
+        used_warmstart = False
+        if warmstart is not None:
+            ws_X = _interpolate_warmstart(
+                warmstart.get("X"), self.states_dim, self.horizon + 1
             )
-            for foot in range(4):
-                if contact_i[foot] > 0.5:
-                    U_init[12 + foot * 3 + 2, i] = (
-                        self.config.robot_data.mass * 9.81 / 4 * 0.8
-                    )
+            ws_U = _interpolate_warmstart(
+                warmstart.get("U"), self.inputs_dim, self.horizon
+            )
+            if ws_X is not None and ws_U is not None:
+                prev_horizon = (
+                    warmstart["X"].shape[1] - 1
+                    if warmstart.get("X") is not None
+                    else "?"
+                )
+                logger.info(
+                    f"Warm-starting from previous solution "
+                    f"(horizon {prev_horizon} → {self.horizon})"
+                )
+                X_init = ws_X
+                U_init = ws_U
+                used_warmstart = True
+
+        if not used_warmstart:
+            logger.info("Cold-starting with heuristic initial guess")
+            U_init = np.zeros((self.inputs_dim, self.horizon))
+            for i in range(self.horizon):
+                U_init[0:12, i] = 0.001 * np.sin(np.arange(12) * 0.1)
+                contact_i = (
+                    contact_sequence[:, i]
+                    if i < contact_sequence.shape[1]
+                    else contact_sequence[:, -1]
+                )
+                for foot in range(4):
+                    if contact_i[foot] > 0.5:
+                        U_init[12 + foot * 3 + 2, i] = (
+                            self.config.robot_data.mass * 9.81 / 4 * 0.8
+                        )
+
+        self.opti.set_initial(self.X, X_init)
         self.opti.set_initial(self.U, U_init)
 
         # Initialize slack variables to zero

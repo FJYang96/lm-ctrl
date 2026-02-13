@@ -264,7 +264,10 @@ class LLMTaskMPC:
             return False, str(e)
 
     def solve_trajectory(
-        self, initial_state: np.ndarray, ref: np.ndarray
+        self,
+        initial_state: np.ndarray,
+        ref: np.ndarray,
+        warmstart: dict[str, Any] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """
         Solve trajectory optimization with LLM-configured MPC.
@@ -305,7 +308,7 @@ class LLMTaskMPC:
 
         try:
             result = self.mpc.solve_trajectory(
-                initial_state, ref, self.contact_sequence
+                initial_state, ref, self.contact_sequence, warmstart=warmstart
             )
 
             # Try to extract solver stats from the MPC/opti instance

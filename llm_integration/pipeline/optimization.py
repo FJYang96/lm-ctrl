@@ -1,5 +1,7 @@
 """Trajectory optimization functions for the feedback pipeline."""
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,11 +17,12 @@ if TYPE_CHECKING:
 
 
 def solve_trajectory_optimization(
-    self: "FeedbackPipeline",
+    self: FeedbackPipeline,
     mpc_config_code: str,
     task_name: str,
     iteration: int,
     run_dir: Path,
+    warmstart: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Solve trajectory optimization with LLM-configured MPC."""
 
@@ -45,7 +48,9 @@ def solve_trajectory_optimization(
 
     try:
         state_traj, grf_traj, joint_vel_traj, status = (
-            self.current_task_mpc.solve_trajectory(initial_state, ref)
+            self.current_task_mpc.solve_trajectory(
+                initial_state, ref, warmstart=warmstart
+            )
         )
 
         if status == 0:
@@ -146,11 +151,28 @@ def solve_trajectory_optimization(
                 "No hardness report available - slack analysis may have failed"
             )
 
+    # Extract actual objective value from solver
+    objective_value = float("inf")
+    if self.current_task_mpc is not None:
+        mpc = self.current_task_mpc.mpc
+        if mpc is not None:
+            if hasattr(mpc, "_last_solution") and mpc._last_solution is not None:
+                try:
+                    objective_value = float(mpc._last_solution.value(mpc.opti.f))
+                except Exception:
+                    objective_value = float("inf")
+            elif status == 0:
+                # Successful solve but no _last_solution stored (base MPC)
+                try:
+                    objective_value = float(mpc.opti.value(mpc.opti.f))
+                except Exception:
+                    objective_value = float("inf")
+
     # Create metrics dict
     metrics = {
         "converged": status == 0,
         "status": "success" if status == 0 else "failed",
-        "objective_value": 0.0,
+        "objective_value": objective_value,
         "mpc_type": "llm_configured"
         if self.current_task_mpc is not None
         else "fallback",
@@ -186,6 +208,15 @@ def solve_trajectory_optimization(
     np.save(run_dir / f"grf_traj_iter_{iteration}.npy", grf_traj)
     np.save(run_dir / f"joint_vel_traj_iter_{iteration}.npy", joint_vel_traj)
 
+    # Reconstruct warmstart data from the solution for the next iteration
+    # X warmstart: state_traj is (horizon+1, states_dim), need (states_dim, horizon+1)
+    warmstart_X = state_traj.T if state_traj is not None else None
+    # U warmstart: stack joint_vel_traj and grf_traj back into (inputs_dim, horizon)
+    if joint_vel_traj is not None and grf_traj is not None:
+        warmstart_U = np.vstack([joint_vel_traj.T, grf_traj.T])
+    else:
+        warmstart_U = None
+
     result = {
         "success": status == 0,
         "status": status,
@@ -198,6 +229,8 @@ def solve_trajectory_optimization(
         "mpc_config_valid": True,
         "task_name": task_name,
         "mpc_config_code": mpc_config_code,
+        "warmstart_X": warmstart_X,
+        "warmstart_U": warmstart_U,
     }
 
     return result

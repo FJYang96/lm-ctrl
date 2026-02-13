@@ -137,6 +137,12 @@ class FeedbackPipeline:
         # Slack weights tracking (for feedback display)
         self.current_slack_weights: dict[str, float] = {}
 
+        # Warm-start state for adaptive policy
+        self.previous_warmstart: dict[str, Any] | None = None
+        self.previous_objective: float = float("inf")
+        self.previous_score: float = -float("inf")
+        self.use_warmstart_next: bool = False  # False for iteration 1 (cold start)
+
     def run_pipeline(self, command: str) -> dict[str, Any]:
         """
         Run the complete LLM feedback pipeline for a given command.
@@ -163,6 +169,12 @@ class FeedbackPipeline:
         best_result = None
         best_score = -float("inf")
 
+        # Reset warm-start state
+        self.previous_warmstart = None
+        self.previous_objective = float("inf")
+        self.previous_score = -float("inf")
+        self.use_warmstart_next = False  # First iteration always cold-starts
+
         # Algorithm 1: Iterative Refinement Pipeline
         system_prompt = self.constraint_generator.get_system_prompt()
         initial_user_message = self.constraint_generator.get_user_prompt(command)
@@ -183,8 +195,15 @@ class FeedbackPipeline:
                 )
 
                 # Step 4: Solve optimization problem with new constraints
+                warmstart: dict[str, Any] | None = (
+                    self.previous_warmstart if self.use_warmstart_next else None
+                )
                 optimization_result = self._solve_trajectory_optimization(
-                    constraint_code, function_name, iteration, run_dir
+                    constraint_code,
+                    function_name,
+                    iteration,
+                    run_dir,
+                    warmstart=warmstart,
                 )
 
                 # Step 5: Execute trajectory in simulation
@@ -341,6 +360,42 @@ class FeedbackPipeline:
                 }
                 self.iteration_summaries.append(iteration_history_entry)
                 iteration_result["summary"] = summary
+
+                # === Adaptive warm-start policy ===
+                current_objective = optimization_result.get(
+                    "optimization_metrics", {}
+                ).get("objective_value", float("inf"))
+
+                score_improved = score > self.previous_score
+                objective_improved = current_objective < self.previous_objective
+                # Lenient: cold-start only when BOTH metrics worsen
+                self.use_warmstart_next = score_improved or objective_improved
+
+                # Log the decision
+                if iteration == 1:
+                    logger.info(
+                        f"Warmstart policy: Score {score:.2f}, "
+                        f"Obj {current_objective:.4f} → warm-start next"
+                    )
+                else:
+                    decision = (
+                        "warm-start next"
+                        if self.use_warmstart_next
+                        else "both regressed, cold-start next"
+                    )
+                    logger.info(
+                        f"Warmstart policy: Score {self.previous_score:.2f}→{score:.2f}, "
+                        f"Obj {self.previous_objective:.4f}→{current_objective:.4f} → {decision}"
+                    )
+
+                # Always store warmstart data (even if we plan to cold-start next)
+                ws_X = optimization_result.get("warmstart_X")
+                ws_U = optimization_result.get("warmstart_U")
+                if ws_X is not None and ws_U is not None:
+                    self.previous_warmstart = {"X": ws_X, "U": ws_U}
+
+                self.previous_objective = current_objective
+                self.previous_score = score
 
                 if score > best_score:
                     best_score = score

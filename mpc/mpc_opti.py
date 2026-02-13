@@ -1,11 +1,54 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import casadi as cs
 import numpy as np
 
 from .dynamics.model import KinoDynamic_Model
+
+logger = logging.getLogger("llm_integration")
+
+
+def _interpolate_warmstart(
+    prev: np.ndarray, target_rows: int, target_cols: int
+) -> np.ndarray | None:
+    """
+    Interpolate a previous solution to match a new horizon size.
+
+    Args:
+        prev: Previous solution array (rows x cols)
+        target_rows: Expected number of rows (state/input dimension)
+        target_cols: Expected number of columns (horizon+1 for X, horizon for U)
+
+    Returns:
+        Interpolated array or None if interpolation is not possible.
+    """
+    if prev is None:
+        return None
+
+    # Dimension mismatch in rows (state/input dim changed) → cannot interpolate
+    if prev.shape[0] != target_rows:
+        return None
+
+    # All-zeros check → debug fallback values were unavailable
+    if np.all(prev == 0):
+        return None
+
+    prev_cols = prev.shape[1]
+
+    # Same horizon → direct copy
+    if prev_cols == target_cols:
+        return prev.copy()
+
+    # Different horizon → interpolate along normalized [0,1] time axis per dimension
+    old_t = np.linspace(0, 1, prev_cols)
+    new_t = np.linspace(0, 1, target_cols)
+    result = np.zeros((target_rows, target_cols))
+    for i in range(target_rows):
+        result[i, :] = np.interp(new_t, old_t, prev[i, :])
+    return result
 
 
 class QuadrupedMPCOpti:
@@ -254,6 +297,7 @@ class QuadrupedMPCOpti:
         initial_state: np.ndarray,
         ref: np.ndarray,
         contact_sequence: np.ndarray,
+        warmstart: dict[str, Any] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """
         Solve the trajectory optimization problem.
@@ -262,6 +306,7 @@ class QuadrupedMPCOpti:
             initial_state: Dictionary with initial state components
             ref: Reference trajectory (shape: states_dim + inputs_dim)
             contact_sequence: Contact sequence array (shape: 4 x horizon)
+            warmstart: Optional dict with 'X' and 'U' arrays from a previous solution
 
         Returns:
             Tuple of (state_traj, grf_traj, joint_vel_traj, status)
@@ -330,37 +375,61 @@ class QuadrupedMPCOpti:
             # Keep joint configuration stable
             X_init[12:24, i] = initial_state[12:24]
 
-        self.opti.set_initial(self.X, X_init)
-
-        # Better initial guess for inputs with phase awareness
-        U_init = np.zeros((self.inputs_dim, self.horizon))
-        for i in range(self.horizon):
-            # Very small joint velocities
-            U_init[0:12, i] = 0.001 * np.sin(np.arange(12) * 0.1)
-
-            # Gravity compensation forces for stance feet
-            contact_i = (
-                contact_sequence[:, i]
-                if i < contact_sequence.shape[1]
-                else contact_sequence[:, -1]
+        # Attempt warm-start from previous solution
+        used_warmstart = False
+        if warmstart is not None:
+            ws_X = _interpolate_warmstart(
+                warmstart.get("X"), self.states_dim, self.horizon + 1
             )
-            for foot in range(4):
-                if contact_i[foot] > 0.5:  # In stance
-                    # Landing phase needs higher forces for impact absorption
-                    if i >= self.landing_start:
-                        # Higher force for landing (impact absorption)
-                        U_init[12 + foot * 3 + 2, i] = (
-                            self.config.robot_data.mass * 9.81 / 4 * 1.2
-                        )
-                    else:
-                        # Normal stance force
-                        U_init[12 + foot * 3 + 2, i] = (
-                            self.config.robot_data.mass * 9.81 / 4 * 0.8
-                        )
-                else:
-                    # No forces during flight
-                    U_init[12 + foot * 3 : 12 + foot * 3 + 3, i] = 0.0
+            ws_U = _interpolate_warmstart(
+                warmstart.get("U"), self.inputs_dim, self.horizon
+            )
+            if ws_X is not None and ws_U is not None:
+                prev_horizon = (
+                    warmstart["X"].shape[1] - 1
+                    if warmstart.get("X") is not None
+                    else "?"
+                )
+                logger.info(
+                    f"Warm-starting from previous solution "
+                    f"(horizon {prev_horizon} → {self.horizon})"
+                )
+                X_init = ws_X
+                U_init = ws_U
+                used_warmstart = True
 
+        if not used_warmstart:
+            logger.info("Cold-starting with heuristic initial guess")
+            # Heuristic initial guess for inputs with phase awareness
+            U_init = np.zeros((self.inputs_dim, self.horizon))
+            for i in range(self.horizon):
+                # Very small joint velocities
+                U_init[0:12, i] = 0.001 * np.sin(np.arange(12) * 0.1)
+
+                # Gravity compensation forces for stance feet
+                contact_i = (
+                    contact_sequence[:, i]
+                    if i < contact_sequence.shape[1]
+                    else contact_sequence[:, -1]
+                )
+                for foot in range(4):
+                    if contact_i[foot] > 0.5:  # In stance
+                        # Landing phase needs higher forces for impact absorption
+                        if i >= self.landing_start:
+                            # Higher force for landing (impact absorption)
+                            U_init[12 + foot * 3 + 2, i] = (
+                                self.config.robot_data.mass * 9.81 / 4 * 1.2
+                            )
+                        else:
+                            # Normal stance force
+                            U_init[12 + foot * 3 + 2, i] = (
+                                self.config.robot_data.mass * 9.81 / 4 * 0.8
+                            )
+                    else:
+                        # No forces during flight
+                        U_init[12 + foot * 3 : 12 + foot * 3 + 3, i] = 0.0
+
+        self.opti.set_initial(self.X, X_init)
         self.opti.set_initial(self.U, U_init)
 
         try:
