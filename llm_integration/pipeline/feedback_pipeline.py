@@ -28,13 +28,9 @@ from .constraint_generation import generate_constraints_with_retry
 from .feedback_context import create_feedback_context
 from .optimization import solve_trajectory_optimization
 from .simulation import (
-    analyze_simulation_quality,
-    calculate_tracking_error,
     execute_simulation,
 )
 from .utils import (
-    inject_llm_constraints_direct,
-    inject_llm_constraints_to_mpc,
     make_json_safe,
     save_iteration_results,
 )
@@ -61,12 +57,8 @@ class FeedbackPipeline:
     # Assign imported functions as methods
     _solve_trajectory_optimization = solve_trajectory_optimization
     _execute_simulation = execute_simulation
-    _calculate_tracking_error = calculate_tracking_error
-    _analyze_simulation_quality = analyze_simulation_quality
     _create_feedback_context = create_feedback_context
     _save_iteration_results = save_iteration_results
-    _inject_llm_constraints_to_mpc = inject_llm_constraints_to_mpc
-    _inject_llm_constraints_direct = inject_llm_constraints_direct
     _make_json_safe = make_json_safe
     _generate_constraints_with_retry = generate_constraints_with_retry
 
@@ -89,11 +81,6 @@ class FeedbackPipeline:
         # Initialize kinodynamic model
         self.kindyn_model = KinoDynamic_Model(self.config)
 
-        # Initialize LLM-specific MPC (replaces the fixed MPC)
-        self.llm_mpc = LLMTaskMPC(
-            self.kindyn_model, self.config, use_slack=self.use_slack
-        )
-
         # Legacy MPC for fallback (in case LLM MPC fails)
         self.fallback_mpc = QuadrupedMPCOpti(
             model=self.kindyn_model, config=self.config, build=True
@@ -101,13 +88,6 @@ class FeedbackPipeline:
 
         # Task-specific MPC tracking
         self.current_task_mpc: LLMTaskMPC | None = None
-        self.llm_mpc_code: str = ""
-
-        # LLM constraint tracking
-        self.llm_constraints: list[Any] = []
-
-        # MPC reference for constraint injection
-        self.mpc: Any = None
 
         # Initialize simulation environment
         if QuadrupedEnv is not None:
@@ -150,6 +130,7 @@ class FeedbackPipeline:
 
         # Pivot/tweak tracking
         self.consecutive_no_improvement: int = 0
+        self.recent_scores: list[float] = []  # rolling window for stagnation detection
 
     def run_pipeline(self, command: str) -> dict[str, Any]:
         """
@@ -183,6 +164,7 @@ class FeedbackPipeline:
         self.previous_score = -float("inf")
         self.use_warmstart_next = False  # First iteration always cold-starts
         self.consecutive_no_improvement = 0
+        self.recent_scores = []
 
         # Algorithm 1: Iterative Refinement Pipeline
         system_prompt = self.constraint_generator.get_system_prompt()
@@ -324,17 +306,10 @@ class FeedbackPipeline:
                         for warning in llm_eval.get("warnings", []):
                             logger.info(f"    ⚠ {warning}")
 
-                    summary = llm_eval.get(
-                        "summary",
-                        summarize_iteration(
-                            command=command,
-                            constraint_code=constraint_code,
-                            success=False,
-                            error_info=error_info,
-                            trajectory_analysis=trajectory_analysis,
-                            images=self.current_images,
-                        ),
-                    )
+                    summary = llm_eval.get("summary", "")
+                    if not summary:
+                        summary = "Failed to generate summary for feedback"
+                        logger.warning("LLM evaluation did not return a summary")
                     logger.info(f"  Summary: {summary}")
 
                 # Add detailed iteration info to history
@@ -367,9 +342,22 @@ class FeedbackPipeline:
                 else:
                     self.consecutive_no_improvement += 1
 
+                # Track recent scores for stagnation detection
+                self.recent_scores.append(score)
+
+                # Stagnation: last 4 scores all within 0.1 of each other
+                stagnated = False
+                if len(self.recent_scores) >= 4:
+                    window = self.recent_scores[-4:]
+                    score_range = max(window) - min(window)
+                    if score_range <= 0.1:
+                        stagnated = True
+
                 # Determine pivot signal
-                if self.consecutive_no_improvement >= 3:
+                if stagnated:
                     pivot_signal: str | None = "pivot"
+                elif self.consecutive_no_improvement >= 3:
+                    pivot_signal = "pivot"
                 elif opt_success and score < 0.2:
                     pivot_signal = "pivot"  # converged but drastically wrong
                 elif self.consecutive_no_improvement >= 1:
@@ -379,7 +367,7 @@ class FeedbackPipeline:
 
                 logger.info(
                     f"Pivot logic: consecutive_no_improvement={self.consecutive_no_improvement}, "
-                    f"pivot_signal={pivot_signal}"
+                    f"stagnated={stagnated}, pivot_signal={pivot_signal}"
                 )
 
                 # === Warmstart policy based on pivot signal ===
@@ -389,6 +377,7 @@ class FeedbackPipeline:
 
                 if pivot_signal == "pivot":
                     self.use_warmstart_next = False  # cold-start with new reference
+                    self.recent_scores.clear()  # reset stagnation window after pivot
                 else:
                     self.use_warmstart_next = True  # warmstart from previous
 

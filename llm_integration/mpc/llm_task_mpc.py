@@ -32,7 +32,6 @@ from .constraint_wrapper import (
 )
 from .contact_utils import (
     analyze_contact_phases,
-    classify_contact_pattern,
     create_contact_sequence,
     create_phase_sequence,
 )
@@ -50,10 +49,6 @@ class LLMTaskMPC:
 
     # Assign imported functions directly as methods (no wrapper needed)
     _create_contact_sequence = staticmethod(create_contact_sequence)
-    _classify_contact_pattern = staticmethod(classify_contact_pattern)
-    _wrap_constraint_for_contact_phases = staticmethod(
-        wrap_constraint_for_contact_phases
-    )
 
     def __init__(
         self,
@@ -223,24 +218,6 @@ class LLMTaskMPC:
             func: Reference trajectory generator function
         """
         self.ref_trajectory_func = func
-
-    def add_phase(
-        self, name: str, start_time: float, duration: float, contact_pattern: list[int]
-    ) -> None:
-        """
-        Add a motion phase (e.g., stance, flight, landing).
-
-        Args:
-            name: Phase name (e.g., "stance", "flight", "landing")
-            start_time: Start time of phase (seconds)
-            duration: Duration of phase (seconds)
-            contact_pattern: Contact state for each foot [FL, FR, RL, RR] (1=contact, 0=flight)
-        """
-        self.phases[name] = {
-            "start_time": start_time,
-            "duration": duration,
-            "contact_pattern": contact_pattern,
-        }
 
     def _create_phase_sequence(
         self, phase_list: list[tuple[str, float, list[int]]]
@@ -435,17 +412,6 @@ class LLMTaskMPC:
             "is_configured": self.is_configured,
             "use_slack": self.use_slack,
         }
-
-    def analyze_constraint_hardness(self) -> dict[str, dict[str, Any]]:
-        """Analyze constraint hardness from the slack formulation."""
-        if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
-            return self.mpc.analyze_constraint_hardness()
-        return {}
-
-    def print_constraint_hardness_report(self) -> None:
-        """Print a formatted constraint hardness report."""
-        if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
-            self.mpc.print_constraint_hardness_report()
 
     def evaluate_constraint_violations(
         self, X_debug: np.ndarray, U_debug: np.ndarray

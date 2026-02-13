@@ -12,8 +12,6 @@ import numpy as np
 from .format_failure import generate_failure_feedback
 from .format_hardness import (
     format_hardness_report,
-    format_hardness_suggestions,
-    get_hardness_summary,
 )
 from .format_success import format_enhanced_feedback
 from .task_progress import compute_task_progress
@@ -29,8 +27,6 @@ __all__ = [
     "generate_failure_feedback",
     "generate_enhanced_feedback",
     "format_hardness_report",
-    "format_hardness_suggestions",
-    "get_hardness_summary",
 ]
 
 

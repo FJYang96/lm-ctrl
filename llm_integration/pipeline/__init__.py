@@ -9,8 +9,6 @@ from .simulation import (
     execute_simulation,
 )
 from .utils import (
-    inject_llm_constraints_direct,
-    inject_llm_constraints_to_mpc,
     make_json_safe,
     save_iteration_results,
 )
@@ -23,7 +21,5 @@ __all__ = [
     "analyze_simulation_quality",
     "create_feedback_context",
     "save_iteration_results",
-    "inject_llm_constraints_to_mpc",
-    "inject_llm_constraints_direct",
     "make_json_safe",
 ]

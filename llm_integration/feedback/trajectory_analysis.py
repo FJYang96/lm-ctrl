@@ -35,19 +35,16 @@ def analyze_phase_metrics(
 
     phases: dict[str, list[int]] = {"stance_pre": [], "flight": [], "stance_post": []}
 
-    _in_flight = False
     flight_started = False
     for k in range(horizon):
         if no_contact[k]:
             phases["flight"].append(k)
-            _in_flight = True
             flight_started = True
         elif all_contact[k]:
             if not flight_started:
                 phases["stance_pre"].append(k)
             else:
                 phases["stance_post"].append(k)
-            _in_flight = False
 
     # Extract state components
     com_z = state_traj[:, 2]  # Height

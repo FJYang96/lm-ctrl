@@ -99,7 +99,6 @@ def generate_constraints_with_retry(
 
             # Store the configured MPC for later use
             self.current_task_mpc = task_mpc
-            self.llm_mpc_code = mpc_config_code
 
             # Get configuration summary for logging
             config_summary = task_mpc.get_configuration_summary()
@@ -153,10 +152,6 @@ def generate_constraints_with_retry(
 
     # Analyze failure patterns
     failure_stages = [attempt.get("failure_stage", "unknown") for attempt in attempts]
-    common_errors: dict[str, int] = {}
-    for attempt_dict in attempts:
-        error = attempt_dict.get("error", "")[:100]
-        common_errors[error] = common_errors.get(error, 0) + 1
 
     last_error = attempts[-1]["error"] if attempts else "No attempts recorded"
     raise ValueError(

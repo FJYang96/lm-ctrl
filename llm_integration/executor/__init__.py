@@ -10,9 +10,6 @@ from .safe_executor import SafeConstraintExecutor
 from .validation import (
     CONSTRAINT_FUNCTION_NAMES,
     find_constraint_entry_point,
-    test_constraint_function,
-    validate_constraint_compatibility,
-    validate_initial_state_feasibility,
 )
 
 __all__ = [
@@ -23,7 +20,4 @@ __all__ = [
     "process_dynamic_imports",
     "extract_imports_from_code",
     "find_constraint_entry_point",
-    "validate_constraint_compatibility",
-    "validate_initial_state_feasibility",
-    "test_constraint_function",
 ]

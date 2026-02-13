@@ -224,7 +224,9 @@ def body_clearance_constraints(
     body_half_width = 0.10
     body_half_height = 0.05
 
-    tilt_clearance = body_half_length * cs.fabs(pitch) + body_half_width * cs.fabs(roll)
+    tilt_clearance = body_half_length * cs.fabs(
+        cs.sin(pitch)
+    ) + body_half_width * cs.fabs(cs.sin(roll))
     body_clearance_margin = body_half_height + tilt_clearance
     effective_clearance = com_position_z - body_clearance_margin
 

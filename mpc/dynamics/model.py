@@ -257,44 +257,6 @@ class KinoDynamic_Model:
         self.mass = cs.SX.sym("mass", 1, 1)
         self.gravity_constant = config.experiment.gravity_constant
 
-    def compute_b_R_w(self, roll: float, pitch: float, yaw: float) -> cs.SX:
-        # Z Y X rotations!
-        Rx = cs.SX.eye(3)
-        Rx[0, 0] = 1
-        Rx[0, 1] = 0
-        Rx[0, 2] = 0
-        Rx[1, 0] = 0
-        Rx[1, 1] = cs.cos(roll)
-        Rx[1, 2] = cs.sin(roll)
-        Rx[2, 0] = 0
-        Rx[2, 1] = -cs.sin(roll)
-        Rx[2, 2] = cs.cos(roll)
-
-        Ry = cs.SX.eye(3)
-        Ry[0, 0] = cs.cos(pitch)
-        Ry[0, 1] = 0
-        Ry[0, 2] = -cs.sin(pitch)
-        Ry[1, 0] = 0
-        Ry[1, 1] = 1
-        Ry[1, 2] = 0
-        Ry[2, 0] = cs.sin(pitch)
-        Ry[2, 1] = 0
-        Ry[2, 2] = cs.cos(pitch)
-
-        Rz = cs.SX.eye(3)
-        Rz[0, 0] = cs.cos(yaw)
-        Rz[0, 1] = cs.sin(yaw)
-        Rz[0, 2] = 0
-        Rz[1, 0] = -cs.sin(yaw)
-        Rz[1, 1] = cs.cos(yaw)
-        Rz[1, 2] = 0
-        Rz[2, 0] = 0
-        Rz[2, 1] = 0
-        Rz[2, 2] = 1
-
-        b_R_w = Rx @ Ry @ Rz
-        return b_R_w
-
     def forward_dynamics(
         self, states: np.ndarray, inputs: np.ndarray, param: np.ndarray
     ) -> cs.SX:
@@ -356,7 +318,6 @@ class KinoDynamic_Model:
         euler_rates_base = cs.inv(conj_euler_rates) @ w
 
         # Compute the homogeneous transformation matrix
-        # b_R_w = self.compute_b_R_w(roll, pitch, yaw)
         w_R_b = SO3.from_euler(np.array([roll, pitch, yaw])).as_matrix()
         b_R_w = w_R_b.T
         H = cs.SX.eye(4)
@@ -476,14 +437,6 @@ class KinoDynamic_Model:
             linear_joint_vel_RR,
             integral_states,
         )
-
-    def get_state_dim(self) -> int:
-        """Get the dimension of the state vector"""
-        return int(self.states.size()[0])
-
-    def get_input_dim(self) -> int:
-        """Get the dimension of the input vector"""
-        return int(self.inputs.size()[0])
 
     def export_robot_model(self) -> Any:
         """

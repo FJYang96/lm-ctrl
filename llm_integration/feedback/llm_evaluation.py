@@ -137,12 +137,15 @@ Identify any warnings about the trajectory or constraint approach.
 4. SPECIFIC RECOMMENDATIONS: Provide exact parameter changes or alternative approaches to try
 
 === SCORING GUIDELINES ===
-- 0.0-0.2: Complete failure - no meaningful motion toward goal
-- 0.2-0.4: Wrong motion - moved but in wrong direction/axis
-- 0.4-0.6: Partial progress - some correct motion but far from complete
-- 0.6-0.8: Good progress - majority of task complete, minor issues
-- 0.8-0.95: Nearly complete - task almost done, small adjustments needed
-- 0.95-1.0: Success - task fully completed
+Compute the score as a WEIGHTED AVERAGE of these factors (each 0.0-1.0):
+  - Primary goal progress (60%): Fraction of the commanded task achieved
+  - Axis purity (15%): Was motion on the intended axis only? Penalize unwanted off-axis rotation
+  - Landing/terminal state (15%): Stable final configuration? Low final velocity?
+  - Solver health (10%): Clean convergence vs timeout/infeasibility
+
+score = 0.6 * primary_progress + 0.15 * axis_purity + 0.15 * landing_quality + 0.10 * solver_health
+
+IMPORTANT: Use the formula to compute a precise score. Do NOT round to convenient numbers like 0.70 or 0.75.
 
 Return ONLY valid JSON, no markdown, no extra text."""
 
@@ -218,16 +221,18 @@ If the solver was making good progress (e.g., 445° rotation for a backflip), sc
 If the solver made no progress (e.g., 3° rotation), score it very low.
 
 === SCORING GUIDELINES ===
-- 0.0-0.1: No meaningful motion at all, or no trajectory data
-- 0.1-0.3: Some motion but in wrong direction/axis or minimal progress
-- 0.3-0.5: Moderate progress toward goal (e.g., 30-50% of target rotation/height)
-- 0.5-0.7: Significant progress (e.g., 50-80% of target achieved but solver couldn't converge)
-- 0.7-0.85: Nearly achieved the goal but solver ran out of iterations or hit minor infeasibility
-- 0.85-1.0: Reserved for successful iterations only — failures should not exceed 0.85
+Compute the score as a WEIGHTED AVERAGE of these factors (each 0.0-1.0):
+  - Primary goal progress (60%): Fraction of the commanded task achieved before failure
+  - Axis purity (15%): Was motion on the intended axis only? Penalize unwanted off-axis rotation
+  - Landing/terminal state (15%): Stable final configuration? Low final velocity?
+  - Solver health (10%): How far the solver got before failing (iterations used, proximity to convergence)
 
-=== CRITICAL ===
-A timeout after achieving 80%+ of the goal is MUCH better than a quick failure with 0% progress.
-Do NOT score all failures as 0.0 — differentiate based on partial progress.
+score = 0.6 * primary_progress + 0.15 * axis_purity + 0.15 * landing_quality + 0.10 * solver_health
+
+Cap at 0.85 — failed iterations should not exceed 0.85.
+
+IMPORTANT: Use the formula to compute a precise score. Do NOT round to convenient numbers like 0.70 or 0.75.
+A timeout after significant progress is MUCH better than a quick failure with no progress. Differentiate based on partial progress.
 
 Return ONLY valid JSON, no markdown, no extra text."""
 

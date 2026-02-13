@@ -9,14 +9,13 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 from ..logging_config import logger
-from .code_extraction import extract_code_blocks, extract_raw_code
+from .code_extraction import extract_raw_code
 
 
 class LLMClient:
     """Client for interacting with Claude API to generate optimization constraints."""
 
     # Assign imported functions directly as methods (no wrapper needed)
-    extract_code_blocks = staticmethod(extract_code_blocks)
     extract_raw_code = staticmethod(extract_raw_code)
 
     def __init__(self) -> None:

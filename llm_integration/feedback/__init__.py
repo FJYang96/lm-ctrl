@@ -2,8 +2,6 @@
 
 from .format_hardness import (
     format_hardness_report,
-    format_hardness_suggestions,
-    get_hardness_summary,
 )
 from .formatter import (
     format_enhanced_feedback,
@@ -35,8 +33,6 @@ __all__ = [
     "generate_enhanced_feedback",
     "generate_failure_feedback",
     "format_hardness_report",
-    "format_hardness_suggestions",
-    "get_hardness_summary",
     "evaluate_iteration",
     "evaluate_failed_iteration",
     "summarize_iteration",

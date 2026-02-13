@@ -7,8 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ..logging_config import logger
-
 if TYPE_CHECKING:
     from .feedback_pipeline import FeedbackPipeline
 
@@ -70,82 +68,6 @@ def _extract_ref_trajectory_code(full_code: str) -> str:
             lines = full_code.splitlines()
             return "\n".join(lines[start:end]) + "\n"
     return ""
-
-
-def strip_ref_trajectory_code(full_code: str) -> str:
-    """Remove the reference trajectory function from code, returning the rest.
-
-    Re-exported from feedback.code_utils for backward compatibility.
-    """
-    from ..feedback.code_utils import strip_ref_trajectory_code as _strip
-
-    return _strip(full_code)
-
-
-def inject_llm_constraints_to_mpc(self: "FeedbackPipeline") -> None:
-    """
-    Inject LLM constraints into the MPC problem using the proper MPC constraint interface.
-
-    This adds the LLM-generated constraints as additional path constraints to the
-    existing MPC constraint system, rather than directly to the Opti problem.
-    """
-    if not self.llm_constraints:
-        return
-
-    constraint_func = self.llm_constraints[0]
-
-    try:
-        if hasattr(self.config, "mpc_config") and hasattr(
-            self.config.mpc_config, "path_constraints"
-        ):
-            self.config.mpc_config.path_constraints.append(constraint_func)
-        else:
-            inject_llm_constraints_direct(self)
-
-    except Exception as e:
-        logger.error(f"Constraint injection failed: {e}")
-
-
-def inject_llm_constraints_direct(self: "FeedbackPipeline") -> None:
-    """
-    Fallback method: Inject LLM constraints directly into the Opti problem.
-    This is used when the preferred path constraint method fails.
-    """
-    if not self.llm_constraints:
-        return
-
-    constraint_func = self.llm_constraints[0]
-
-    try:
-        constraints_added = 0
-        for k in range(self.mpc.horizon):
-            try:
-                x_k = self.mpc.X[:, k]
-                u_k = self.mpc.U[:, k]
-                contact_k = self.mpc.P_contact[:, k]
-
-                constraint_result = constraint_func(
-                    x_k, u_k, self.kindyn_model, self.config, contact_k
-                )
-
-                if (
-                    not isinstance(constraint_result, tuple)
-                    or len(constraint_result) != 3
-                ):
-                    continue
-
-                constraint_expr, constraint_l, constraint_u = constraint_result
-
-                if constraint_expr is not None:
-                    self.mpc.opti.subject_to(constraint_expr >= constraint_l)
-                    self.mpc.opti.subject_to(constraint_expr <= constraint_u)
-                    constraints_added += 1
-
-            except Exception:
-                continue
-
-    except Exception as e:
-        logger.error(f"Direct injection failed: {e}")
 
 
 def make_json_safe(self: "FeedbackPipeline", obj: Any) -> Any:
