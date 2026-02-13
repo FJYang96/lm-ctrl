@@ -121,14 +121,26 @@ class SafeConstraintExecutor:
                 "No function definition found. Must define a constraint function.",
             )
 
-        # Validate function signatures (prefer 7 arguments, accept 5 for backward compatibility)
+        # Validate function signatures
         for func_def in function_defs:
             num_args = len(func_def.args.args)
-            if num_args not in (5, 7):
-                return (
-                    False,
-                    f"Function '{func_def.name}' must have 7 arguments: (x_k, u_k, kindyn_model, config, contact_k, k, horizon). Got {num_args} arguments.",
-                )
+            # Reference trajectory functions have a different signature (2-8 args)
+            is_ref_func = "reference" in func_def.name or func_def.name.startswith(
+                "generate_"
+            )
+            if is_ref_func:
+                if not (2 <= num_args <= 8):
+                    return (
+                        False,
+                        f"Reference function '{func_def.name}' must have 2-8 arguments. Got {num_args}.",
+                    )
+            else:
+                # Constraint functions: prefer 7 arguments, accept 5 for backward compat
+                if num_args not in (5, 7):
+                    return (
+                        False,
+                        f"Function '{func_def.name}' must have 7 arguments: (x_k, u_k, kindyn_model, config, contact_k, k, horizon). Got {num_args} arguments.",
+                    )
 
         return True, ""
 
@@ -277,6 +289,68 @@ class SafeConstraintExecutor:
             additional_imports: Optional list of additional imports to include
         """
         return create_restricted_globals(self.ALLOWED_IMPORTS, additional_imports)
+
+    def _validate_reference_trajectory(
+        self,
+        func: Any,
+        initial_state: Any,
+        horizon: int = 50,
+        states_dim: int = 30,
+        inputs_dim: int = 24,
+    ) -> tuple[bool, str]:
+        """
+        Validate a reference trajectory function by test-executing it.
+
+        Args:
+            func: The reference trajectory generator function
+            initial_state: Real initial state vector
+            horizon: MPC horizon for testing
+            states_dim: State dimension (default 30)
+            inputs_dim: Input dimension (default 24)
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        import numpy as np
+
+        try:
+            # Create test inputs
+            contact_seq = np.ones((4, horizon))  # All stance
+            mpc_dt = 0.02
+            robot_mass = 15.0
+
+            X_ref, U_ref = func(initial_state, horizon, contact_seq, mpc_dt, robot_mass)
+
+            # Shape checks
+            expected_x = (states_dim, horizon + 1)
+            expected_u = (inputs_dim, horizon)
+            if X_ref.shape != expected_x:
+                return False, f"X_ref shape {X_ref.shape} != expected {expected_x}"
+            if U_ref.shape != expected_u:
+                return False, f"U_ref shape {U_ref.shape} != expected {expected_u}"
+
+            # NaN/Inf checks
+            if np.any(np.isnan(X_ref)) or np.any(np.isinf(X_ref)):
+                return False, "X_ref contains NaN or Inf"
+            if np.any(np.isnan(U_ref)) or np.any(np.isinf(U_ref)):
+                return False, "U_ref contains NaN or Inf"
+
+            # Basic physics sanity checks
+            min_height = X_ref[2, :].min()
+            if min_height < -0.5:
+                return (
+                    False,
+                    f"X_ref has unrealistic height {min_height:.2f}m (< -0.5m)",
+                )
+
+            max_vel = np.abs(X_ref[3:6, :]).max()
+            if max_vel > 50.0:
+                return False, f"X_ref has unrealistic velocity {max_vel:.1f} m/s (> 50)"
+
+            return True, ""
+
+        except Exception as e:
+            return False, f"Reference trajectory validation failed: {e}"
 
     def _process_dynamic_imports(
         self, globals_dict: dict[str, Any], import_requests: list[str]

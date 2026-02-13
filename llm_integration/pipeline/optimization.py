@@ -76,6 +76,20 @@ def solve_trajectory_optimization(
                 "converged": False,
             }
 
+    # Log reference trajectory metrics if generated
+    ref_trajectory_data = None
+    if self.current_task_mpc is not None:
+        ref_trajectory_data = getattr(
+            self.current_task_mpc, "ref_trajectory_data", None
+        )
+        if ref_trajectory_data is not None:
+            X_ref = ref_trajectory_data["X_ref"]
+            logger.info(
+                f"Reference trajectory: "
+                f"height range [{X_ref[2, :].min():.3f}, {X_ref[2, :].max():.3f}]m, "
+                f"pitch range [{X_ref[7, :].min():.2f}, {X_ref[7, :].max():.2f}]rad"
+            )
+
     # Extract hardness report from slack formulation
     hardness_report = None
     if self.current_task_mpc is not None:
@@ -231,6 +245,7 @@ def solve_trajectory_optimization(
         "mpc_config_code": mpc_config_code,
         "warmstart_X": warmstart_X,
         "warmstart_U": warmstart_U,
+        "ref_trajectory_data": ref_trajectory_data,
     }
 
     return result

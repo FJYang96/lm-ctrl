@@ -6,8 +6,89 @@ import ast
 import logging
 from typing import Any
 
+import numpy as np
+
 # Use module-level logger
 logger = logging.getLogger("llm_integration.executor.globals")
+
+
+# ── State / input index constants (exposed to LLM code) ──
+STATES_DIM = 30
+INPUTS_DIM = 24
+
+# State vector slices
+IDX_POS = slice(0, 3)  # COM position [x, y, z]
+IDX_VEL = slice(3, 6)  # COM velocity [vx, vy, vz]
+IDX_EULER = slice(6, 9)  # Euler angles [roll, pitch, yaw]
+IDX_ANG_VEL = slice(9, 12)  # Angular velocity [wx, wy, wz]
+IDX_JOINTS = slice(12, 24)  # Joint angles (12 joints)
+IDX_INTEGRALS = slice(24, 30)  # Integral states (padding/zeros)
+
+# Scalar pitch index (row 7 in state vector)
+IDX_PITCH = 7
+
+# Input vector slices
+IDX_U_JOINT_VEL = slice(0, 12)  # Joint velocities
+IDX_U_GRF = slice(12, 24)  # Ground reaction forces (4 legs × 3)
+
+# GRF z-component indices (one per foot: FL, FR, RL, RR)
+IDX_GRF_Z = [14, 17, 20, 23]
+
+
+def _min_jerk_scalar(t: float) -> float:
+    """Min-jerk basis for a scalar t in [0,1]. Returns smooth s in [0,1]."""
+    return 10 * t**3 - 15 * t**4 + 6 * t**5
+
+
+def min_jerk_trajectory(
+    start: float | np.ndarray, end: float | np.ndarray, num_steps: int
+) -> np.ndarray:
+    """
+    Generate a minimum-jerk (5th-order polynomial) smooth interpolation.
+
+    Produces a trajectory from `start` to `end` over `num_steps` points
+    with zero velocity and acceleration at both endpoints.
+
+    Args:
+        start: Starting value (scalar or array)
+        end: Ending value (scalar or array)
+        num_steps: Number of points in the trajectory
+
+    Returns:
+        Array of shape (num_steps,) or (num_steps, dim) with smooth trajectory
+    """
+    t = np.linspace(0, 1, num_steps)
+    # 5th order polynomial: 10t^3 - 15t^4 + 6t^5
+    s = 10 * t**3 - 15 * t**4 + 6 * t**5
+    start_arr = np.asarray(start)
+    end_arr = np.asarray(end)
+    if start_arr.ndim == 0:
+        return np.asarray(start_arr + (end_arr - start_arr) * s)
+    else:
+        return np.asarray(start_arr[None, :] + np.outer(s, end_arr - start_arr))
+
+
+def ballistic_trajectory(
+    z0: float, vz0: float, g: float, dt: float, num_steps: int
+) -> np.ndarray:
+    """
+    Generate a ballistic (projectile) height trajectory under gravity.
+
+    z(t) = z0 + vz0*t - 0.5*g*t^2
+
+    Args:
+        z0: Initial height (m)
+        vz0: Initial vertical velocity (m/s, positive = upward)
+        g: Gravitational acceleration (m/s^2, positive value e.g. 9.81)
+        dt: Time step (s)
+        num_steps: Number of points in the trajectory
+
+    Returns:
+        Array of shape (num_steps,) with height values
+    """
+    t = np.arange(num_steps) * dt
+    return z0 + vz0 * t - 0.5 * g * t**2
+
 
 # Allowed imports for constraint generation
 ALLOWED_IMPORTS = {
@@ -92,7 +173,7 @@ def create_restricted_globals(
     if allowed_imports is None:
         allowed_imports = ALLOWED_IMPORTS
 
-    restricted_globals = {
+    restricted_globals: dict[str, Any] = {
         "__builtins__": {
             # Basic Python built-ins needed for constraint functions
             "abs": abs,
@@ -129,7 +210,7 @@ def create_restricted_globals(
         # Add main module references
         restricted_globals["cs"] = cs
         restricted_globals["np"] = np
-        restricted_globals["math"] = math  # type: ignore[assignment]
+        restricted_globals["math"] = math
         restricted_globals["SO3"] = SO3
 
         # Make liecasadi module available too
@@ -181,6 +262,25 @@ def create_restricted_globals(
         restricted_globals["eye"] = cs.MX.eye
         restricted_globals["zeros"] = cs.MX.zeros
         restricted_globals["ones"] = cs.MX.ones
+
+        # Helper functions for reference trajectory generation
+        restricted_globals["min_jerk_trajectory"] = min_jerk_trajectory
+        restricted_globals["ballistic_trajectory"] = ballistic_trajectory
+        restricted_globals["_min_jerk_scalar"] = _min_jerk_scalar
+
+        # State/input index constants
+        restricted_globals["STATES_DIM"] = STATES_DIM
+        restricted_globals["INPUTS_DIM"] = INPUTS_DIM
+        restricted_globals["IDX_POS"] = IDX_POS
+        restricted_globals["IDX_VEL"] = IDX_VEL
+        restricted_globals["IDX_EULER"] = IDX_EULER
+        restricted_globals["IDX_ANG_VEL"] = IDX_ANG_VEL
+        restricted_globals["IDX_JOINTS"] = IDX_JOINTS
+        restricted_globals["IDX_INTEGRALS"] = IDX_INTEGRALS
+        restricted_globals["IDX_PITCH"] = IDX_PITCH
+        restricted_globals["IDX_U_JOINT_VEL"] = IDX_U_JOINT_VEL
+        restricted_globals["IDX_U_GRF"] = IDX_U_GRF
+        restricted_globals["IDX_GRF_Z"] = IDX_GRF_Z
 
         # Process additional imports from LLM code
         if additional_imports:

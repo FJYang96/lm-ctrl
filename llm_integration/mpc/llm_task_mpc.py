@@ -15,6 +15,7 @@ creating a cohesive optimization setup for each unique behavior.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -35,6 +36,8 @@ from .contact_utils import (
     create_contact_sequence,
     create_phase_sequence,
 )
+
+logger = logging.getLogger("llm_integration")
 
 
 class LLMTaskMPC:
@@ -81,6 +84,10 @@ class LLMTaskMPC:
         # Slack formulation settings
         self.slack_weights: dict[str, float] = {}
         self.last_hardness_report: dict[str, dict[str, Any]] | None = None
+
+        # Reference trajectory support
+        self.ref_trajectory_func: Callable[..., Any] | None = None
+        self.ref_trajectory_data: dict[str, np.ndarray] | None = None
 
         # MPC instance (created when configured)
         self.mpc: QuadrupedMPCOpti | QuadrupedMPCOptiSlack | None = None
@@ -134,6 +141,12 @@ class LLMTaskMPC:
 
             if not self.constraint_functions:
                 return False, "No constraints specified. Use mpc.add_constraint()"
+
+            if self.ref_trajectory_func is None:
+                return (
+                    False,
+                    "No reference trajectory specified. Use mpc.set_reference_trajectory(func)",
+                )
 
             # Auto-fix contact_sequence dimensions if needed
             expected_horizon = int(self.mpc_duration / self.mpc_dt)
@@ -195,6 +208,21 @@ class LLMTaskMPC:
                      e.g. {"friction_cone_constraints": 1e6, "contact_aware_constraint": 1e4}
         """
         self.slack_weights.update(weights)
+
+    def set_reference_trajectory(self, func: Callable[..., Any]) -> None:
+        """
+        Set a function that generates per-timestep reference trajectories.
+
+        The function will be called with:
+            func(initial_state, horizon, contact_sequence, mpc_dt, robot_mass)
+        and must return a tuple (X_ref, U_ref) where:
+            X_ref: np.ndarray of shape (states_dim, horizon+1) — state reference
+            U_ref: np.ndarray of shape (inputs_dim, horizon) — input reference
+
+        Args:
+            func: Reference trajectory generator function
+        """
+        self.ref_trajectory_func = func
 
     def add_phase(
         self, name: str, start_time: float, duration: float, contact_pattern: list[int]
@@ -305,10 +333,57 @@ class LLMTaskMPC:
         self.last_error = None
         self.infeasibility_info = None
         self.last_hardness_report = None
+        self.ref_trajectory_data = None
+
+        # Execute reference trajectory function if set
+        ref_traj_dict = None
+        if self.ref_trajectory_func is not None:
+            try:
+                horizon = self.mpc.horizon
+                mpc_dt = self.mpc_dt
+                robot_mass = self.base_config.robot_data.mass
+
+                X_ref, U_ref = self.ref_trajectory_func(
+                    initial_state, horizon, self.contact_sequence, mpc_dt, robot_mass
+                )
+
+                # Validate shapes
+                expected_x_shape = (self.mpc.states_dim, horizon + 1)
+                expected_u_shape = (self.mpc.inputs_dim, horizon)
+                if X_ref.shape != expected_x_shape:
+                    raise ValueError(
+                        f"X_ref shape {X_ref.shape} != expected {expected_x_shape}"
+                    )
+                if U_ref.shape != expected_u_shape:
+                    raise ValueError(
+                        f"U_ref shape {U_ref.shape} != expected {expected_u_shape}"
+                    )
+
+                # Check for NaN/Inf
+                if np.any(np.isnan(X_ref)) or np.any(np.isinf(X_ref)):
+                    raise ValueError("X_ref contains NaN or Inf values")
+                if np.any(np.isnan(U_ref)) or np.any(np.isinf(U_ref)):
+                    raise ValueError("U_ref contains NaN or Inf values")
+
+                ref_traj_dict = {"X_ref": X_ref, "U_ref": U_ref}
+                self.ref_trajectory_data = ref_traj_dict
+
+                logger.info(
+                    f"Reference trajectory generated: "
+                    f"height range [{X_ref[2, :].min():.3f}, {X_ref[2, :].max():.3f}]m, "
+                    f"pitch range [{X_ref[7, :].min():.2f}, {X_ref[7, :].max():.2f}]rad"
+                )
+            except Exception as e:
+                logger.warning(f"Reference trajectory generation failed: {e}")
+                # Fall back to no trajectory reference — solver will use heuristic guess
 
         try:
             result = self.mpc.solve_trajectory(
-                initial_state, ref, self.contact_sequence, warmstart=warmstart
+                initial_state,
+                ref,
+                self.contact_sequence,
+                warmstart=warmstart,
+                ref_trajectory=ref_traj_dict,
             )
 
             # Try to extract solver stats from the MPC/opti instance

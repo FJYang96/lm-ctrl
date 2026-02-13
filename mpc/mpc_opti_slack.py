@@ -317,8 +317,18 @@ class QuadrupedMPCOptiSlack:
         ref: np.ndarray,
         contact_sequence: np.ndarray,
         warmstart: dict[str, Any] | None = None,
+        ref_trajectory: dict[str, np.ndarray] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-        """Solve the trajectory optimization problem."""
+        """Solve the trajectory optimization problem.
+
+        Args:
+            initial_state: Initial state vector
+            ref: Reference trajectory (shape: states_dim + inputs_dim)
+            contact_sequence: Contact sequence array (shape: 4 x horizon)
+            warmstart: Optional dict with 'X' and 'U' arrays from a previous solution
+            ref_trajectory: Optional dict with 'X_ref' (states_dim, horizon+1) and
+                'U_ref' (inputs_dim, horizon) used as solver initial guess.
+        """
         # Set parameter values
         self.opti.set_value(self.P_initial_state, initial_state)
         self.opti.set_value(self.P_ref_state, ref[: self.states_dim])
@@ -330,12 +340,7 @@ class QuadrupedMPCOptiSlack:
         self.opti.set_value(self.P_mass, self.config.robot_data.mass)
         self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
 
-        # Initial guess for states (heuristic)
-        X_init = np.zeros((self.states_dim, self.horizon + 1))
-        for i in range(self.horizon + 1):
-            X_init[:, i] = initial_state.copy()
-
-        # Attempt warm-start from previous solution
+        # Determine initial guess priority: warmstart > ref_trajectory > heuristic
         used_warmstart = False
         if warmstart is not None:
             ws_X = _interpolate_warmstart(
@@ -358,8 +363,18 @@ class QuadrupedMPCOptiSlack:
                 U_init = ws_U
                 used_warmstart = True
 
-        if not used_warmstart:
+        if not used_warmstart and ref_trajectory is not None:
+            # Use LLM-generated reference trajectory as initial guess
+            logger.info("Using reference trajectory as initial guess")
+            X_init = ref_trajectory["X_ref"].copy()
+            U_init = ref_trajectory["U_ref"].copy()
+        elif not used_warmstart:
             logger.info("Cold-starting with heuristic initial guess")
+            # Initial guess for states (heuristic)
+            X_init = np.zeros((self.states_dim, self.horizon + 1))
+            for i in range(self.horizon + 1):
+                X_init[:, i] = initial_state.copy()
+
             U_init = np.zeros((self.inputs_dim, self.horizon))
             for i in range(self.horizon):
                 U_init[0:12, i] = 0.001 * np.sin(np.arange(12) * 0.1)

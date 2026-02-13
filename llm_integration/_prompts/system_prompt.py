@@ -18,13 +18,14 @@ OUTPUT FORMAT: Return ONLY Python code. You may use ```python code blocks.
 
 == CRITICAL: MANDATORY REQUIREMENTS ==
 
-YOUR CODE WILL FAIL WITHOUT ALL FIVE OF THESE CALLS:
+YOUR CODE WILL FAIL WITHOUT ALL SIX OF THESE CALLS:
 
 1. mpc.set_task_name("...")           <- REQUIRED
 2. mpc.set_duration(...)              <- REQUIRED
 3. mpc.set_time_step(0.02)            <- REQUIRED
 4. mpc.set_contact_sequence(...)      <- REQUIRED - #1 CAUSE OF FAILURES
 5. mpc.add_constraint(...)            <- REQUIRED
+6. mpc.set_reference_trajectory(...)  <- REQUIRED - provides solver warmstart
 
 THE MOST COMMON FAILURE: Forgetting mpc.set_contact_sequence()
 - EVERY motion needs a contact sequence, including ground-based motions like squatting
@@ -372,6 +373,82 @@ How to use this information:
    - Lower weight = solver relaxes that constraint more easily
    - Higher weight = solver tries harder to satisfy it
    - Use this to prioritize which constraints matter most for your motion
+
+== REFERENCE TRAJECTORY (MANDATORY) ==
+
+You MUST always define a reference trajectory function. This provides a physics-informed
+initial guess (warmstart) that helps the solver converge much faster and find better
+solutions. The MPC cost function and slack variables remain unchanged — the reference
+trajectory is used ONLY as the solver's starting point.
+
+YOUR CODE WILL FAIL WITHOUT THIS CALL:
+6. mpc.set_reference_trajectory(...)   <- REQUIRED
+
+Function signature:
+  def generate_reference_trajectory(initial_state, horizon, contact_sequence, mpc_dt, robot_mass):
+      # initial_state: np.ndarray (30,) — current robot state
+      # horizon: int — number of MPC timesteps
+      # contact_sequence: np.ndarray (4, horizon) — foot contact pattern
+      # mpc_dt: float — time step in seconds
+      # robot_mass: float — mass in kg
+      # Returns: (X_ref, U_ref)
+      #   X_ref: np.ndarray shape (30, horizon+1)
+      #   U_ref: np.ndarray shape (24, horizon)
+
+Register it:
+  mpc.set_reference_trajectory(generate_reference_trajectory)
+
+PRE-IMPORTED INDEX CONSTANTS (use these instead of raw numbers):
+  # Dimensions
+  STATES_DIM = 30          # state vector length
+  INPUTS_DIM = 24          # input vector length
+
+  # State slices (for X_ref rows)
+  IDX_POS       = slice(0, 3)     # COM position [x, y, z]
+  IDX_VEL       = slice(3, 6)     # COM velocity [vx, vy, vz]
+  IDX_EULER     = slice(6, 9)     # Euler angles [roll, pitch, yaw]
+  IDX_ANG_VEL   = slice(9, 12)    # Angular velocity [wx, wy, wz]
+  IDX_JOINTS    = slice(12, 24)   # Joint angles (12 joints)
+  IDX_INTEGRALS = slice(24, 30)   # Integral states (set to 0)
+  IDX_PITCH     = 7               # Scalar pitch index (row 7)
+
+  # Input slices (for U_ref rows)
+  IDX_U_JOINT_VEL = slice(0, 12)  # Joint velocities
+  IDX_U_GRF       = slice(12, 24) # Ground reaction forces (4 legs × 3)
+  IDX_GRF_Z       = [14, 17, 20, 23]  # GRF z-component per foot (FL, FR, RL, RR)
+
+PRE-IMPORTED HELPER FUNCTIONS:
+  min_jerk_trajectory(start, end, num_steps)  — smooth 5th-order interpolation array
+  ballistic_trajectory(z0, vz0, g, dt, num_steps) — projectile z(t) array
+  _min_jerk_scalar(t)  — scalar t in [0,1] → smooth s in [0,1]
+
+== HOW TO BUILD A REFERENCE TRAJECTORY ==
+
+Your function MUST build the trajectory phase-by-phase matching your contact sequence.
+Determine the number of timesteps in each phase from the contact_sequence, then loop
+through each phase filling X_ref and U_ref.
+
+STRUCTURE:
+  1. Extract initial state:  pos0 = x0[IDX_POS].copy(), eul0 = x0[IDX_EULER].copy(), etc.
+  2. Count timesteps per phase from the contact_sequence columns
+  3. Loop over each phase, filling X_ref[:, k] and U_ref[:, k] per timestep
+
+PHYSICS RULES (apply to ALL motions):
+  - Velocities must be consistent with positions (if position changes, velocity must be nonzero)
+  - Flight phases (all contacts = 0): ballistic height z(t) = z0 + vz0*t - 0.5*g*t²,
+    angular momentum conserved (constant angular velocity), GRF = 0
+  - Stance phases (any contact = 1): GRF_z per grounded foot ≈ robot_mass * g / n_grounded_feet
+  - Use _min_jerk_scalar(t) for smooth transitions (ramp-up, ramp-down, blending between states)
+  - Integrate angles from angular velocities — don't set angles without matching omega
+  - Set IDX_INTEGRALS rows to 0.0, set IDX_JOINTS to initial joint angles unless needed
+  - GRF z-component for foot i is at index IDX_GRF_Z[i] (i.e. 14, 17, 20, 23)
+
+Key points:
+  - The reference trajectory gives the solver a good starting point, NOT a tracking target.
+  - The existing phase-aware cost function + slack constraints are still used for optimization.
+  - You still MUST provide constraints via mpc.add_constraint() — constraints enforce
+    feasibility, the reference trajectory just helps the solver converge.
+  - A physically realistic reference trajectory dramatically improves convergence.
 
 == TASK ==
 Generate MPC configuration and constraints for the requested behavior.

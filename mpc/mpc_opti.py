@@ -298,15 +298,18 @@ class QuadrupedMPCOpti:
         ref: np.ndarray,
         contact_sequence: np.ndarray,
         warmstart: dict[str, Any] | None = None,
+        ref_trajectory: dict[str, np.ndarray] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """
         Solve the trajectory optimization problem.
 
         Args:
-            initial_state: Dictionary with initial state components
+            initial_state: Initial state vector
             ref: Reference trajectory (shape: states_dim + inputs_dim)
             contact_sequence: Contact sequence array (shape: 4 x horizon)
             warmstart: Optional dict with 'X' and 'U' arrays from a previous solution
+            ref_trajectory: Optional dict with 'X_ref' (states_dim, horizon+1) and
+                'U_ref' (inputs_dim, horizon) used as solver initial guess.
 
         Returns:
             Tuple of (state_traj, grf_traj, joint_vel_traj, status)
@@ -318,18 +321,13 @@ class QuadrupedMPCOpti:
         self.opti.set_value(self.P_contact, contact_sequence)
 
         # Create terminal state for landing - should return to near-initial configuration
-        # Terminal position: same XY as ref (forward motion) but Z back to initial height
         terminal_state = initial_state.copy()
-        # Keep the forward motion (X displacement) from the reference
         terminal_state[0] = ref[0]  # X position from reference (forward motion)
         terminal_state[1] = ref[1]  # Y position from reference
-        # Z position: return to initial height (not elevated)
-        terminal_state[2] = initial_state[2]
-        # Terminal velocities should be near zero
+        terminal_state[2] = initial_state[2]  # Z back to initial height
         terminal_state[3:6] = 0.0  # Linear velocity
         terminal_state[9:12] = 0.0  # Angular velocity
-        # Keep joint positions from initial (stable standing pose)
-        terminal_state[12:24] = initial_state[12:24]
+        terminal_state[12:24] = initial_state[12:24]  # Joint positions
         self.opti.set_value(self.P_terminal_state, terminal_state)
 
         # Robot parameters
@@ -337,45 +335,7 @@ class QuadrupedMPCOpti:
         self.opti.set_value(self.P_mass, self.config.robot_data.mass)
         self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
 
-        # Better initial guess with phase-aware trajectory
-        X_init = np.zeros((self.states_dim, self.horizon + 1))
-        dt = self.config.mpc_config.mpc_dt
-
-        for i in range(self.horizon + 1):
-            X_init[:, i] = initial_state.copy()
-
-            # Phase-aware height profile
-            if i < self.pre_flight_steps:
-                # Pre-flight: stay at initial height
-                X_init[2, i] = initial_state[2]
-            elif i < self.landing_start:
-                # Flight phase: parabolic trajectory towards peak
-                flight_progress = (i - self.pre_flight_steps) / self.flight_steps
-                # Parabolic profile: rises then falls
-                peak_height = ref[2]  # Target height from reference
-                height_offset = peak_height - initial_state[2]
-                # Parabola: 4 * t * (1 - t) peaks at t=0.5
-                X_init[2, i] = initial_state[
-                    2
-                ] + height_offset * 4 * flight_progress * (1 - flight_progress)
-                # Vertical velocity: positive going up, negative going down
-                X_init[5, i] = height_offset * 4 * (1 - 2 * flight_progress) / dt
-            else:
-                # Landing phase: return to initial height
-                X_init[2, i] = initial_state[2]
-                X_init[5, i] = 0.0  # Zero vertical velocity after landing
-
-            # Forward motion: gradual forward progress
-            forward_target = ref[0]  # Forward position from reference
-            progress = i / self.horizon
-            X_init[0, i] = (
-                initial_state[0] + (forward_target - initial_state[0]) * progress
-            )
-
-            # Keep joint configuration stable
-            X_init[12:24, i] = initial_state[12:24]
-
-        # Attempt warm-start from previous solution
+        # Determine initial guess priority: warmstart > ref_trajectory > heuristic
         used_warmstart = False
         if warmstart is not None:
             ws_X = _interpolate_warmstart(
@@ -398,35 +358,62 @@ class QuadrupedMPCOpti:
                 U_init = ws_U
                 used_warmstart = True
 
-        if not used_warmstart:
+        if not used_warmstart and ref_trajectory is not None:
+            # Use LLM-generated reference trajectory as initial guess
+            logger.info("Using reference trajectory as initial guess")
+            X_init = ref_trajectory["X_ref"].copy()
+            U_init = ref_trajectory["U_ref"].copy()
+        elif not used_warmstart:
             logger.info("Cold-starting with heuristic initial guess")
+            # Better initial guess with phase-aware trajectory
+            X_init = np.zeros((self.states_dim, self.horizon + 1))
+            dt = self.config.mpc_config.mpc_dt
+
+            for i in range(self.horizon + 1):
+                X_init[:, i] = initial_state.copy()
+
+                # Phase-aware height profile
+                if i < self.pre_flight_steps:
+                    X_init[2, i] = initial_state[2]
+                elif i < self.landing_start:
+                    flight_progress = (i - self.pre_flight_steps) / self.flight_steps
+                    peak_height = ref[2]
+                    height_offset = peak_height - initial_state[2]
+                    X_init[2, i] = initial_state[
+                        2
+                    ] + height_offset * 4 * flight_progress * (1 - flight_progress)
+                    X_init[5, i] = height_offset * 4 * (1 - 2 * flight_progress) / dt
+                else:
+                    X_init[2, i] = initial_state[2]
+                    X_init[5, i] = 0.0
+
+                forward_target = ref[0]
+                progress = i / self.horizon
+                X_init[0, i] = (
+                    initial_state[0] + (forward_target - initial_state[0]) * progress
+                )
+                X_init[12:24, i] = initial_state[12:24]
+
             # Heuristic initial guess for inputs with phase awareness
             U_init = np.zeros((self.inputs_dim, self.horizon))
             for i in range(self.horizon):
-                # Very small joint velocities
                 U_init[0:12, i] = 0.001 * np.sin(np.arange(12) * 0.1)
-
-                # Gravity compensation forces for stance feet
                 contact_i = (
                     contact_sequence[:, i]
                     if i < contact_sequence.shape[1]
                     else contact_sequence[:, -1]
                 )
                 for foot in range(4):
-                    if contact_i[foot] > 0.5:  # In stance
-                        # Landing phase needs higher forces for impact absorption
+                    if contact_i[foot] > 0.5:
                         if i >= self.landing_start:
-                            # Higher force for landing (impact absorption)
                             U_init[12 + foot * 3 + 2, i] = (
                                 self.config.robot_data.mass * 9.81 / 4 * 1.2
                             )
                         else:
-                            # Normal stance force
                             U_init[12 + foot * 3 + 2, i] = (
                                 self.config.robot_data.mass * 9.81 / 4 * 0.8
                             )
                     else:
-                        # No forces during flight
                         U_init[12 + foot * 3 : 12 + foot * 3 + 3, i] = 0.0
 
         self.opti.set_initial(self.X, X_init)

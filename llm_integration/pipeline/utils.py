@@ -1,5 +1,6 @@
 """Utility functions for the feedback pipeline."""
 
+import ast
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,11 +39,37 @@ def save_iteration_results(
         with open(attempt_file, "w") as f:
             json.dump(iteration_result["attempt_log"], f, indent=2)
 
+    # Save reference trajectory function code separately
+    if "constraint_code" in iteration_result:
+        ref_code = _extract_ref_trajectory_code(iteration_result["constraint_code"])
+        if ref_code:
+            ref_file = run_dir / f"ref_trajectory_iter_{iteration}.py"
+            with open(ref_file, "w") as f:
+                f.write(ref_code)
+
     # Save feedback context as readable text file for debugging
     if "feedback_context" in iteration_result and iteration_result["feedback_context"]:
         feedback_file = run_dir / f"feedback_iter_{iteration}.txt"
         with open(feedback_file, "w") as f:
             f.write(iteration_result["feedback_context"])
+
+
+def _extract_ref_trajectory_code(full_code: str) -> str:
+    """Extract the reference trajectory function from the full LLM code."""
+    try:
+        tree = ast.parse(full_code)
+    except SyntaxError:
+        return ""
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and (
+            "reference" in node.name or node.name.startswith("generate_")
+        ):
+            start = node.lineno - 1
+            end = node.end_lineno
+            lines = full_code.splitlines()
+            return "\n".join(lines[start:end]) + "\n"
+    return ""
 
 
 def inject_llm_constraints_to_mpc(self: "FeedbackPipeline") -> None:
