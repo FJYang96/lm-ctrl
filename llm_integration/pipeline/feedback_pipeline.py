@@ -134,6 +134,9 @@ class FeedbackPipeline:
         # LLM-based iteration history
         self.iteration_summaries: list[dict[str, Any]] = []
 
+        # Visual analysis from LLM response (piped to next iteration feedback)
+        self.last_visual_analysis: str | None = None
+
         # Slack weights tracking (for feedback display)
         self.current_slack_weights: dict[str, float] = {}
 
@@ -220,6 +223,14 @@ class FeedbackPipeline:
                     constraint_code,
                     run_dir,
                 )
+
+                # Append visual analysis from LLM response to feedback
+                visual_analysis = getattr(self, "last_visual_analysis", None)
+                if visual_analysis:
+                    feedback_context += (
+                        f"\n\n--- PREVIOUS ITERATION VISUAL ANALYSIS ---\n"
+                        f"{visual_analysis}"
+                    )
 
                 # Extract visual feedback for next iteration
                 self.current_images = create_visual_feedback(run_dir, iteration)

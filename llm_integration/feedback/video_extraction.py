@@ -86,48 +86,39 @@ def extract_key_frames(
 
 
 def create_visual_feedback(
-    run_dir: Path, iteration: int, num_frames: int = 4
+    run_dir: Path, iteration: int, num_frames: int = 10
 ) -> list[str]:
     """
-    Extract key frames from planned and simulated trajectory videos.
-
-    Also extracts from debug trajectory videos when optimization fails,
-    which is crucial for understanding what the solver was attempting.
+    Extract key frames from the planned trajectory video.
 
     Args:
         run_dir: Directory containing iteration results
         iteration: Iteration number
-        num_frames: Number of frames to extract per video
+        num_frames: Number of frames to extract
 
     Returns:
-        List of base64-encoded images (planned frames first, then simulated, then debug)
+        List of base64-encoded images from the planned trajectory
     """
     images: list[str] = []
 
     # Get the video directory (may be different from run_dir if VIDEO_DIR is set)
     video_dir = get_video_dir(run_dir)
 
-    # Extract from planned trajectory (successful optimization)
+    # Extract from planned trajectory only
     planned_video = video_dir / f"planned_traj_iter_{iteration}.mp4"
     if planned_video.exists():
         planned_frames = extract_key_frames(planned_video, num_frames)
         images.extend(planned_frames)
 
-    # Extract from simulation (successful optimization)
-    sim_video = video_dir / f"simulation_iter_{iteration}.mp4"
-    if sim_video.exists():
-        sim_frames = extract_key_frames(sim_video, num_frames)
-        images.extend(sim_frames)
-
-    # Extract from debug trajectory (failed optimization)
-    # This shows what the solver was attempting before it gave up
-    debug_video = video_dir / f"debug_trajectory_iter_{iteration}.mp4"
-    if debug_video.exists():
-        debug_frames = extract_key_frames(debug_video, num_frames)
-        if debug_frames:
-            logger.info(
-                f"Extracted {len(debug_frames)} frames from debug trajectory for LLM feedback"
-            )
-            images.extend(debug_frames)
+    # Fall back to debug trajectory if planned doesn't exist (failed optimization)
+    if not images:
+        debug_video = video_dir / f"debug_trajectory_iter_{iteration}.mp4"
+        if debug_video.exists():
+            debug_frames = extract_key_frames(debug_video, num_frames)
+            if debug_frames:
+                logger.info(
+                    f"Extracted {len(debug_frames)} frames from debug trajectory"
+                )
+                images.extend(debug_frames)
 
     return images

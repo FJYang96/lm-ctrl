@@ -102,61 +102,37 @@ class LLMClient:
 
         # Add images with labels (if provided)
         if images:
-            # First half are planned trajectory frames, second half are simulated
-            num_images = len(images)
-            half = num_images // 2
-
-            if half > 0:
-                # Add label for planned trajectory frames
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        "PLANNED TRAJECTORY FRAMES (what the optimizer computed, "
+                        f"{len(images)} evenly-spaced frames from start to end):"
+                    ),
+                }
+            )
+            for img_base64 in images:
                 content.append(
                     {
-                        "type": "text",
-                        "text": "PLANNED TRAJECTORY (what the optimizer computed):",
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": img_base64,
+                        },
                     }
                 )
-                for img_base64 in images[:half]:
-                    content.append(
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": img_base64,
-                            },
-                        }
-                    )
-
-                # Add label for simulated trajectory frames
-                content.append(
-                    {
-                        "type": "text",
-                        "text": "SIMULATED TRAJECTORY (what actually happened in physics simulation):",
-                    }
-                )
-                for img_base64 in images[half:]:
-                    content.append(
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": img_base64,
-                            },
-                        }
-                    )
-            else:
-                # If only a few images, just add them without labels
-                for img_base64 in images:
-                    content.append(
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": img_base64,
-                            },
-                        }
-                    )
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        "IMPORTANT: In your response, before the Python code block, "
+                        "include a brief VISUAL ANALYSIS section summarizing what you "
+                        "observe in the frames above (robot pose, motion progression, "
+                        "any issues like insufficient rotation, height, or stability)."
+                    ),
+                }
+            )
 
         # Add the main text message
         content.append({"type": "text", "text": full_user_message})
