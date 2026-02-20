@@ -127,15 +127,14 @@ Return a JSON object with this structure:
 }
 
 === SCORING GUIDELINES ===
-Compute the score as a WEIGHTED AVERAGE of these factors (each 0.0-1.0):
-  - Primary goal progress (60%): Fraction of the commanded task achieved
-  - Axis purity (15%): Was motion on the intended axis only? Penalize unwanted off-axis rotation
-  - Landing/terminal state (15%): Stable final configuration? Low final velocity?
-  - Solver health (10%): Clean convergence vs timeout/infeasibility
+Evaluate the trajectory holistically, considering ALL of the following factors:
+  - Primary goal progress: How much of the commanded task was achieved?
+  - Axis purity: Was motion on the intended axis only? Was there unwanted off-axis rotation?
+  - Landing/terminal state: Stable final configuration? Low final velocity?
+  - Solver health: Clean convergence vs timeout/infeasibility?
 
-score = 0.6 * primary_progress + 0.15 * axis_purity + 0.15 * landing_quality + 0.10 * solver_health
-
-IMPORTANT: Use the formula to compute a precise score. Do NOT round to convenient numbers like 0.70 or 0.75.
+Weigh these factors according to their importance for the specific task. Use your expert judgment
+to produce a precise score — do NOT round to convenient numbers like 0.70 or 0.75.
 If the solver FAILED, cap the score at 0.85 maximum.
 
 === SUMMARY REQUIREMENTS (4-5 detailed sentences) ===

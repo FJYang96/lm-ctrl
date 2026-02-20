@@ -260,11 +260,9 @@ LLM description of what the robot did based on video frames.
 After each solve, you will receive a CONSTRAINT HARDNESS ANALYSIS section in the feedback.
 This uses a slack formulation to measure how difficult each constraint is to satisfy.
 
-Severity levels:
-- CRITICAL (slack > 0.1): Constraint bounds are VIOLATED. The solver had to relax them significantly.
-- HIGH (slack > 0.01): Constraint is strained. Consider relaxing bounds.
-- MEDIUM (slack > 0.001): Minor tension. Usually acceptable.
-- OK (slack < 0.001): Constraint is easily satisfied.
+You will receive raw slack values and violation timesteps. YOU must assess the severity of each
+violation from the raw numbers — there are no pre-classified severity labels. Larger slack values
+mean the solver had to relax the constraint more to find a solution.
 
 How to use this information:
 1. If YOUR constraints (contact_aware_constraint) show CRITICAL slack:

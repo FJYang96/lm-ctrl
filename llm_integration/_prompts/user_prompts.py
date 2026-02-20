@@ -59,12 +59,13 @@ ERROR: {error_message}
 FAILED CODE:
 {code_snippet}
 
-⚠️ MANDATORY CHECKLIST - Your code MUST include ALL of these:
+⚠️ MANDATORY CHECKLIST - Your code MUST include ALL SIX of these:
 □ mpc.set_task_name("...")
 □ mpc.set_duration(...)
 □ mpc.set_time_step(0.02)
 □ mpc.set_contact_sequence(...)  ← THIS IS THE #1 MISSING CALL
 □ mpc.add_constraint(...)
+□ mpc.set_reference_trajectory(...)  ← REQUIRED - provides solver initial guess
 
 Other requirements:
 - Constraint function must have 7 parameters: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)

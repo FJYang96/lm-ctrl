@@ -149,13 +149,13 @@ class FeedbackPipeline:
                 )
                 return "pivot"
 
-        # Stagnation: last 5 scores within a tight 0.05 band
+        # Stagnation: best score in last 5 hasn't improved by 0.05 over first
         if len(scores) >= 5:
             window = scores[-5:]
-            score_range = max(window) - min(window)
-            if score_range < 0.05:
+            improvement = max(window) - window[0]
+            if improvement < 0.05:
                 logger.info(
-                    f"Pivot trigger: stagnation (last 5 scores within {score_range:.3f} band)"
+                    f"Pivot trigger: stagnation (best improvement {improvement:.3f} over 5 iterations)"
                 )
                 return "pivot"
 
