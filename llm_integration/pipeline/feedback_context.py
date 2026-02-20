@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from ..feedback.code_utils import strip_ref_trajectory_code
 from ..feedback.format_hardness import format_hardness_report
 from ..feedback.format_metrics import format_trajectory_metrics_section
+from ..feedback.reference_feedback import _compute_reference_metrics
 from .utils import _extract_ref_trajectory_code
 
 if TYPE_CHECKING:
@@ -142,6 +143,16 @@ def create_feedback_context(
     )
     if hardness_text:
         lines.append(hardness_text)
+
+    # Reference trajectory analysis (RMSE, plausibility)
+    ref_trajectory_data = optimization_result.get("ref_trajectory_data")
+    state_trajectory = optimization_result.get("state_trajectory")
+    ref_analysis = _compute_reference_metrics(
+        ref_trajectory_data, state_trajectory, mpc_dt
+    )
+    lines.append("")
+    lines.append("--- REFERENCE TRAJECTORY ANALYSIS ---")
+    lines.append(ref_analysis)
 
     # === Constraint Code (ref stripped) ===
     lines.append("")
