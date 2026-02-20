@@ -123,8 +123,6 @@ class QuadrupedMPCOpti:
 
         # Robot parameters
         self.P_mu = self.opti.parameter()  # Friction coefficient
-        self.P_grf_min = self.opti.parameter()  # Min ground reaction force
-        self.P_grf_max = self.opti.parameter()  # Max ground reaction force
         self.P_mass = self.opti.parameter()  # Robot mass
         self.P_inertia = self.opti.parameter(9)  # Flattened inertia matrix
 

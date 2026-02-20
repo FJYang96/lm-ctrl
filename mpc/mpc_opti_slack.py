@@ -122,8 +122,6 @@ class QuadrupedMPCOptiSlack:
 
         # Robot parameters
         self.P_mu = self.opti.parameter()  # Friction coefficient
-        self.P_grf_min = self.opti.parameter()  # Min ground reaction force
-        self.P_grf_max = self.opti.parameter()  # Max ground reaction force
         self.P_mass = self.opti.parameter()  # Robot mass
         self.P_inertia = self.opti.parameter(9)  # Flattened inertia matrix
 
@@ -401,7 +399,6 @@ class QuadrupedMPCOptiSlack:
         try:
             sol = self.opti.solve()
             self._last_solution = sol
-            self._solver_failed = False
 
             X_opt = sol.value(self.X)
             U_opt = sol.value(self.U)
@@ -414,7 +411,6 @@ class QuadrupedMPCOptiSlack:
         except Exception as e:
             print(f"Optimization failed: {e}")
             self._last_solution = None
-            self._solver_failed = True
 
             # Try to extract debug values even on failure for slack analysis
             try:
