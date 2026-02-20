@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +19,15 @@ from ..constraint import ConstraintGenerator
 from ..executor import SafeConstraintExecutor
 from ..feedback import (
     create_visual_feedback,
-    evaluate_failed_iteration,
-    evaluate_iteration,
+    format_hardness_report,
+)
+from ..feedback.constraint_feedback import generate_constraint_feedback
+from ..feedback.llm_evaluation import (
+    evaluate_iteration_unified,
+    generate_iteration_summary,
     summarize_iteration,
 )
+from ..feedback.reference_feedback import generate_reference_feedback
 from ..logging_config import logger
 from ..mpc import LLMTaskMPC
 from .constraint_generation import generate_constraints_with_retry
@@ -51,7 +57,7 @@ class FeedbackPipeline:
     1. LLM constraint generation
     2. Trajectory optimization with generated constraints
     3. Simulation execution
-    4. Feedback collection and iteration
+    4. Dual feedback (constraint + reference) and iteration
     """
 
     # Assign imported functions as methods
@@ -113,7 +119,7 @@ class FeedbackPipeline:
         self.current_joint_torques: np.ndarray | None = None
         self.current_images: list[str] = []
 
-        # LLM-based iteration history
+        # LLM-based iteration history (structured summaries)
         self.iteration_summaries: list[dict[str, Any]] = []
 
         # Visual summary of current iteration's trajectory frames
@@ -122,15 +128,96 @@ class FeedbackPipeline:
         # Slack weights tracking (for feedback display)
         self.current_slack_weights: dict[str, float] = {}
 
-        # Warm-start state for adaptive policy
-        self.previous_warmstart: dict[str, Any] | None = None
-        self.previous_objective: float = float("inf")
+        # Score tracking
         self.previous_score: float = -float("inf")
-        self.use_warmstart_next: bool = False  # False for iteration 1 (cold start)
+        self.recent_scores: list[float] = []  # rolling window for pivot detection
 
-        # Pivot/tweak tracking
-        self.consecutive_no_improvement: int = 0
-        self.recent_scores: list[float] = []  # rolling window for stagnation detection
+    def _compute_pivot_signal(self, iteration: int) -> str | None:
+        """Compute the pivot/tweak signal based on score history.
+
+        Returns:
+            "pivot" — fundamentally change approach
+            "tweak" — make incremental improvements
+            None — first iteration, no signal
+        """
+        scores = self.recent_scores
+
+        if len(scores) < 2:
+            # First iteration or not enough history
+            return None
+
+        # Monotonic decline for 2 consecutive iterations (3+ scores needed)
+        if len(scores) >= 3:
+            if scores[-1] < scores[-2] < scores[-3]:
+                logger.info(
+                    "Pivot trigger: monotonic decline for 2 consecutive iterations"
+                )
+                return "pivot"
+
+        # Stagnation: last 5 scores within a tight 0.05 band
+        if len(scores) >= 5:
+            window = scores[-5:]
+            score_range = max(window) - min(window)
+            if score_range < 0.05:
+                logger.info(
+                    f"Pivot trigger: stagnation (last 5 scores within {score_range:.3f} band)"
+                )
+                return "pivot"
+
+        # Default: tweak
+        return "tweak"
+
+    def _extract_constraint_violations(
+        self, optimization_result: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Extract constraint violations from the MPC solver.
+
+        Works for both successful and failed solves.
+        """
+        constraint_violations: dict[str, Any] = {}
+        opt_success = optimization_result.get("success", False)
+
+        if not self.current_task_mpc or not self.current_task_mpc.mpc:
+            return constraint_violations
+
+        try:
+            # Get system constraint violations
+            constraint_violations = (
+                self.current_task_mpc.mpc.get_constraint_violations()
+            )
+
+            # Get LLM constraint violations
+            try:
+                if opt_success:
+                    X_val = self.current_task_mpc.mpc.opti.value(
+                        self.current_task_mpc.mpc.X
+                    )
+                    U_val = self.current_task_mpc.mpc.opti.value(
+                        self.current_task_mpc.mpc.U
+                    )
+                else:
+                    X_val = self.current_task_mpc.mpc.opti.debug.value(
+                        self.current_task_mpc.mpc.X
+                    )
+                    U_val = self.current_task_mpc.mpc.opti.debug.value(
+                        self.current_task_mpc.mpc.U
+                    )
+                llm_violations = self.current_task_mpc.evaluate_constraint_violations(
+                    X_val, U_val
+                )
+                constraint_violations["llm_constraints"] = llm_violations.get(
+                    "llm_constraints", []
+                )
+                constraint_violations["llm_summary"] = llm_violations.get("summary", [])
+            except Exception as llm_e:
+                constraint_violations["llm_constraints"] = [
+                    f"Could not evaluate LLM constraints: {llm_e}"
+                ]
+
+        except Exception as e:
+            constraint_violations = {"summary": [f"Could not analyze violations: {e}"]}
+
+        return constraint_violations
 
     def run_pipeline(self, command: str) -> dict[str, Any]:
         """
@@ -158,12 +245,8 @@ class FeedbackPipeline:
         best_result = None
         best_score = -float("inf")
 
-        # Reset warm-start state
-        self.previous_warmstart = None
-        self.previous_objective = float("inf")
+        # Reset score tracking
         self.previous_score = -float("inf")
-        self.use_warmstart_next = False  # First iteration always cold-starts
-        self.consecutive_no_improvement = 0
         self.recent_scores = []
 
         # Algorithm 1: Iterative Refinement Pipeline
@@ -174,7 +257,7 @@ class FeedbackPipeline:
             logger.info(f"--- Iteration {iteration} ---")
 
             try:
-                # Step 3: Generate constraints using LLM with auto-retry
+                # Step 1: Generate constraints via LLM with auto-retry
                 constraint_code, function_name, attempt_log = (
                     self._generate_constraints_with_retry(
                         system_prompt,
@@ -185,27 +268,23 @@ class FeedbackPipeline:
                     )
                 )
 
-                # Step 4: Solve optimization problem with new constraints
-                warmstart: dict[str, Any] | None = (
-                    self.previous_warmstart if self.use_warmstart_next else None
-                )
+                # Step 2: Solve optimization (no warmstart from previous solution)
                 optimization_result = self._solve_trajectory_optimization(
                     constraint_code,
                     function_name,
                     iteration,
                     run_dir,
-                    warmstart=warmstart,
                 )
 
-                # Step 5: Execute trajectory in simulation
+                # Step 3: Execute simulation
                 simulation_result = self._execute_simulation(
                     optimization_result, iteration, run_dir
                 )
 
-                # Extract visual feedback for next iteration
+                # Step 4: Extract 20 video frames
                 self.current_images = create_visual_feedback(run_dir, iteration)
 
-                # Summarize this iteration's frames so we can attach to feedback
+                # Step 5: LLM summarizes frames
                 self.current_visual_summary = self.llm_client.summarize_frames(
                     self.current_images, command
                 )
@@ -215,199 +294,121 @@ class FeedbackPipeline:
                     "trajectory_analysis", {}
                 )
 
-                # === LLM-based evaluation for scoring ===
+                # === Step 6: Unified scoring ===
                 trajectory_analysis = optimization_result.get("trajectory_analysis", {})
                 opt_success = optimization_result.get("success", False)
+                error_info = optimization_result.get("optimization_metrics", {})
 
-                if opt_success and trajectory_analysis:
-                    # LLM evaluates the successful iteration
-                    llm_eval = evaluate_iteration(
-                        command=command,
-                        trajectory_analysis=trajectory_analysis,
-                        constraint_code=constraint_code,
-                        images=self.current_images,
-                    )
-                    score = llm_eval.get("score", 0.5)
+                llm_eval = evaluate_iteration_unified(
+                    command=command,
+                    trajectory_analysis=trajectory_analysis,
+                    constraint_code=constraint_code,
+                    opt_success=opt_success,
+                    error_info=error_info if not opt_success else None,
+                    images=self.current_images,
+                    visual_summary=self.current_visual_summary,
+                )
+                score = llm_eval.get("score", 0.0 if not opt_success else 0.5)
 
-                    # Log detailed success evaluation
-                    logger.info("=== LLM Evaluation (SUCCESS) ===")
-                    logger.info(f"  Score: {score:.2f}")
-                    logger.info("  Trajectory Metrics:")
+                # Log evaluation
+                logger.info(
+                    f"=== LLM Evaluation ({'SUCCESS' if opt_success else 'FAILED'}) ==="
+                )
+                logger.info(f"  Score: {score:.2f}")
+                for criterion in llm_eval.get("criteria", []):
+                    progress = criterion.get("progress", 0)
+                    status = "+" if progress >= 0.8 else "-"
                     logger.info(
-                        f"    Pitch: {trajectory_analysis.get('total_pitch_rotation', 0):.2f} rad ({trajectory_analysis.get('total_pitch_rotation', 0) * 57.3:.0f}°)"
+                        f"    {status} {criterion.get('name')}: {criterion.get('achieved')} "
+                        f"(target: {criterion.get('target')}, {progress:.0%})"
                     )
-                    logger.info(
-                        f"    Height gain: {trajectory_analysis.get('height_gain', 0):.3f}m"
-                    )
-                    logger.info(
-                        f"    Yaw: {trajectory_analysis.get('max_yaw', 0):.2f} rad"
-                    )
-                    logger.info(
-                        f"    Flight duration: {trajectory_analysis.get('flight_duration', 0):.2f}s"
-                    )
-                    logger.info("  Criteria:")
-                    for criterion in llm_eval.get("criteria", []):
-                        progress = criterion.get("progress", 0)
-                        status = "✓" if progress >= 0.8 else "✗"
-                        logger.info(
-                            f"    {status} {criterion.get('name')}: {criterion.get('achieved')} (target: {criterion.get('target')}, {progress:.0%})"
-                        )
-                    if llm_eval.get("warnings"):
-                        logger.info("  Warnings:")
-                        for warning in llm_eval.get("warnings", []):
-                            logger.info(f"    ⚠ {warning}")
-                    summary = llm_eval.get(
-                        "summary", f"Iteration {iteration} completed"
-                    )
-                    logger.info(f"  Summary: {summary}")
-                else:
-                    # LLM-based scoring for failed optimization
-                    error_info = optimization_result.get("optimization_metrics", {})
-                    trajectory_analysis = optimization_result.get(
-                        "trajectory_analysis", {}
-                    )
+                if llm_eval.get("warnings"):
+                    for warning in llm_eval.get("warnings", []):
+                        logger.info(f"    ! {warning}")
+                summary = llm_eval.get("summary", f"Iteration {iteration} completed")
+                logger.info(f"  Summary: {summary}")
 
-                    # Use LLM to score the failed iteration based on partial progress
-                    llm_eval = evaluate_failed_iteration(
-                        command=command,
-                        trajectory_analysis=trajectory_analysis,
-                        constraint_code=constraint_code,
-                        error_info=error_info,
-                        images=self.current_images,
-                    )
-                    score = llm_eval.get("score", 0.0)
-
-                    # Log detailed failure evaluation
-                    logger.info("=== LLM Evaluation (FAILED) ===")
-                    logger.info(f"  Score: {score:.2f}")
-                    if error_info.get("error_message"):
-                        logger.info(f"  Error: {error_info.get('error_message')}")
-                    if error_info.get("solver_iterations"):
-                        logger.info(
-                            f"  Solver iterations: {error_info.get('solver_iterations')}"
-                        )
-                    if trajectory_analysis:
-                        logger.info("  Last attempt metrics:")
-                        logger.info(
-                            f"    Pitch: {trajectory_analysis.get('total_pitch_rotation', 0):.2f} rad ({trajectory_analysis.get('total_pitch_rotation', 0) * 57.3:.0f}°)"
-                        )
-                        logger.info(
-                            f"    Height gain: {trajectory_analysis.get('height_gain', 0):.3f}m"
-                        )
-                    logger.info("  Criteria:")
-                    for criterion in llm_eval.get("criteria", []):
-                        progress = criterion.get("progress", 0)
-                        status = "✓" if progress >= 0.8 else "✗"
-                        logger.info(
-                            f"    {status} {criterion.get('name')}: {criterion.get('achieved')} (target: {criterion.get('target')}, {progress:.0%})"
-                        )
-                    if llm_eval.get("warnings"):
-                        logger.info("  Warnings:")
-                        for warning in llm_eval.get("warnings", []):
-                            logger.info(f"    ⚠ {warning}")
-
-                    summary = llm_eval.get("summary", "")
-                    if not summary:
-                        summary = "Failed to generate summary for feedback"
-                        logger.warning("LLM evaluation did not return a summary")
-                    logger.info(f"  Summary: {summary}")
-
-                # Add detailed iteration info to history
-                iteration_history_entry = {
-                    "iteration": iteration,
-                    "success": opt_success,
-                    "score": score,
-                    "summary": summary,
-                    "metrics": {
-                        "pitch": trajectory_analysis.get("total_pitch_rotation", 0),
-                        "height_gain": trajectory_analysis.get("height_gain", 0),
-                        "yaw": trajectory_analysis.get("max_yaw", 0),
-                        "flight_duration": trajectory_analysis.get(
-                            "flight_duration", 0
-                        ),
-                    },
-                    "criteria": llm_eval.get("criteria", []),
-                    "warnings": llm_eval.get("warnings", []),
-                    "error": error_info.get("error_message", "")
-                    if not opt_success
-                    else "",
-                }
-                self.iteration_summaries.append(iteration_history_entry)
-
-                # === Consecutive no-improvement counter + pivot signal ===
-                is_new_best = score > best_score
-                if is_new_best:
-                    self.consecutive_no_improvement = 0
-                    best_score = score
-                else:
-                    self.consecutive_no_improvement += 1
-
-                # Track recent scores for stagnation detection
+                # Step 7: Append score to recent_scores
                 self.recent_scores.append(score)
 
-                # Stagnation: last 4 scores all within 0.1 of each other
-                stagnated = False
-                if len(self.recent_scores) >= 4:
-                    window = self.recent_scores[-4:]
-                    score_range = max(window) - min(window)
-                    if score_range <= 0.1:
-                        stagnated = True
-
-                # Determine pivot signal
-                if stagnated:
-                    pivot_signal: str | None = "pivot"
-                elif self.consecutive_no_improvement >= 3:
-                    pivot_signal = "pivot"
-                elif opt_success and score < 0.2:
-                    pivot_signal = "pivot"  # converged but drastically wrong
-                elif self.consecutive_no_improvement >= 1:
-                    pivot_signal = "tweak"
-                else:
-                    pivot_signal = None
-
+                # Step 8: Compute pivot/tweak signal
+                pivot_signal = self._compute_pivot_signal(iteration)
                 logger.info(
-                    f"Pivot logic: consecutive_no_improvement={self.consecutive_no_improvement}, "
-                    f"stagnated={stagnated}, pivot_signal={pivot_signal}"
+                    f"Pivot logic: scores={[f'{s:.2f}' for s in self.recent_scores[-5:]]}, "
+                    f"pivot_signal={pivot_signal}"
                 )
 
-                # === Warmstart policy based on pivot signal ===
-                current_objective = optimization_result.get(
+                # Step 9: Extract constraint violations
+                constraint_violations = self._extract_constraint_violations(
+                    optimization_result
+                )
+
+                # Step 10: Constraint feedback + Reference feedback in parallel
+                hardness_report = optimization_result.get(
                     "optimization_metrics", {}
-                ).get("objective_value", float("inf"))
+                ).get("hardness_report")
+                mpc_dt = float(self.config.mpc_config.mpc_dt)
+                current_slack_weights = getattr(self, "current_slack_weights", None)
+                hardness_text = format_hardness_report(
+                    hardness_report,
+                    dt=mpc_dt,
+                    current_slack_weights=current_slack_weights,
+                )
 
-                if pivot_signal == "pivot":
-                    self.use_warmstart_next = False  # cold-start with new reference
-                    self.recent_scores.clear()  # reset stagnation window after pivot
-                else:
-                    self.use_warmstart_next = True  # warmstart from previous
+                ref_trajectory_data = optimization_result.get("ref_trajectory_data")
+                state_trajectory = optimization_result.get("state_trajectory")
 
-                # Log the decision
-                if iteration == 1:
-                    logger.info(
-                        f"Warmstart policy: Score {score:.2f}, "
-                        f"Obj {current_objective:.4f} → warm-start next"
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    constraint_future = executor.submit(
+                        generate_constraint_feedback,
+                        command=command,
+                        constraint_code=constraint_code,
+                        images=self.current_images,
+                        visual_summary=self.current_visual_summary,
+                        hardness_report=hardness_text,
+                        constraint_violations=constraint_violations,
+                        trajectory_analysis=trajectory_analysis,
+                        opt_success=opt_success,
+                        error_info=error_info if not opt_success else None,
+                        pivot_signal=pivot_signal,
                     )
-                else:
-                    decision = (
-                        "warm-start next"
-                        if self.use_warmstart_next
-                        else "pivot → cold-start next"
+                    reference_future = executor.submit(
+                        generate_reference_feedback,
+                        command=command,
+                        constraint_code=constraint_code,
+                        images=self.current_images,
+                        visual_summary=self.current_visual_summary,
+                        ref_trajectory_data=ref_trajectory_data,
+                        trajectory_analysis=trajectory_analysis,
+                        state_trajectory=state_trajectory,
+                        opt_success=opt_success,
+                        pivot_signal=pivot_signal,
+                        mpc_dt=mpc_dt,
                     )
-                    logger.info(
-                        f"Warmstart policy: Score {self.previous_score:.2f}→{score:.2f}, "
-                        f"Obj {self.previous_objective:.4f}→{current_objective:.4f} → {decision}"
-                    )
+                    constraint_fb = constraint_future.result()
+                    ref_fb = reference_future.result()
 
-                # Always store warmstart data (even if we plan to cold-start next)
-                ws_X = optimization_result.get("warmstart_X")
-                ws_U = optimization_result.get("warmstart_U")
-                if ws_X is not None and ws_U is not None:
-                    self.previous_warmstart = {"X": ws_X, "U": ws_U}
+                logger.info(
+                    f"Dual feedback: constraint={len(constraint_fb)} chars, "
+                    f"reference={len(ref_fb)} chars"
+                )
 
-                self.previous_objective = current_objective
-                self.previous_score = score
+                # Step 11: Iteration summary LLM call
+                iter_summary = generate_iteration_summary(
+                    command=command,
+                    iteration=iteration,
+                    score=score,
+                    constraint_code=constraint_code,
+                    constraint_feedback=constraint_fb,
+                    reference_feedback=ref_fb,
+                    trajectory_analysis=trajectory_analysis,
+                    opt_success=opt_success,
+                    simulation_result=simulation_result,
+                    images=self.current_images,
+                )
+                self.iteration_summaries.append(iter_summary)
 
-                # Step 6: Create feedback context (AFTER scoring + pivot signal)
+                # Step 12: Assemble feedback context (new format)
                 feedback_context = self._create_feedback_context(
                     iteration,
                     command,
@@ -416,16 +417,18 @@ class FeedbackPipeline:
                     constraint_code,
                     run_dir,
                     pivot_signal=pivot_signal,
+                    constraint_feedback=constraint_fb,
+                    reference_feedback=ref_fb,
+                    visual_summary=self.current_visual_summary,
+                    score=score,
                 )
 
-                # Append visual summary of THIS iteration's trajectory frames
-                if self.current_visual_summary:
-                    feedback_context += (
-                        f"\n\n--- VISUAL SUMMARY OF ITERATION {iteration} TRAJECTORY ---\n"
-                        f"{self.current_visual_summary}"
-                    )
+                # Step 13: Track best result
+                is_new_best = score > best_score
+                if is_new_best:
+                    best_score = score
 
-                # Collect iteration results (including feedback for debugging)
+                # Step 14: Save iteration results
                 iteration_result = {
                     "iteration": iteration,
                     "command": command,
@@ -443,18 +446,17 @@ class FeedbackPipeline:
 
                 self.iteration_results.append(iteration_result)
 
-                # Update best result (deferred from pivot logic to after iteration_result exists)
                 if is_new_best:
                     best_result = iteration_result
 
-                # Save iteration results
                 self._save_iteration_results(iteration_result, run_dir)
 
-                # Use feedback for next iteration
+                # Step 15: Set context for next iteration
+                self.previous_score = score
                 if iteration < self.max_iterations:
                     context = feedback_context
 
-                # Early stopping if we achieve excellent results
+                # Step 16: Early stop if score > 0.95
                 if score > 0.95:
                     logger.info(f"Early stop: score {score:.2f}")
                     break
@@ -463,27 +465,29 @@ class FeedbackPipeline:
                 logger.error(f"Iteration {iteration} error: {e}")
 
                 # Generate summary for failed iteration
-                error_info = {"error_message": str(e)}
+                error_info_exc = {"error_message": str(e)}
                 code = constraint_code if "constraint_code" in locals() else ""
                 summary = summarize_iteration(
                     command=command,
                     constraint_code=code,
                     success=False,
-                    error_info=error_info,
+                    error_info=error_info_exc,
                     images=self.current_images if self.current_images else None,
                 )
-                # Add detailed error info to history
-                iteration_history_entry = {
+                # Add error entry to iteration history
+                error_summary = {
                     "iteration": iteration,
-                    "success": False,
                     "score": 0.0,
-                    "summary": summary,
-                    "metrics": {},
-                    "criteria": [],
-                    "warnings": [],
-                    "error": str(e)[:300],
+                    "success": False,
+                    "constraint_approach": "Error during iteration",
+                    "reference_approach": "Error during iteration",
+                    "constraint_feedback_summary": "",
+                    "reference_feedback_summary": "",
+                    "simulation_summary": "",
+                    "metrics_summary": str(e),
                 }
-                self.iteration_summaries.append(iteration_history_entry)
+                self.iteration_summaries.append(error_summary)
+                self.recent_scores.append(0.0)
 
                 error_result = {
                     "iteration": iteration,

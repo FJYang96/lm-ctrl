@@ -22,7 +22,6 @@ def solve_trajectory_optimization(
     task_name: str,
     iteration: int,
     run_dir: Path,
-    warmstart: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Solve trajectory optimization with LLM-configured MPC."""
 
@@ -48,9 +47,7 @@ def solve_trajectory_optimization(
 
     try:
         state_traj, grf_traj, joint_vel_traj, status = (
-            self.current_task_mpc.solve_trajectory(
-                initial_state, ref, warmstart=warmstart
-            )
+            self.current_task_mpc.solve_trajectory(initial_state, ref)
         )
 
         if status == 0:
@@ -222,15 +219,6 @@ def solve_trajectory_optimization(
     np.save(run_dir / f"grf_traj_iter_{iteration}.npy", grf_traj)
     np.save(run_dir / f"joint_vel_traj_iter_{iteration}.npy", joint_vel_traj)
 
-    # Reconstruct warmstart data from the solution for the next iteration
-    # X warmstart: state_traj is (horizon+1, states_dim), need (states_dim, horizon+1)
-    warmstart_X = state_traj.T if state_traj is not None else None
-    # U warmstart: stack joint_vel_traj and grf_traj back into (inputs_dim, horizon)
-    if joint_vel_traj is not None and grf_traj is not None:
-        warmstart_U = np.vstack([joint_vel_traj.T, grf_traj.T])
-    else:
-        warmstart_U = None
-
     result = {
         "success": status == 0,
         "status": status,
@@ -243,8 +231,6 @@ def solve_trajectory_optimization(
         "mpc_config_valid": True,
         "task_name": task_name,
         "mpc_config_code": mpc_config_code,
-        "warmstart_X": warmstart_X,
-        "warmstart_U": warmstart_U,
         "ref_trajectory_data": ref_trajectory_data,
     }
 

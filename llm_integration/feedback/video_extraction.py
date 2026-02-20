@@ -86,7 +86,7 @@ def extract_key_frames(
 
 
 def create_visual_feedback(
-    run_dir: Path, iteration: int, num_frames: int = 10
+    run_dir: Path, iteration: int, num_frames: int = 20
 ) -> list[str]:
     """
     Extract key frames from the planned trajectory video.

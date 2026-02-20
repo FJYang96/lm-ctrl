@@ -1,174 +1,192 @@
-"""Feedback context generation for the feedback pipeline."""
+"""Feedback context generation for the feedback pipeline — unified dual-feedback format."""
 
-from pathlib import Path
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any
 
-from ..feedback import generate_enhanced_feedback, generate_failure_feedback
+from ..feedback.code_utils import strip_ref_trajectory_code
+from ..feedback.format_hardness import format_hardness_report
+from ..feedback.format_metrics import format_trajectory_metrics_section
+from .utils import _extract_ref_trajectory_code
 
 if TYPE_CHECKING:
     from .feedback_pipeline import FeedbackPipeline
 
 
 def create_feedback_context(
-    self: "FeedbackPipeline",
+    self: FeedbackPipeline,
     iteration: int,
     command: str,
     optimization_result: dict[str, Any],
     simulation_result: dict[str, Any],
     constraint_code: str,
-    run_dir: Path,
+    run_dir: Any,
     pivot_signal: str | None = None,
+    constraint_feedback: str = "",
+    reference_feedback: str = "",
+    visual_summary: str = "",
+    score: float = 0.0,
 ) -> str:
-    """Create enhanced feedback context for the next LLM iteration.
+    """Create unified feedback context for the next LLM iteration.
 
-    If optimization failed, generates failure-specific feedback instead of raising.
+    Single path for both success and failure — no branching.
     """
-    # Check if optimization failed - generate failure feedback instead
-    optimization_converged = optimization_result.get("converged", False)
-    optimization_success = optimization_result.get("success", False)
+    opt_success = optimization_result.get("success", False)
+    trajectory_analysis = optimization_result.get("trajectory_analysis", {})
+    optimization_metrics = optimization_result.get("optimization_metrics", {})
 
-    if not optimization_converged or not optimization_success:
-        # Get constraint violations from MPC for detailed failure feedback
-        constraint_violations: dict[str, Any] = {}
-        if self.current_task_mpc and self.current_task_mpc.mpc:
-            try:
-                # Get system constraint violations (terminal, height bounds)
-                constraint_violations = (
-                    self.current_task_mpc.mpc.get_constraint_violations()
-                )
+    lines: list[str] = []
 
-                # Also get LLM constraint violations
-                try:
-                    X_debug = self.current_task_mpc.mpc.opti.debug.value(
-                        self.current_task_mpc.mpc.X
-                    )
-                    U_debug = self.current_task_mpc.mpc.opti.debug.value(
-                        self.current_task_mpc.mpc.U
-                    )
-                    llm_violations = (
-                        self.current_task_mpc.evaluate_constraint_violations(
-                            X_debug, U_debug
-                        )
-                    )
-                    # Merge LLM violations into constraint_violations
-                    constraint_violations["llm_constraints"] = llm_violations.get(
-                        "llm_constraints", []
-                    )
-                    constraint_violations["llm_summary"] = llm_violations.get(
-                        "summary", []
-                    )
-                except Exception as llm_e:
-                    constraint_violations["llm_constraints"] = [
-                        f"Could not evaluate LLM constraints: {llm_e}"
-                    ]
+    # === Header ===
+    lines.append("=" * 60)
+    lines.append(f"ITERATION {iteration} FEEDBACK")
+    lines.append("=" * 60)
 
-            except Exception as e:
-                constraint_violations = {
-                    "summary": [f"Could not analyze violations: {e}"]
-                }
-
-        # Get whatever trajectory data we have (may be from debug values)
-        state_traj = optimization_result.get("state_trajectory")
-        trajectory_analysis = optimization_result.get("trajectory_analysis", {})
-        optimization_metrics = optimization_result.get("optimization_metrics", {})
-
-        # Get constraint hardness report from slack formulation
-        hardness_report = optimization_metrics.get("hardness_report")
-        mpc_dt = float(self.config.mpc_config.mpc_dt)
-
-        # Get initial height from config
-        initial_height = float(self.config.experiment.initial_qpos[2])
-
-        return generate_failure_feedback(
-            iteration=iteration,
-            command=command,
-            optimization_metrics=optimization_metrics,
-            constraint_violations=constraint_violations,
-            trajectory_analysis=trajectory_analysis,
-            previous_constraints=constraint_code,
-            state_traj=state_traj,
-            initial_height=initial_height,
-            iteration_summaries=self.iteration_summaries,
-            hardness_report=hardness_report,
-            mpc_dt=mpc_dt,
-            pivot_signal=pivot_signal,
+    # === Mode ===
+    lines.append("")
+    if pivot_signal == "pivot":
+        lines.append("--- MODE: PIVOT ---")
+        lines.append(
+            "Your approach has stagnated or declined. You MUST try a fundamentally"
         )
-
-    # Optimization succeeded - generate normal enhanced feedback
-    trajectory_analysis = optimization_result.get("trajectory_analysis")
-    if trajectory_analysis is None:
-        raise ValueError(
-            "Enhanced feedback requires trajectory_analysis but it was not provided"
+        lines.append(
+            "different strategy — different constraint structures, different variables,"
         )
-
-    optimization_status = optimization_result.get("optimization_metrics")
-    if optimization_status is None:
-        raise ValueError(
-            "Enhanced feedback requires optimization_metrics but it was not provided"
+        lines.append("different phase strategies. Do NOT make incremental changes.")
+    elif pivot_signal == "tweak":
+        lines.append("--- MODE: TWEAK ---")
+        lines.append("Your approach shows progress. Make incremental improvements —")
+        lines.append(
+            "adjust bounds, tune parameters, refine timing. Keep the overall structure."
         )
-
-    # Get trajectory data for enhanced analysis - REQUIRED for success case
-    state_traj = optimization_result.get("state_trajectory")
-    if state_traj is None or (hasattr(state_traj, "size") and state_traj.size == 0):
-        raise ValueError(
-            "Enhanced feedback requires state_trajectory but it was empty or not provided"
-        )
-
-    grf_traj = optimization_result.get("grf_trajectory")
-    if grf_traj is None or (hasattr(grf_traj, "size") and grf_traj.size == 0):
-        raise ValueError(
-            "Enhanced feedback requires grf_trajectory but it was empty or not provided"
-        )
-
-    joint_vel_traj = optimization_result.get("joint_vel_trajectory")
-    if joint_vel_traj is None or (
-        hasattr(joint_vel_traj, "size") and joint_vel_traj.size == 0
-    ):
-        raise ValueError(
-            "Enhanced feedback requires joint_vel_trajectory but it was empty or not provided"
-        )
-
-    # Get contact sequence from current MPC - REQUIRED
-    if self.current_task_mpc and self.current_task_mpc.contact_sequence is not None:
-        contact_sequence = self.current_task_mpc.contact_sequence
-        mpc_dt = self.current_task_mpc.mpc_dt
     else:
-        raise ValueError(
-            "Enhanced feedback requires contact_sequence from LLM MPC but it was not configured"
-        )
+        lines.append("--- MODE: INITIAL ---")
+        lines.append("This is the first iteration. Review the results and improve.")
 
-    # Simulation results - REQUIRED for success case
-    if simulation_result is None:
-        raise ValueError(
-            "Enhanced feedback requires simulation_result but it was not provided"
-        )
+    # === Iteration History ===
+    lines.append("")
+    lines.append("--- ITERATION HISTORY ---")
+    if self.iteration_summaries:
+        for entry in self.iteration_summaries:
+            iter_num = entry.get("iteration", "?")
+            iter_score = entry.get("score", 0.0)
+            iter_success = entry.get("success", False)
+            status_label = "SUCCESS" if iter_success else "FAILED"
+            lines.append("")
+            lines.append(f"  Iter {iter_num} [{status_label}] Score: {iter_score:.2f}")
 
-    # Extract hardness report and slack weights for feedback
-    hardness_report = optimization_result.get("optimization_metrics", {}).get(
-        "hardness_report", None
-    )
+            constraint_approach = entry.get("constraint_approach", "")
+            if constraint_approach:
+                lines.append("    Constraint approach:")
+                for line in constraint_approach.split("\n"):
+                    lines.append(f"      {line}")
+
+            reference_approach = entry.get("reference_approach", "")
+            if reference_approach:
+                lines.append("    Reference approach:")
+                for line in reference_approach.split("\n"):
+                    lines.append(f"      {line}")
+
+            cfb_summary = entry.get("constraint_feedback_summary", "")
+            if cfb_summary:
+                lines.append("    Constraint feedback:")
+                for line in cfb_summary.split("\n"):
+                    lines.append(f"      {line}")
+
+            rfb_summary = entry.get("reference_feedback_summary", "")
+            if rfb_summary:
+                lines.append("    Reference feedback:")
+                for line in rfb_summary.split("\n"):
+                    lines.append(f"      {line}")
+
+            sim_summary = entry.get("simulation_summary", "")
+            if sim_summary:
+                lines.append("    Simulation:")
+                for line in sim_summary.split("\n"):
+                    lines.append(f"      {line}")
+
+            metrics_summary = entry.get("metrics_summary", "")
+            if metrics_summary:
+                lines.append("    Metrics:")
+                for line in metrics_summary.split("\n"):
+                    lines.append(f"      {line}")
+    else:
+        lines.append("  No previous iterations.")
+
+    # === Current Iteration Detailed Results ===
+    lines.append("")
+    lines.append("--- CURRENT ITERATION DETAILED RESULTS ---")
+    lines.append(f"  Score: {score:.2f}")
+    lines.append(f"  Solver: {'converged' if opt_success else 'FAILED'}")
+
+    # Error info for failed iterations
+    if not opt_success:
+        error_msg = optimization_metrics.get("error_message", "")
+        if error_msg:
+            lines.append(f"  Error: {error_msg}")
+        solver_iters = optimization_metrics.get("solver_iterations")
+        if solver_iters:
+            lines.append(f"  Solver iterations: {solver_iters}")
+
+    # Full trajectory metrics
+    if trajectory_analysis:
+        metrics_lines = format_trajectory_metrics_section(trajectory_analysis)
+        lines.extend(metrics_lines)
+
+    # Full hardness report
+    hardness_report = optimization_metrics.get("hardness_report")
+    mpc_dt = float(self.config.mpc_config.mpc_dt)
     current_slack_weights = getattr(self, "current_slack_weights", None)
-
-    # Generate enhanced feedback
-    initial_height = float(self.config.experiment.initial_qpos[2])
-    return generate_enhanced_feedback(
-        iteration=iteration,
-        command=command,
-        state_traj=state_traj,
-        grf_traj=grf_traj,
-        joint_vel_traj=joint_vel_traj,
-        joint_torques_traj=self.current_joint_torques,
-        contact_sequence=contact_sequence,
-        mpc_dt=mpc_dt,
-        optimization_status=optimization_status,
-        simulation_results=simulation_result,
-        trajectory_analysis=trajectory_analysis,
-        previous_constraints=constraint_code,
-        previous_iteration_analysis=self.previous_iteration_analysis,
-        robot_mass=self.config.robot_data.mass,
-        initial_height=initial_height,
-        iteration_summaries=self.iteration_summaries,
-        hardness_report=hardness_report,
-        current_slack_weights=current_slack_weights,
-        pivot_signal=pivot_signal,
+    hardness_text = format_hardness_report(
+        hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
     )
+    if hardness_text:
+        lines.append(hardness_text)
+
+    # === Constraint Code (ref stripped) ===
+    lines.append("")
+    lines.append("--- CONSTRAINT CODE (THIS ITERATION) ---")
+    constraint_only = strip_ref_trajectory_code(constraint_code)
+    lines.append(constraint_only)
+
+    # === Reference Trajectory Code ===
+    lines.append("")
+    lines.append("--- REFERENCE TRAJECTORY CODE (THIS ITERATION) ---")
+    ref_code = _extract_ref_trajectory_code(constraint_code)
+    if ref_code:
+        lines.append(ref_code)
+    else:
+        lines.append("  No reference trajectory function found in code.")
+
+    # === Constraint Feedback ===
+    lines.append("")
+    lines.append("--- CONSTRAINT FEEDBACK ---")
+    if constraint_feedback:
+        lines.append(constraint_feedback)
+    else:
+        lines.append("  No constraint feedback available.")
+
+    # === Reference Trajectory Feedback ===
+    lines.append("")
+    lines.append("--- REFERENCE TRAJECTORY FEEDBACK ---")
+    if reference_feedback:
+        lines.append(reference_feedback)
+    else:
+        lines.append("  No reference trajectory feedback available.")
+
+    # === Visual Summary ===
+    lines.append("")
+    lines.append("--- VISUAL SUMMARY ---")
+    if visual_summary:
+        lines.append(visual_summary)
+    else:
+        lines.append("  No visual summary available.")
+
+    # === Footer ===
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("Generate improved constraints and reference trajectory.")
+    lines.append("Return ONLY Python code.")
+    lines.append("=" * 60)
+
+    return "\n".join(lines)

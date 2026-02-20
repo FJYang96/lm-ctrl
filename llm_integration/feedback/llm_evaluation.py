@@ -158,7 +158,7 @@ TRAJECTORY METRICS:
 
 CONSTRAINT CODE USED:
 ```python
-{constraint_code[:1500]}
+{constraint_code}
 ```
 
 Evaluate how well this trajectory achieves the commanded task."""
@@ -253,7 +253,7 @@ TRAJECTORY METRICS (from solver's last attempt / debug values):
 
 CONSTRAINT CODE USED:
 ```python
-{constraint_code[:1500]}
+{constraint_code}
 ```
 
 Score how close the solver's last attempt was to achieving the commanded task, even though it failed."""
@@ -355,7 +355,7 @@ Return ONLY the analysis text, no quotes or markdown."""
 
 CONSTRAINT CODE:
 ```python
-{constraint_code[:200000]}
+{constraint_code}
 ```
 
 TRAJECTORY METRICS (from solver's last attempt):
@@ -431,7 +431,7 @@ Return ONLY the analysis text, no quotes or markdown."""
 
 CONSTRAINT CODE:
 ```python
-{constraint_code[:1500]}
+{constraint_code}
 ```
 
 METRICS: {metrics_text}
@@ -443,6 +443,246 @@ Score: {score:.2f}"""
         except Exception as e:
             logger.error(f"Summary generation failed: {e}")
             return f"Optimization succeeded with score {score:.2f}"
+
+    def evaluate_iteration_unified(
+        self,
+        command: str,
+        trajectory_analysis: dict[str, Any],
+        constraint_code: str,
+        opt_success: bool,
+        error_info: dict[str, Any] | None = None,
+        images: list[str] | None = None,
+        visual_summary: str = "",
+    ) -> dict[str, Any]:
+        """
+        Unified evaluation for both successful and failed iterations.
+
+        Returns dict with: score, criteria, warnings, summary
+        """
+        system_prompt = """You are an expert robotics engineer evaluating a quadruped robot trajectory optimization result.
+
+Analyze the constraint code, trajectory metrics, solver status, and visual summary to evaluate task completion.
+
+Return a JSON object with this structure:
+{
+    "score": <float 0.0-1.0>,
+    "criteria": [
+        {
+            "name": "<criterion name>",
+            "target": "<specific numerical target>",
+            "achieved": "<exact numerical result>",
+            "progress": <float 0.0-1.0>
+        }
+    ],
+    "warnings": ["<specific technical warning>"],
+    "summary": "<detailed 4-5 sentence analysis>"
+}
+
+=== SCORING GUIDELINES ===
+Compute the score as a WEIGHTED AVERAGE of these factors (each 0.0-1.0):
+  - Primary goal progress (60%): Fraction of the commanded task achieved
+  - Axis purity (15%): Was motion on the intended axis only? Penalize unwanted off-axis rotation
+  - Landing/terminal state (15%): Stable final configuration? Low final velocity?
+  - Solver health (10%): Clean convergence vs timeout/infeasibility
+
+score = 0.6 * primary_progress + 0.15 * axis_purity + 0.15 * landing_quality + 0.10 * solver_health
+
+IMPORTANT: Use the formula to compute a precise score. Do NOT round to convenient numbers like 0.70 or 0.75.
+If the solver FAILED, cap the score at 0.85 maximum.
+
+=== SUMMARY REQUIREMENTS (4-5 detailed sentences) ===
+1. CONSTRAINT STRATEGY: Describe exactly what constraints were used with specific numerical bounds
+2. NUMERICAL RESULTS: State exact outcomes for rotation (rad AND degrees), height (meters), flight duration (seconds)
+3. ROOT CAUSE ANALYSIS: Explain WHY this result occurred
+4. SPECIFIC RECOMMENDATIONS: Provide exact parameter changes or alternative approaches
+
+Return ONLY valid JSON, no markdown, no extra text."""
+
+        metrics_text = (
+            self._format_metrics(trajectory_analysis)
+            if trajectory_analysis
+            else "No trajectory data available"
+        )
+
+        solver_status = (
+            "CONVERGED (success)" if opt_success else "FAILED (did not converge)"
+        )
+
+        error_text = ""
+        if error_info:
+            error_text = f"\nERROR INFO:\n{self._format_error_info(error_info)}"
+
+        visual_text = ""
+        if visual_summary:
+            visual_text = f"\nVISUAL SUMMARY:\n{visual_summary}"
+
+        user_message = f"""COMMAND: {command}
+
+SOLVER STATUS: {solver_status}
+{error_text}
+
+TRAJECTORY METRICS:
+{metrics_text}
+{visual_text}
+
+CONSTRAINT CODE USED:
+```python
+{constraint_code}
+```
+
+Evaluate how well this trajectory achieves the commanded task."""
+
+        try:
+            response = self._call_llm(system_prompt, user_message, images)
+            json_text = _extract_json_from_response(response)
+            result: dict[str, Any] = json.loads(json_text)
+            # Cap failed iteration scores at 0.85
+            if not opt_success and result.get("score", 0) > 0.85:
+                result["score"] = 0.85
+            return result
+        except json.JSONDecodeError as e:
+            logger.error(f"Unified evaluation failed: invalid JSON - {e}")
+            return self._default_evaluation()
+        except Exception as e:
+            logger.error(
+                f"Unified LLM evaluation failed: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            return self._default_evaluation()
+
+    def generate_iteration_summary(
+        self,
+        command: str,
+        iteration: int,
+        score: float,
+        constraint_code: str,
+        constraint_feedback: str,
+        reference_feedback: str,
+        trajectory_analysis: dict[str, Any],
+        opt_success: bool,
+        simulation_result: dict[str, Any] | None = None,
+        images: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Generate a structured iteration summary for the history log.
+
+        Returns a structured dict with multi-line fields.
+        """
+        system_prompt = """You are summarizing a trajectory optimization iteration for a history log.
+A code-generation LLM will read this summary to understand what was tried, what happened, and
+what to do differently next time. Be DETAILED and SPECIFIC — vague summaries are useless.
+
+Return a JSON object with this structure:
+{
+    "iteration": <int>,
+    "score": <float>,
+    "success": <bool>,
+    "constraint_approach": "<DETAILED multi-line description>",
+    "reference_approach": "<DETAILED multi-line description>",
+    "constraint_feedback_summary": "<DETAILED 4-6 sentence summary>",
+    "reference_feedback_summary": "<DETAILED 4-6 sentence summary>",
+    "simulation_summary": "<DETAILED 3-5 sentence summary>",
+    "metrics_summary": "<all key metrics with exact numbers>"
+}
+
+=== FIELD REQUIREMENTS ===
+
+constraint_approach (DETAILED — 5+ lines):
+  - Contact sequence: exact phase names, durations, and patterns
+  - Each constraint function: what variable is constrained, what bounds, what timing
+  - Specific numerical values for all bounds and parameters
+  - Phase-awareness: how constraints change across stance/flight/landing
+
+reference_approach (DETAILED — 5+ lines):
+  - Target rotation (rad and degrees), height profile, velocity profile
+  - Phase breakdown: what happens in each phase (stance push, flight, landing)
+  - Specific numerical targets: peak height, takeoff velocity, angular velocity
+  - How the reference was built (min_jerk, ballistic, manual interpolation)
+
+constraint_feedback_summary (4-6 sentences):
+  - Which constraints worked and which failed
+  - Specific bound values that need changing and why
+  - Root cause of any solver failure or constraint violation
+  - Exact recommendations from the constraint feedback
+
+reference_feedback_summary (4-6 sentences):
+  - RMSE between reference and actual trajectory (height, pitch, velocity)
+  - Physics plausibility issues found
+  - Phase timing alignment problems
+  - Specific parameter changes recommended
+
+simulation_summary (3-5 sentences):
+  - Whether simulation succeeded or failed and why
+  - Tracking error magnitude and what it means
+  - What the robot actually DID (visible motion from video frames)
+  - Landing quality and any ground penetration or instability
+
+metrics_summary (compact but COMPLETE):
+  - Pitch rotation (rad AND degrees), yaw drift, roll
+  - Height gain, max height, final height
+  - Flight duration, total duration
+  - Solver status (converged/failed, iteration count)
+  - Tracking error, simulation success/failure
+
+Return ONLY valid JSON, no markdown, no extra text."""
+
+        metrics_text = (
+            self._format_metrics(trajectory_analysis)
+            if trajectory_analysis
+            else "No trajectory data"
+        )
+
+        sim_text = ""
+        if simulation_result:
+            sim_success = simulation_result.get("success", False)
+            tracking_err = simulation_result.get("tracking_error", "N/A")
+            sim_text = f"Simulation: {'success' if sim_success else 'failed'}, tracking_error={tracking_err}"
+            if simulation_result.get("error"):
+                sim_text += f"\nSimulation error: {str(simulation_result['error'])}"
+
+        user_message = f"""COMMAND: {command}
+ITERATION: {iteration}
+SCORE: {score:.2f}
+SOLVER: {"converged" if opt_success else "failed"}
+
+TRAJECTORY METRICS:
+{metrics_text}
+
+{sim_text}
+
+FULL CONSTRAINT CODE:
+```python
+{constraint_code}
+```
+
+CONSTRAINT FEEDBACK (full):
+{constraint_feedback if constraint_feedback else "None"}
+
+REFERENCE FEEDBACK (full):
+{reference_feedback if reference_feedback else "None"}"""
+
+        try:
+            response = self._call_llm(system_prompt, user_message, images)
+            json_text = _extract_json_from_response(response)
+            result: dict[str, Any] = json.loads(json_text)
+            # Ensure required fields
+            result.setdefault("iteration", iteration)
+            result.setdefault("score", score)
+            result.setdefault("success", opt_success)
+            return result
+        except Exception as e:
+            logger.error(f"Iteration summary generation failed: {e}")
+            return {
+                "iteration": iteration,
+                "score": score,
+                "success": opt_success,
+                "constraint_approach": "Summary generation failed",
+                "reference_approach": "Summary generation failed",
+                "constraint_feedback_summary": "",
+                "reference_feedback_summary": "",
+                "simulation_summary": "",
+                "metrics_summary": metrics_text,
+            }
 
     def _format_metrics(self, ta: dict[str, Any]) -> str:
         """Format trajectory metrics for the LLM."""
@@ -476,18 +716,16 @@ Final COM velocity: {ta.get("final_com_velocity", 0):.2f} m/s"""
                 f"Solver stopped after {error_info['solver_iterations']} iterations"
             )
         if error_info.get("constraint_violations"):
-            lines.append(
-                f"Violations: {str(error_info['constraint_violations'])[:500]}"
-            )
+            lines.append(f"Violations: {str(error_info['constraint_violations'])}")
         return "\n".join(lines) if lines else "No detailed error information"
 
     def _default_evaluation(self) -> dict[str, Any]:
         """Return default evaluation when LLM fails."""
         return {
-            "score": 0.5,
+            "score": 0.0,
             "criteria": [],
             "warnings": ["Could not parse LLM evaluation"],
-            "summary": "Evaluation failed - using default score",
+            "summary": "Evaluation failed - using default score of 0.0(Worst possible score)",
         }
 
 
@@ -555,3 +793,51 @@ def summarize_iteration(
             trajectory_analysis or {},
             images,
         )
+
+
+def evaluate_iteration_unified(
+    command: str,
+    trajectory_analysis: dict[str, Any],
+    constraint_code: str,
+    opt_success: bool,
+    error_info: dict[str, Any] | None = None,
+    images: list[str] | None = None,
+    visual_summary: str = "",
+) -> dict[str, Any]:
+    """Unified evaluation for both success and failure. Returns: score, criteria, warnings, summary."""
+    return get_evaluator().evaluate_iteration_unified(
+        command,
+        trajectory_analysis,
+        constraint_code,
+        opt_success,
+        error_info,
+        images,
+        visual_summary,
+    )
+
+
+def generate_iteration_summary(
+    command: str,
+    iteration: int,
+    score: float,
+    constraint_code: str,
+    constraint_feedback: str,
+    reference_feedback: str,
+    trajectory_analysis: dict[str, Any],
+    opt_success: bool,
+    simulation_result: dict[str, Any] | None = None,
+    images: list[str] | None = None,
+) -> dict[str, Any]:
+    """Generate a structured iteration summary for history."""
+    return get_evaluator().generate_iteration_summary(
+        command,
+        iteration,
+        score,
+        constraint_code,
+        constraint_feedback,
+        reference_feedback,
+        trajectory_analysis,
+        opt_success,
+        simulation_result,
+        images,
+    )
