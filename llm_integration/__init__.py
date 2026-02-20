@@ -3,7 +3,7 @@
 from .client import LLMClient
 from .constraint import ConstraintGenerator
 from .executor import SafeConstraintExecutor
-from .feedback import create_visual_feedback, generate_enhanced_feedback
+from .feedback import create_visual_feedback
 from .mpc import LLMTaskMPC
 from .pipeline import FeedbackPipeline
 
@@ -13,6 +13,5 @@ __all__ = [
     "FeedbackPipeline",
     "SafeConstraintExecutor",
     "LLMTaskMPC",
-    "generate_enhanced_feedback",
     "create_visual_feedback",
 ]
