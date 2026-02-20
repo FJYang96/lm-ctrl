@@ -205,7 +205,7 @@ def solve_trajectory_optimization(
     # Analyze trajectory using LLM MPC time step
     mpc_dt = config_summary.get("time_step", self.config.mpc_config.mpc_dt)
     trajectory_analysis = self.constraint_generator.analyze_trajectory(
-        state_traj, mpc_dt
+        state_traj, mpc_dt, grf_traj=grf_traj, joint_vel_traj=joint_vel_traj
     )
 
     # Log key trajectory metrics

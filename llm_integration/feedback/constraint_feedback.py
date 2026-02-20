@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..logging_config import logger
+from .format_metrics import format_trajectory_metrics_text
 from .llm_evaluation import get_evaluator
 
 
@@ -101,20 +102,8 @@ on the trajectory results."""
     else:
         violations_text = "None"
 
-    # Format trajectory metrics
-    metrics_text = "No trajectory data available"
-    if trajectory_analysis:
-        ta = trajectory_analysis
-        metrics_text = (
-            f"Height: initial={ta.get('initial_com_height', 0):.3f}m, "
-            f"max={ta.get('max_com_height', 0):.3f}m, gain={ta.get('height_gain', 0):.3f}m\n"
-            f"Pitch: {ta.get('total_pitch_rotation', 0):.2f} rad "
-            f"({abs(ta.get('total_pitch_rotation', 0)) * 57.3:.0f} deg)\n"
-            f"Yaw: {ta.get('max_yaw', 0):.2f} rad, Roll: {ta.get('total_roll_rotation', 0):.2f} rad\n"
-            f"Flight duration: {ta.get('flight_duration', 0):.2f}s\n"
-            f"Max angular velocity: {ta.get('max_angular_vel', 0):.2f} rad/s\n"
-            f"Final COM velocity: {ta.get('final_com_velocity', 0):.2f} m/s"
-        )
+    # Format trajectory metrics (comprehensive shared formatter)
+    metrics_text = format_trajectory_metrics_text(trajectory_analysis)
 
     error_text = ""
     if error_info:

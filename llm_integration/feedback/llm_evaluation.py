@@ -14,6 +14,7 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 from ..logging_config import logger
+from .format_metrics import format_trajectory_metrics_text
 
 
 def _extract_json_from_response(response: str) -> str:
@@ -101,6 +102,8 @@ class LLMEvaluator:
         error_info: dict[str, Any] | None = None,
         images: list[str] | None = None,
         visual_summary: str = "",
+        hardness_text: str = "",
+        constraint_violations: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Unified evaluation for both successful and failed iterations.
@@ -163,6 +166,24 @@ Return ONLY valid JSON, no markdown, no extra text."""
         if visual_summary:
             visual_text = f"\nVISUAL SUMMARY:\n{visual_summary}"
 
+        hardness_section = ""
+        if hardness_text:
+            hardness_section = f"\nCONSTRAINT HARDNESS ANALYSIS:\n{hardness_text}"
+
+        violations_section = ""
+        if constraint_violations:
+            violation_lines = []
+            for key, val in constraint_violations.items():
+                if isinstance(val, list):
+                    for item in val:
+                        violation_lines.append(f"  {key}: {item}")
+                else:
+                    violation_lines.append(f"  {key}: {val}")
+            if violation_lines:
+                violations_section = "\nCONSTRAINT VIOLATIONS:\n" + "\n".join(
+                    violation_lines
+                )
+
         user_message = f"""COMMAND: {command}
 
 SOLVER STATUS: {solver_status}
@@ -176,6 +197,8 @@ CONSTRAINT CODE USED:
 ```python
 {constraint_code}
 ```
+{hardness_section}
+{violations_section}
 
 Evaluate how well this trajectory achieves the commanded task."""
 
@@ -336,18 +359,8 @@ VISUAL SUMMARY:
             }
 
     def _format_metrics(self, ta: dict[str, Any]) -> str:
-        """Format trajectory metrics for the LLM."""
-        total_pitch = ta.get("total_pitch_rotation", 0)
-        max_yaw = ta.get("max_yaw", 0)
-        total_roll = ta.get("total_roll_rotation", 0)
-
-        return f"""Height: initial={ta.get("initial_com_height", 0):.3f}m, max={ta.get("max_com_height", 0):.3f}m, gain={ta.get("height_gain", 0):.3f}m
-Pitch rotation: {total_pitch:.2f} rad ({abs(total_pitch) * 57.3:.0f} degrees)
-Yaw rotation: {max_yaw:.2f} rad ({abs(max_yaw) * 57.3:.0f} degrees)
-Roll rotation: {total_roll:.2f} rad ({abs(total_roll) * 57.3:.0f} degrees)
-Max angular velocity: {ta.get("max_angular_vel", 0):.2f} rad/s
-Flight duration: {ta.get("flight_duration", 0):.2f}s
-Final COM velocity: {ta.get("final_com_velocity", 0):.2f} m/s"""
+        """Format trajectory metrics for the LLM (shared comprehensive formatter)."""
+        return format_trajectory_metrics_text(ta)
 
     def _format_error_info(self, error_info: dict[str, Any]) -> str:
         """Format error information for the LLM."""
@@ -392,6 +405,8 @@ def evaluate_iteration_unified(
     error_info: dict[str, Any] | None = None,
     images: list[str] | None = None,
     visual_summary: str = "",
+    hardness_text: str = "",
+    constraint_violations: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Unified evaluation for both success and failure. Returns: score, criteria, warnings, summary."""
     return get_evaluator().evaluate_iteration_unified(
@@ -402,6 +417,8 @@ def evaluate_iteration_unified(
         error_info,
         images,
         visual_summary,
+        hardness_text,
+        constraint_violations,
     )
 
 

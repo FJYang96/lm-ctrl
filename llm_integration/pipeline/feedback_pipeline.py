@@ -283,11 +283,27 @@ class FeedbackPipeline:
                     self.current_images, command
                 )
 
-                # === Step 6: Unified scoring ===
+                # === Step 6: Extract constraint data (needed by scoring + feedback) ===
                 trajectory_analysis = optimization_result.get("trajectory_analysis", {})
                 opt_success = optimization_result.get("success", False)
                 error_info = optimization_result.get("optimization_metrics", {})
 
+                constraint_violations = self._extract_constraint_violations(
+                    optimization_result
+                )
+
+                hardness_report = optimization_result.get(
+                    "optimization_metrics", {}
+                ).get("hardness_report")
+                mpc_dt = float(self.config.mpc_config.mpc_dt)
+                current_slack_weights = getattr(self, "current_slack_weights", None)
+                hardness_text = format_hardness_report(
+                    hardness_report,
+                    dt=mpc_dt,
+                    current_slack_weights=current_slack_weights,
+                )
+
+                # === Step 7: Unified scoring ===
                 llm_eval = evaluate_iteration_unified(
                     command=command,
                     trajectory_analysis=trajectory_analysis,
@@ -296,6 +312,8 @@ class FeedbackPipeline:
                     error_info=error_info if not opt_success else None,
                     images=self.current_images,
                     visual_summary=self.current_visual_summary,
+                    hardness_text=hardness_text,
+                    constraint_violations=constraint_violations,
                 )
                 score = llm_eval.get("score", 0.0 if not opt_success else 0.5)
 
@@ -317,32 +335,17 @@ class FeedbackPipeline:
                 summary = llm_eval.get("summary", f"Iteration {iteration} completed")
                 logger.info(f"  Summary: {summary}")
 
-                # Step 7: Append score to recent_scores
+                # Step 8: Append score to recent_scores
                 self.recent_scores.append(score)
 
-                # Step 8: Compute pivot/tweak signal
+                # Step 9: Compute pivot/tweak signal
                 pivot_signal = self._compute_pivot_signal(iteration)
                 logger.info(
                     f"Pivot logic: scores={[f'{s:.2f}' for s in self.recent_scores[-5:]]}, "
                     f"pivot_signal={pivot_signal}"
                 )
 
-                # Step 9: Extract constraint violations
-                constraint_violations = self._extract_constraint_violations(
-                    optimization_result
-                )
-
                 # Step 10: Constraint feedback + Reference feedback in parallel
-                hardness_report = optimization_result.get(
-                    "optimization_metrics", {}
-                ).get("hardness_report")
-                mpc_dt = float(self.config.mpc_config.mpc_dt)
-                current_slack_weights = getattr(self, "current_slack_weights", None)
-                hardness_text = format_hardness_report(
-                    hardness_report,
-                    dt=mpc_dt,
-                    current_slack_weights=current_slack_weights,
-                )
 
                 ref_trajectory_data = optimization_result.get("ref_trajectory_data")
                 state_trajectory = optimization_result.get("state_trajectory")

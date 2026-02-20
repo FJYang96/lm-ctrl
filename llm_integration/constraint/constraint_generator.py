@@ -128,7 +128,11 @@ Use these physical limits to create realistic constraints."""
         )
 
     def analyze_trajectory(
-        self, state_traj: np.ndarray, mpc_dt: float
+        self,
+        state_traj: np.ndarray,
+        mpc_dt: float,
+        grf_traj: np.ndarray | None = None,
+        joint_vel_traj: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """
         Enhanced trajectory analysis to extract key metrics for feedback.
@@ -136,6 +140,8 @@ Use these physical limits to create realistic constraints."""
         Args:
             state_traj: State trajectory array (N x 24)
             mpc_dt: Time step
+            grf_traj: GRF trajectory (horizon x 12), 4 feet × 3 forces
+            joint_vel_traj: Joint velocity trajectory (horizon x 12)
 
         Returns:
             Dictionary of comprehensive trajectory metrics
@@ -230,6 +236,35 @@ Use these physical limits to create realistic constraints."""
                 )
             else:
                 metrics["max_acceleration"] = 0.0
+
+            # GRF metrics (4 feet × 3 forces: fx, fy, fz per foot)
+            if grf_traj is not None and grf_traj.shape[0] > 0:
+                grf_z_indices = [2, 5, 8, 11]  # z-component per foot
+                grf_z = grf_traj[:, grf_z_indices]  # (horizon, 4)
+                total_grf_z = np.sum(grf_z, axis=1)  # (horizon,)
+                metrics["max_total_grf_z"] = float(np.max(np.abs(total_grf_z)))
+                metrics["mean_total_grf_z"] = float(np.mean(np.abs(total_grf_z)))
+                metrics["max_single_foot_grf_z"] = float(np.max(np.abs(grf_z)))
+                # Check GRF utilization: fraction of timesteps with significant GRF
+                active_grf_mask = np.abs(total_grf_z) > 1.0  # > 1N threshold
+                metrics["grf_active_fraction"] = float(np.mean(active_grf_mask))
+            else:
+                metrics["max_total_grf_z"] = 0.0
+                metrics["mean_total_grf_z"] = 0.0
+                metrics["max_single_foot_grf_z"] = 0.0
+                metrics["grf_active_fraction"] = 0.0
+
+            # Actuator (joint velocity) metrics
+            if joint_vel_traj is not None and joint_vel_traj.shape[0] > 0:
+                metrics["max_joint_velocity"] = float(np.max(np.abs(joint_vel_traj)))
+                metrics["mean_joint_velocity"] = float(np.mean(np.abs(joint_vel_traj)))
+                # Per-joint max velocity for utilization assessment
+                per_joint_max = np.max(np.abs(joint_vel_traj), axis=0)
+                metrics["joint_vel_utilization"] = float(np.mean(per_joint_max))
+            else:
+                metrics["max_joint_velocity"] = 0.0
+                metrics["mean_joint_velocity"] = 0.0
+                metrics["joint_vel_utilization"] = 0.0
 
             return metrics
 
