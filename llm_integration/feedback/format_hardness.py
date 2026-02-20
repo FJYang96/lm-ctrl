@@ -115,7 +115,7 @@ def format_hardness_report(
     lines.extend(
         [
             "This shows which constraints are HARDEST to satisfy and WHEN.",
-            "High slack = constraint bounds violated. Focus on CRITICAL constraints.",
+            "High slack = constraint bounds are violated at those timesteps.",
             "",
         ]
     )
@@ -150,52 +150,15 @@ def format_hardness_report(
             if max_slack > 0.01:
                 lines.extend(_format_constraint_detail(name, metrics, dt, is_llm=False))
             else:
-                # Just show a summary line for OK constraints
-                severity = "OK" if max_slack < 0.001 else "LOW"
                 display_name = name.replace("_constraints", "")
-                lines.append(
-                    f"  [{severity}] {display_name}: OK (max slack = {max_slack:.4f})"
-                )
+                lines.append(f"  {display_name}: max slack = {max_slack:.4f}")
         lines.append("")
-
-    # Add actionable guidance
-    lines.extend(
-        [
-            "-" * 80,
-            "HOW TO FIX:",
-            "",
-            "For YOUR CONSTRAINTS (contact_aware_constraint):",
-            "  - If slack is high at specific timesteps, relax bounds for THOSE timesteps",
-            "  - Use phase-aware constraints: different bounds for stance vs flight",
-            "",
-            "For SYSTEM CONSTRAINTS:",
-            "  - body_clearance: Adjust contact_sequence to reduce body tilt during flight",
-            "  - foot_height: Shorten flight phase or adjust landing timing",
-            "  - complementarity: Check contact_sequence matches intended motion phases",
-            "",
-            "EXAMPLE - Phase-aware constraint fix:",
-            "```python",
-            "def constraint_fn(x_k, u_k, model, config, contact_k, k, horizon):",
-            "    pitch = x_k[7]",
-            "    is_flight = (contact_k[0] < 0.5)  # Check if in flight phase",
-            "    ",
-            "    if is_flight:",
-            "        # Relaxed bounds during flight (allow rotation)",
-            "        lb, ub = -3.14, 3.14",
-            "    else:",
-            "        # Tighter bounds during stance",
-            "        lb, ub = -0.5, 0.5",
-            "    return pitch, lb, ub",
-            "```",
-            "",
-        ]
-    )
 
     return "\n".join(lines)
 
 
 def _format_constraint_detail(
-    name: str, metrics: dict[str, Any], dt: float, is_llm: bool
+    name: str, metrics: dict[str, Any], dt: float, is_llm: bool = False
 ) -> list[str]:
     """Format detailed information for a single constraint."""
     lines = []
@@ -205,18 +168,8 @@ def _format_constraint_detail(
     active_timesteps = metrics.get("active_timesteps", [])
     slack_by_timestep = metrics.get("slack_by_timestep", {})
 
-    # Determine severity
-    if max_slack > 0.1:
-        severity = "CRITICAL"
-    elif max_slack > 0.01:
-        severity = "HIGH"
-    elif max_slack > 0.001:
-        severity = "MEDIUM"
-    else:
-        severity = "OK"
-
     display_name = name.replace("_constraints", "")
-    lines.append(f"  [{severity}] {display_name}")
+    lines.append(f"  {display_name}")
     lines.append(f"      Max slack: {max_slack:.4f} | Total slack: {total_slack:.4f}")
 
     # Show when violations occur
@@ -232,16 +185,6 @@ def _format_constraint_detail(
         if worst:
             worst_str = ", ".join([f"t={t:.2f}s (slack={v:.3f})" for t, v in worst])
             lines.append(f"      Worst at: {worst_str}")
-
-    # Add specific suggestion for LLM constraints
-    if is_llm and max_slack > 0.01:
-        if active_timesteps:
-            time_ranges = _identify_time_ranges(active_timesteps, dt)
-            if time_ranges:
-                start_t, end_t = time_ranges[0]
-                lines.append(
-                    f"      -> SUGGESTION: Relax your constraint bounds during {start_t:.2f}-{end_t:.2f}s"
-                )
 
     lines.append("")
     return lines

@@ -55,13 +55,20 @@ Key interactions:
 
 Your feedback should focus ONLY on the constraints. Reference trajectory feedback is handled separately.
 
+=== HARDNESS DATA ===
+
+You will receive raw constraint hardness data: slack values, violation timesteps, and worst offenders.
+YOU must assess the severity of each violation from the raw numbers and determine what is critical
+vs acceptable. YOU must generate all recommendations — what bounds to change, what strategies to try,
+what phase timing to adjust. There are no pre-classified severity labels or pre-built suggestions.
+
 === OUTPUT FORMAT ===
 
 Write multi-paragraph analysis. Be specific about:
-1. Which constraints are working (low slack, achieving intended effect)
-2. Which constraints are failing (high slack, violated, or allowing loopholes)
-3. Specific bound values to change and why
-4. Timing issues (wrong phase, wrong timestep range)
+1. Which constraints are working (low slack) and which are failing (high slack) — assess severity yourself
+2. Root cause analysis: WHY are constraints being violated at those specific timesteps?
+3. Specific bound values to change, with concrete numbers and reasoning
+4. Timing issues (wrong phase, wrong timestep range) and how to fix them
 
 Do NOT return JSON. Return readable analysis text."""
 

@@ -13,7 +13,6 @@ from .llm_evaluation import get_evaluator
 def _compute_reference_metrics(
     ref_trajectory_data: dict[str, Any] | None,
     state_trajectory: np.ndarray | None,
-    trajectory_analysis: dict[str, Any],
     mpc_dt: float = 0.02,
 ) -> str:
     """Compute metrics comparing reference trajectory to actual result.
@@ -76,35 +75,23 @@ def _compute_reference_metrics(
         vz_rmse = np.sqrt(np.mean((X_ref[5, :min_cols] - X_actual[5, :min_cols]) ** 2))
         lines.append(f"Vz RMSE (ref vs actual): {vz_rmse:.4f} m/s")
 
-    # Plausibility checks
-    plausibility = []
-
-    # Check if reference respects gravity during flight
+    # Raw plausibility metrics (LLM interprets these)
+    lines.append("\nPlausibility metrics:")
     ref_vz_diff = np.diff(ref_vz)
-    if np.any(ref_vz_diff > 0.5):
-        plausibility.append(
-            "WARNING: Ref vertical velocity increases sharply "
-            "(may violate gravity during flight)"
-        )
+    lines.append(
+        f"  Max vertical velocity increase between timesteps: {ref_vz_diff.max():.4f} m/s"
+    )
+    lines.append(
+        f"  Max vertical velocity decrease between timesteps: {ref_vz_diff.min():.4f} m/s"
+    )
 
-    # Check velocity-position consistency
     ref_z_diff = np.diff(ref_height)
     if X_ref.shape[1] > 1:
-        # Rough check: position changes should correlate with velocities
         expected_dz = ref_vz[:-1] * mpc_dt
-        max_inconsistency = np.max(np.abs(ref_z_diff - expected_dz))
-        if max_inconsistency > 0.1:
-            plausibility.append(
-                f"WARNING: Position-velocity inconsistency "
-                f"(max delta={max_inconsistency:.3f}m)"
-            )
-
-    if plausibility:
-        lines.append("\nPlausibility issues:")
-        for issue in plausibility:
-            lines.append(f"  {issue}")
-    else:
-        lines.append("Plausibility: OK (reference appears physically consistent)")
+        max_inconsistency = float(np.max(np.abs(ref_z_diff - expected_dz)))
+        lines.append(
+            f"  Position-velocity consistency (max |dz - vz*dt|): {max_inconsistency:.4f}m"
+        )
 
     return "\n".join(lines)
 
@@ -158,13 +145,21 @@ Key principles:
 - Angular velocity during flight should be constant (momentum conservation)
 - Angles should integrate from angular velocities
 
+=== PLAUSIBILITY DATA ===
+
+You will receive raw plausibility metrics: velocity changes between timesteps, position-velocity
+consistency values, and RMSE comparisons. YOU must interpret these numbers to determine whether
+the reference trajectory is physically plausible. There are no pre-classified warnings or OK labels.
+For example, a large positive vertical velocity increase may indicate a gravity violation during flight.
+A high position-velocity inconsistency may indicate the reference has discontinuities.
+
 === OUTPUT FORMAT ===
 
 Write multi-paragraph analysis. Be specific about:
 1. How well the reference matches the task requirements
-2. Physics plausibility issues (gravity, momentum, velocity-position consistency)
+2. Physics plausibility assessment from the raw metrics (gravity, momentum, velocity-position consistency)
 3. Phase timing alignment with contact sequence
-4. Specific parameter changes (peak height, rotation rate, timing)
+4. Specific parameter changes (peak height, rotation rate, timing) with concrete numbers
 
 Do NOT return JSON. Return readable analysis text."""
 
@@ -183,7 +178,7 @@ This is the first attempt. Analyze the reference trajectory design and suggest i
 
     # Compute reference metrics
     ref_metrics = _compute_reference_metrics(
-        ref_trajectory_data, state_trajectory, trajectory_analysis, mpc_dt
+        ref_trajectory_data, state_trajectory, mpc_dt
     )
 
     # Format trajectory metrics
