@@ -23,7 +23,6 @@ from ..feedback.constraint_feedback import generate_constraint_feedback
 from ..feedback.llm_evaluation import (
     evaluate_iteration_unified,
     generate_iteration_summary,
-    summarize_iteration,
 )
 from ..feedback.reference_feedback import generate_reference_feedback
 from ..logging_config import logger
@@ -454,29 +453,39 @@ class FeedbackPipeline:
             except Exception as e:
                 logger.error(f"Iteration {iteration} error: {e}")
 
-                # Generate summary for failed iteration
-                error_info_exc = {"error_message": str(e)}
+                # Generate LLM-driven summary for failed iteration
                 code = constraint_code if "constraint_code" in locals() else ""
-                summary = summarize_iteration(
-                    command=command,
-                    constraint_code=code,
-                    success=False,
-                    error_info=error_info_exc,
-                    images=self.current_images if self.current_images else None,
-                )
-                # Add error entry to iteration history
-                error_summary = {
-                    "iteration": iteration,
-                    "score": 0.0,
-                    "success": False,
-                    "constraint_approach": "Error during iteration",
-                    "reference_approach": "Error during iteration",
-                    "constraint_feedback_summary": "",
-                    "reference_feedback_summary": "",
-                    "simulation_summary": "",
-                    "metrics_summary": str(e),
-                }
+                try:
+                    error_summary = generate_iteration_summary(
+                        command=command,
+                        iteration=iteration,
+                        score=0.0,
+                        constraint_code=code,
+                        constraint_feedback="",
+                        reference_feedback="",
+                        trajectory_analysis={},
+                        opt_success=False,
+                        simulation_result={
+                            "success": False,
+                            "error": str(e),
+                        },
+                        images=self.current_images if self.current_images else None,
+                    )
+                except Exception as summary_err:
+                    logger.error(f"Error summary generation failed: {summary_err}")
+                    error_summary = {
+                        "iteration": iteration,
+                        "score": 0.0,
+                        "success": False,
+                        "constraint_approach": "Summary generation failed",
+                        "reference_approach": "Summary generation failed",
+                        "constraint_feedback_summary": "",
+                        "reference_feedback_summary": "",
+                        "simulation_summary": "",
+                        "metrics_summary": str(e),
+                    }
                 self.iteration_summaries.append(error_summary)
+                summary = error_summary.get("simulation_summary", str(e))
                 self.recent_scores.append(0.0)
 
                 error_result = {
