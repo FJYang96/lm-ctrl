@@ -210,6 +210,7 @@ Evaluate how well this trajectory achieves the commanded task."""
         opt_success: bool,
         simulation_result: dict[str, Any] | None = None,
         images: list[str] | None = None,
+        visual_summary: str = "",
     ) -> dict[str, Any]:
         """
         Generate a structured iteration summary for the history log.
@@ -307,7 +308,10 @@ CONSTRAINT FEEDBACK (full):
 {constraint_feedback if constraint_feedback else "None"}
 
 REFERENCE FEEDBACK (full):
-{reference_feedback if reference_feedback else "None"}"""
+{reference_feedback if reference_feedback else "None"}
+
+VISUAL SUMMARY:
+{visual_summary if visual_summary else "Not available"}"""
 
         try:
             response = self._call_llm(system_prompt, user_message, images)
@@ -413,6 +417,7 @@ def generate_iteration_summary(
     opt_success: bool,
     simulation_result: dict[str, Any] | None = None,
     images: list[str] | None = None,
+    visual_summary: str = "",
 ) -> dict[str, Any]:
     """Generate a structured iteration summary for history."""
     return get_evaluator().generate_iteration_summary(
@@ -426,4 +431,5 @@ def generate_iteration_summary(
         opt_success,
         simulation_result,
         images,
+        visual_summary,
     )

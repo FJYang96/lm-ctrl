@@ -394,6 +394,7 @@ class FeedbackPipeline:
                     opt_success=opt_success,
                     simulation_result=simulation_result,
                     images=self.current_images,
+                    visual_summary=self.current_visual_summary,
                 )
                 self.iteration_summaries.append(iter_summary)
 
@@ -470,6 +471,7 @@ class FeedbackPipeline:
                             "error": str(e),
                         },
                         images=self.current_images if self.current_images else None,
+                        visual_summary=self.current_visual_summary,
                     )
                 except Exception as summary_err:
                     logger.error(f"Error summary generation failed: {summary_err}")
@@ -487,6 +489,35 @@ class FeedbackPipeline:
                 self.iteration_summaries.append(error_summary)
                 summary = error_summary.get("simulation_summary", str(e))
                 self.recent_scores.append(0.0)
+
+                # Build error-path feedback context so the next iteration
+                # sees this failure in the iteration history.
+                error_opt_result = {
+                    "success": False,
+                    "trajectory_analysis": {},
+                    "optimization_metrics": {},
+                }
+                error_sim_result = {
+                    "success": False,
+                    "error": str(e),
+                }
+                pivot_signal = self._compute_pivot_signal(iteration)
+                try:
+                    context = self._create_feedback_context(
+                        iteration,
+                        command,
+                        error_opt_result,
+                        error_sim_result,
+                        code,
+                        run_dir,
+                        pivot_signal=pivot_signal,
+                        constraint_feedback="",
+                        reference_feedback="",
+                        visual_summary=self.current_visual_summary,
+                        score=0.0,
+                    )
+                except Exception:
+                    pass  # keep previous context if this also fails
 
                 error_result = {
                     "iteration": iteration,
