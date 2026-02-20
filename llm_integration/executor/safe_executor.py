@@ -1,16 +1,12 @@
 """Safe execution environment for LLM-generated constraint code."""
 
 import ast
-from collections.abc import Callable
 from typing import Any
 
 from .globals import (
     ALLOWED_IMPORTS,
     create_restricted_globals,
     extract_imports_from_code,
-)
-from .validation import (
-    find_constraint_entry_point,
 )
 
 
@@ -25,13 +21,9 @@ class SafeConstraintExecutor:
 
     # Assign imported functions directly as methods (no wrapper needed)
     extract_imports_from_code = staticmethod(extract_imports_from_code)
-    _find_constraint_entry_point = staticmethod(find_constraint_entry_point)
 
     def __init__(self) -> None:
         """Initialize the safe executor."""
-        self.constraint_functions: dict[str, Callable[..., Any]] = {}
-        self.last_executed_code: str | None = None
-        self.detected_entry_point: str | None = None
 
     def validate_code_safety(self, code: str) -> tuple[bool, str]:
         """

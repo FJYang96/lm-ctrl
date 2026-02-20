@@ -9,8 +9,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from mpc.dynamics.model import KinoDynamic_Model
 from mpc.mpc_opti import QuadrupedMPCOpti
 
@@ -115,8 +113,6 @@ class FeedbackPipeline:
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
         # Enhanced feedback tracking
-        self.previous_iteration_analysis: dict[str, Any] | None = None
-        self.current_joint_torques: np.ndarray | None = None
         self.current_images: list[str] = []
 
         # LLM-based iteration history (structured summaries)
@@ -239,7 +235,6 @@ class FeedbackPipeline:
         # Initialize pipeline state
         self.iteration_results = []
         self.iteration_summaries = []
-        self.previous_iteration_analysis = None
         self.current_images = []
         context = None
         best_result = None
@@ -287,11 +282,6 @@ class FeedbackPipeline:
                 # Step 5: LLM summarizes frames
                 self.current_visual_summary = self.llm_client.summarize_frames(
                     self.current_images, command
-                )
-
-                # Track previous iteration analysis for comparison
-                self.previous_iteration_analysis = optimization_result.get(
-                    "trajectory_analysis", {}
                 )
 
                 # === Step 6: Unified scoring ===

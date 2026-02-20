@@ -22,7 +22,6 @@ class ConstraintGenerator:
             config: Optional robot configuration object. If provided, physical
                    facts are extracted from actual robot data for accuracy.
         """
-        self.iteration_history: list[dict[str, Any]] = []
         self.config = config
         self.robot_details = self._get_robot_details()
 

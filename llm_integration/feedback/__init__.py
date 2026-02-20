@@ -11,19 +11,10 @@ from .llm_evaluation import (
     summarize_iteration,
 )
 from .reference_feedback import generate_reference_feedback
-from .trajectory_analysis import (
-    analyze_actuator_saturation,
-    analyze_grf_profile,
-    analyze_phase_metrics,
-)
-from .video_extraction import create_visual_feedback, extract_key_frames
+from .video_extraction import create_visual_feedback
 
 __all__ = [
-    "extract_key_frames",
     "create_visual_feedback",
-    "analyze_phase_metrics",
-    "analyze_grf_profile",
-    "analyze_actuator_saturation",
     "format_hardness_report",
     "evaluate_iteration_unified",
     "generate_iteration_summary",

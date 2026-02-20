@@ -79,9 +79,6 @@ def execute_simulation(
             joint_vel_traj,
         )
 
-        # Store for enhanced feedback
-        self.current_joint_torques = joint_torques_traj
-
         # Execute in simulation
         qpos_traj, qvel_traj, sim_grf_traj, sim_images = simulate_trajectory(
             self.env, joint_torques_traj, planned_traj_images
