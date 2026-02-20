@@ -11,46 +11,6 @@ from .dynamics.model import KinoDynamic_Model
 logger = logging.getLogger("llm_integration")
 
 
-def _interpolate_warmstart(
-    prev: np.ndarray, target_rows: int, target_cols: int
-) -> np.ndarray | None:
-    """
-    Interpolate a previous solution to match a new horizon size.
-
-    Args:
-        prev: Previous solution array (rows x cols)
-        target_rows: Expected number of rows (state/input dimension)
-        target_cols: Expected number of columns (horizon+1 for X, horizon for U)
-
-    Returns:
-        Interpolated array or None if interpolation is not possible.
-    """
-    if prev is None:
-        return None
-
-    # Dimension mismatch in rows (state/input dim changed) → cannot interpolate
-    if prev.shape[0] != target_rows:
-        return None
-
-    # All-zeros check → debug fallback values were unavailable
-    if np.all(prev == 0):
-        return None
-
-    prev_cols = prev.shape[1]
-
-    # Same horizon → direct copy
-    if prev_cols == target_cols:
-        return prev.copy()
-
-    # Different horizon → interpolate along normalized [0,1] time axis per dimension
-    old_t = np.linspace(0, 1, prev_cols)
-    new_t = np.linspace(0, 1, target_cols)
-    result = np.zeros((target_rows, target_cols))
-    for i in range(target_rows):
-        result[i, :] = np.interp(new_t, old_t, prev[i, :])
-    return result
-
-
 class QuadrupedMPCOpti:
     """
     Quadruped MPC implementation using CasADi's Opti framework.
@@ -295,7 +255,6 @@ class QuadrupedMPCOpti:
         initial_state: np.ndarray,
         ref: np.ndarray,
         contact_sequence: np.ndarray,
-        warmstart: dict[str, Any] | None = None,
         ref_trajectory: dict[str, np.ndarray] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """
@@ -305,7 +264,6 @@ class QuadrupedMPCOpti:
             initial_state: Initial state vector
             ref: Reference trajectory (shape: states_dim + inputs_dim)
             contact_sequence: Contact sequence array (shape: 4 x horizon)
-            warmstart: Optional dict with 'X' and 'U' arrays from a previous solution
             ref_trajectory: Optional dict with 'X_ref' (states_dim, horizon+1) and
                 'U_ref' (inputs_dim, horizon) used as solver initial guess.
 
@@ -333,35 +291,13 @@ class QuadrupedMPCOpti:
         self.opti.set_value(self.P_mass, self.config.robot_data.mass)
         self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
 
-        # Determine initial guess priority: warmstart > ref_trajectory > heuristic
-        used_warmstart = False
-        if warmstart is not None:
-            ws_X = _interpolate_warmstart(
-                warmstart.get("X"), self.states_dim, self.horizon + 1
-            )
-            ws_U = _interpolate_warmstart(
-                warmstart.get("U"), self.inputs_dim, self.horizon
-            )
-            if ws_X is not None and ws_U is not None:
-                prev_horizon = (
-                    warmstart["X"].shape[1] - 1
-                    if warmstart.get("X") is not None
-                    else "?"
-                )
-                logger.info(
-                    f"Warm-starting from previous solution "
-                    f"(horizon {prev_horizon} → {self.horizon})"
-                )
-                X_init = ws_X
-                U_init = ws_U
-                used_warmstart = True
-
-        if not used_warmstart and ref_trajectory is not None:
+        # Determine initial guess: ref_trajectory or heuristic
+        if ref_trajectory is not None:
             # Use LLM-generated reference trajectory as initial guess
             logger.info("Using reference trajectory as initial guess")
             X_init = ref_trajectory["X_ref"].copy()
             U_init = ref_trajectory["U_ref"].copy()
-        elif not used_warmstart:
+        else:
             logger.info("Cold-starting with heuristic initial guess")
             # Better initial guess with phase-aware trajectory
             X_init = np.zeros((self.states_dim, self.horizon + 1))

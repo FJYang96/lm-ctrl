@@ -15,7 +15,6 @@ import casadi as cs
 import numpy as np
 
 from .dynamics.model import KinoDynamic_Model
-from .mpc_opti import _interpolate_warmstart
 
 logger = logging.getLogger("llm_integration")
 
@@ -314,7 +313,6 @@ class QuadrupedMPCOptiSlack:
         initial_state: np.ndarray,
         ref: np.ndarray,
         contact_sequence: np.ndarray,
-        warmstart: dict[str, Any] | None = None,
         ref_trajectory: dict[str, np.ndarray] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
         """Solve the trajectory optimization problem.
@@ -323,7 +321,6 @@ class QuadrupedMPCOptiSlack:
             initial_state: Initial state vector
             ref: Reference trajectory (shape: states_dim + inputs_dim)
             contact_sequence: Contact sequence array (shape: 4 x horizon)
-            warmstart: Optional dict with 'X' and 'U' arrays from a previous solution
             ref_trajectory: Optional dict with 'X_ref' (states_dim, horizon+1) and
                 'U_ref' (inputs_dim, horizon) used as solver initial guess.
         """
@@ -338,35 +335,13 @@ class QuadrupedMPCOptiSlack:
         self.opti.set_value(self.P_mass, self.config.robot_data.mass)
         self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
 
-        # Determine initial guess priority: warmstart > ref_trajectory > heuristic
-        used_warmstart = False
-        if warmstart is not None:
-            ws_X = _interpolate_warmstart(
-                warmstart.get("X"), self.states_dim, self.horizon + 1
-            )
-            ws_U = _interpolate_warmstart(
-                warmstart.get("U"), self.inputs_dim, self.horizon
-            )
-            if ws_X is not None and ws_U is not None:
-                prev_horizon = (
-                    warmstart["X"].shape[1] - 1
-                    if warmstart.get("X") is not None
-                    else "?"
-                )
-                logger.info(
-                    f"Warm-starting from previous solution "
-                    f"(horizon {prev_horizon} → {self.horizon})"
-                )
-                X_init = ws_X
-                U_init = ws_U
-                used_warmstart = True
-
-        if not used_warmstart and ref_trajectory is not None:
+        # Determine initial guess: ref_trajectory or heuristic
+        if ref_trajectory is not None:
             # Use LLM-generated reference trajectory as initial guess
             logger.info("Using reference trajectory as initial guess")
             X_init = ref_trajectory["X_ref"].copy()
             U_init = ref_trajectory["U_ref"].copy()
-        elif not used_warmstart:
+        else:
             logger.info("Cold-starting with heuristic initial guess")
             # Initial guess for states (heuristic)
             X_init = np.zeros((self.states_dim, self.horizon + 1))
