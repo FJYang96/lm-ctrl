@@ -175,7 +175,7 @@ def format_hardness_report(
             "",
             "EXAMPLE - Phase-aware constraint fix:",
             "```python",
-            "def constraint_fn(x_k, u_k, model, config, contact_k):",
+            "def constraint_fn(x_k, u_k, model, config, contact_k, k, horizon):",
             "    pitch = x_k[7]",
             "    is_flight = (contact_k[0] < 0.5)  # Check if in flight phase",
             "    ",
