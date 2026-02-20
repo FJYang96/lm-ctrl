@@ -233,6 +233,9 @@ Evaluate how well this trajectory achieves the commanded task."""
         simulation_result: dict[str, Any] | None = None,
         images: list[str] | None = None,
         visual_summary: str = "",
+        hardness_text: str = "",
+        constraint_violations: dict[str, Any] | None = None,
+        ref_metrics_text: str = "",
     ) -> dict[str, Any]:
         """
         Generate a structured iteration summary for the history log.
@@ -242,6 +245,18 @@ Evaluate how well this trajectory achieves the commanded task."""
         system_prompt = """You are summarizing a trajectory optimization iteration for a history log.
 A code-generation LLM will read this summary to understand what was tried, what happened, and
 what to do differently next time. Be DETAILED and SPECIFIC — vague summaries are useless.
+
+You receive comprehensive raw data for this iteration:
+- Full constraint code (read it to describe the approach)
+- Trajectory metrics (position, velocity, orientation, timing, GRF, actuator)
+- Constraint hardness analysis (slack values per constraint, violation timesteps, worst offenders)
+- Constraint violations (system and LLM constraint violations)
+- Reference trajectory analysis (RMSE for height/pitch/vz, plausibility metrics, ref vs actual)
+- Constraint feedback and reference feedback from specialized LLM calls
+- Video frames and visual summary of the trajectory
+
+Use ALL of this data to produce precise, number-rich summaries. Do not paraphrase vaguely —
+include exact values from the raw data.
 
 Return a JSON object with this structure:
 {
@@ -271,16 +286,16 @@ reference_approach (DETAILED — 5+ lines):
   - How the reference was built (min_jerk, ballistic, manual interpolation)
 
 constraint_feedback_summary (4-6 sentences):
-  - Which constraints worked and which failed
+  - Which constraints worked and which failed — cite exact slack values from the hardness data
   - Specific bound values that need changing and why
-  - Root cause of any solver failure or constraint violation
+  - Root cause of any solver failure or constraint violation — reference exact violation timesteps
   - Exact recommendations from the constraint feedback
 
 reference_feedback_summary (4-6 sentences):
-  - RMSE between reference and actual trajectory (height, pitch, velocity)
-  - Physics plausibility issues found
+  - Exact RMSE values from the reference analysis (height, pitch, vz)
+  - Physics plausibility issues found — cite specific metrics (velocity jumps, consistency errors)
   - Phase timing alignment problems
-  - Specific parameter changes recommended
+  - Specific parameter changes recommended with concrete numbers
 
 simulation_summary (3-5 sentences):
   - Whether simulation succeeded or failed and why
@@ -294,6 +309,8 @@ metrics_summary (compact but COMPLETE):
   - Flight duration, total duration
   - Solver status (converged/failed, iteration count)
   - Tracking error, simulation success/failure
+  - Key constraint slack values (worst offenders)
+  - Reference RMSE (height, pitch, vz)
 
 Return ONLY valid JSON, no markdown, no extra text."""
 
@@ -311,6 +328,28 @@ Return ONLY valid JSON, no markdown, no extra text."""
             if simulation_result.get("error"):
                 sim_text += f"\nSimulation error: {str(simulation_result['error'])}"
 
+        hardness_section = ""
+        if hardness_text:
+            hardness_section = f"\nCONSTRAINT HARDNESS ANALYSIS:\n{hardness_text}"
+
+        violations_section = ""
+        if constraint_violations:
+            violation_lines = []
+            for key, val in constraint_violations.items():
+                if isinstance(val, list):
+                    for item in val:
+                        violation_lines.append(f"  {key}: {item}")
+                else:
+                    violation_lines.append(f"  {key}: {val}")
+            if violation_lines:
+                violations_section = "\nCONSTRAINT VIOLATIONS:\n" + "\n".join(
+                    violation_lines
+                )
+
+        ref_section = ""
+        if ref_metrics_text:
+            ref_section = f"\nREFERENCE TRAJECTORY ANALYSIS:\n{ref_metrics_text}"
+
         user_message = f"""COMMAND: {command}
 ITERATION: {iteration}
 SCORE: {score:.2f}
@@ -325,6 +364,9 @@ FULL CONSTRAINT CODE:
 ```python
 {constraint_code}
 ```
+{hardness_section}
+{violations_section}
+{ref_section}
 
 CONSTRAINT FEEDBACK (full):
 {constraint_feedback if constraint_feedback else "None"}
@@ -434,6 +476,9 @@ def generate_iteration_summary(
     simulation_result: dict[str, Any] | None = None,
     images: list[str] | None = None,
     visual_summary: str = "",
+    hardness_text: str = "",
+    constraint_violations: dict[str, Any] | None = None,
+    ref_metrics_text: str = "",
 ) -> dict[str, Any]:
     """Generate a structured iteration summary for history."""
     return get_evaluator().generate_iteration_summary(
@@ -448,4 +493,7 @@ def generate_iteration_summary(
         simulation_result,
         images,
         visual_summary,
+        hardness_text,
+        constraint_violations,
+        ref_metrics_text,
     )

@@ -35,10 +35,6 @@ class MPCConfig:
     ref_state: np.ndarray | None
     ref_input: np.ndarray | None
 
-    # Warmstart trajectory
-    warmstart_state: np.ndarray | None
-    warmstart_input: np.ndarray | None
-
     # Path constraints
     path_constraints: list[
         Callable[

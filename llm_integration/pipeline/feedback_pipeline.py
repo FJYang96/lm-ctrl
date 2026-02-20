@@ -24,7 +24,10 @@ from ..feedback.llm_evaluation import (
     evaluate_iteration_unified,
     generate_iteration_summary,
 )
-from ..feedback.reference_feedback import generate_reference_feedback
+from ..feedback.reference_feedback import (
+    _compute_reference_metrics,
+    generate_reference_feedback,
+)
 from ..logging_config import logger
 from ..mpc import LLMTaskMPC
 from .constraint_generation import generate_constraints_with_retry
@@ -386,6 +389,9 @@ class FeedbackPipeline:
                 )
 
                 # Step 11: Iteration summary LLM call
+                ref_metrics_text = _compute_reference_metrics(
+                    ref_trajectory_data, state_trajectory, mpc_dt
+                )
                 iter_summary = generate_iteration_summary(
                     command=command,
                     iteration=iteration,
@@ -398,6 +404,9 @@ class FeedbackPipeline:
                     simulation_result=simulation_result,
                     images=self.current_images,
                     visual_summary=self.current_visual_summary,
+                    hardness_text=hardness_text,
+                    constraint_violations=constraint_violations,
+                    ref_metrics_text=ref_metrics_text,
                 )
                 self.iteration_summaries.append(iter_summary)
 
