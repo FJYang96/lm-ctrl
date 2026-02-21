@@ -68,6 +68,10 @@ def create_feedback_context(
     lines.append("")
     lines.append("--- ITERATION HISTORY ---")
     if self.iteration_summaries:
+        lines.append(
+            f"Brief summaries of all {len(self.iteration_summaries)} iterations. "
+            f"Detailed analysis of iteration {iteration} follows below."
+        )
         for entry in self.iteration_summaries:
             iter_num = entry.get("iteration", "?")
             iter_score = entry.get("score", 0.0)
@@ -114,9 +118,19 @@ def create_feedback_context(
     else:
         lines.append("  No previous iterations.")
 
+    lines.append("")
+    lines.append("--- END OF ITERATION SUMMARIES ---")
+
     # === Current Iteration Detailed Results ===
     lines.append("")
-    lines.append("--- CURRENT ITERATION DETAILED RESULTS ---")
+    lines.append("")
+    lines.append("#" * 60)
+    lines.append("#" * 60)
+    lines.append(f"###   ITERATION {iteration} — DETAILED DIAGNOSTIC REPORT")
+    lines.append("###   (Full metrics, code, feedback, and visual analysis)")
+    lines.append("###   USE THIS SECTION TO GUIDE YOUR NEXT ITERATION")
+    lines.append("#" * 60)
+    lines.append("#" * 60)
     lines.append(f"  Score: {score:.2f}")
     lines.append(f"  Solver: {'converged' if opt_success else 'FAILED'}")
 
