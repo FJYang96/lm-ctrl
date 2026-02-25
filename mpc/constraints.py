@@ -141,18 +141,16 @@ def foot_velocity_constraints(
     foot_velocities = cs.vertcat(
         foot_vel_FL[0:2], foot_vel_FR[0:2], foot_vel_RL[0:2], foot_vel_RR[0:2]
     )  # Dimension: 4 x 2 = 8 (only x and y components)
-    foot_velocity_min = cs.repmat(
+    foot_velocity_min = cs.kron(
         -config.mpc_config.path_constraint_params["NO_SLIP_EPS"] * contact_k
         - INF * (1 - contact_k),
-        2,  # Only 2 components (x, y) instead of 3
-        1,
-    ).reshape((-1, 1))
-    foot_velocity_max = cs.repmat(
+        cs.DM.ones(2, 1),  # Repeat each foot's bound for its x, y components
+    )
+    foot_velocity_max = cs.kron(
         config.mpc_config.path_constraint_params["NO_SLIP_EPS"] * contact_k
         + INF * (1 - contact_k),
-        2,  # Only 2 components (x, y) instead of 3
-        1,
-    ).reshape((-1, 1))
+        cs.DM.ones(2, 1),  # Repeat each foot's bound for its x, y components
+    )
 
     return foot_velocities, foot_velocity_min, foot_velocity_max
 
