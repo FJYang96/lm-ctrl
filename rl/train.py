@@ -82,7 +82,7 @@ def train(args: argparse.Namespace) -> None:
             for _ in range(args.num_envs)
         ]
     )
-    train_env = VecNormalize(train_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    train_env = VecNormalize(train_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
 
     # Eval env without randomization
     eval_env = SubprocVecEnv(

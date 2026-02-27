@@ -20,10 +20,10 @@ echo "Parallel envs: $NUM_ENVS"
 echo "Output: $OUTPUT_DIR"
 echo ""
 
-# Clean previous run
-if [ -d "$OUTPUT_DIR" ]; then
-    echo "Clearing previous trained models..."
-    rm -rf "$OUTPUT_DIR"
+# Clean all previous trained models
+if [ -d "rl/trained_models" ]; then
+    echo "Clearing rl/trained_models/..."
+    rm -rf rl/trained_models
 fi
 
 # Step 1: Train

@@ -104,29 +104,14 @@ def execute_policy_rollout(
     qvel_traj_out = []
     grf_traj_out = []
     images = []
-    # Build sensor/action history buffers (matching training env)
-    sim_obs = env._get_obs()
-    init_sensor = np.concatenate(
-        [sim_obs["qpos"][3:7], sim_obs["qpos"][7:19], sim_obs["qvel"][6:18]]
-    )
-    sensor_history = [init_sensor.copy() for _ in range(3)]
-    action_history = [np.zeros(12) for _ in range(3)]
-
     for phase in range(num_policy_steps):
-        # Build observation (same as tracking_env._build_obs)
+        # Build 30D observation (same as tracking_env._build_obs)
         sim_obs = env._get_obs()
         current_sensor = np.concatenate(
             [sim_obs["qpos"][3:7], sim_obs["qpos"][7:19], sim_obs["qvel"][6:18]]
         )
         phase_enc = ref.get_phase_encoding(phase)
-        obs = np.concatenate(
-            [
-                current_sensor,
-                phase_enc,
-                np.concatenate(sensor_history),
-                np.concatenate(action_history),
-            ]
-        ).astype(np.float32)
+        obs = np.concatenate([current_sensor, phase_enc]).astype(np.float32)
 
         # Normalize observation if normalizer available
         if obs_normalizer is not None:
@@ -163,12 +148,6 @@ def execute_policy_rollout(
                 renderer.update_scene(env.mjData)
                 image = renderer.render()
                 images.append(image)
-
-        # Update histories
-        sensor_history.pop(0)
-        sensor_history.append(current_sensor.copy())
-        action_history.pop(0)
-        action_history.append(action.copy())
 
     if renderer is not None:
         renderer.close()

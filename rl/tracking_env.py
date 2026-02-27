@@ -3,15 +3,14 @@
 Trains an RL policy to track a single MPC trajectory in closed loop.
 Adapted from Solo 8 (8 joints, 1.7kg) to Go2 (12 joints, 15kg).
 
-Observation (150D): sensor(30) + sensor_history(84) + action_history(36)
+Observation (30D): sensor(28) + phase(2)  — matches OPT-Mimic minimal obs
 Action (12D): residual joint position corrections
 Actuation: PD controller + J^T·F feedforward
-Reward: 5 Gaussian-exponential tracking terms (OPT-Mimic)
+Reward: 5 Gaussian tracking terms (OPT-Mimic Eq. 16, Table I)
 """
 
 from __future__ import annotations
 
-from collections import deque
 from typing import Any
 
 import gymnasium
@@ -33,12 +32,12 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
     TORQUE_LIMIT = 33.5  # Nm
     ACTION_LIMIT = 2.7  # rad (OPT-Mimic actuation_limit)
 
-    # Reward sigmas
-    SIGMA_POS = np.sqrt(0.1)
-    SIGMA_ORI = np.sqrt(0.1)
-    SIGMA_JOINT = np.sqrt(0.5)
-    SIGMA_SMOOTH = np.sqrt(0.2)
-    SIGMA_TORQUE = 15.0
+    # Reward sigmas (OPT-Mimic Table I)
+    SIGMA_POS = 0.05
+    SIGMA_ORI = 0.14
+    SIGMA_JOINT = 0.3
+    SIGMA_SMOOTH = 0.35
+    SIGMA_TORQUE = 3.0
 
     # Reward weights (sum to 1.0)
     W_POS = 0.3
@@ -49,7 +48,7 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
 
     TERM_MULTIPLIER = 2.5  # early termination threshold
     SENSOR_DIM = 28  # quat(4) + joints(12) + joint_vel(12)
-    OBS_DIM = 150  # sensor(30) + hist(84) + action_hist(36)
+    OBS_DIM = 30  # sensor(28) + phase(2) — matches OPT-Mimic
 
     def __init__(
         self,
@@ -97,8 +96,6 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         self._phase: int = 0
         self._prev_action = np.zeros(12)
         self._last_torque = np.zeros(12)
-        self._sensor_history: deque[np.ndarray] = deque(maxlen=3)
-        self._action_history: deque[np.ndarray] = deque(maxlen=3)
         self._joint_offset = np.zeros(12)
         self._torque_scale = 1.0
         # Store default solref for restoring when randomize=False
@@ -158,17 +155,6 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         self._prev_action = np.zeros(12)
         self._last_torque = np.zeros(12)
 
-        # Fill history with initial sensor reading
-        init_sensor = self._get_sensor()
-        self._sensor_history = deque(
-            [init_sensor.copy() for _ in range(3)],
-            maxlen=3,
-        )
-        self._action_history = deque(
-            [np.zeros(12) for _ in range(3)],
-            maxlen=3,
-        )
-
         return self._build_obs(), {}
 
     def step(
@@ -200,10 +186,6 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         for _ in range(self.substeps):
             sim_obs, _, _, _, _ = self._quad_env.step(action=torque)
 
-        # Update histories
-        self._sensor_history.append(self._get_sensor())
-        self._action_history.append(action.copy())
-
         # Reward and termination
         reward, reward_info = self._compute_reward(sim_obs, action)
         terminated = self._check_termination(reward_info)
@@ -228,13 +210,11 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         )
 
     def _build_obs(self) -> np.ndarray:
-        """Build 150D obs: sensor(28) + phase(2) + sensor_hist(84) + action_hist(36)."""
+        """Build 30D obs: sensor(28) + phase(2) — matches OPT-Mimic."""
         return np.concatenate(
             [
                 self._get_sensor(),  # 28
                 self.ref.get_phase_encoding(self._phase),  # 2
-                np.concatenate(list(self._sensor_history)),  # 84
-                np.concatenate(list(self._action_history)),  # 36
             ]
         ).astype(np.float32)
 
@@ -261,9 +241,9 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         rate_sq = np.sum((action - self._prev_action) ** 2)
         r_smooth = np.exp(-rate_sq / (2.0 * self.SIGMA_SMOOTH**2))
 
-        # Max torque penalty
+        # Max torque penalty (Gaussian, same as other terms)
         max_torque = np.max(np.abs(self._last_torque))
-        r_torque = np.exp(-max_torque / self.SIGMA_TORQUE)
+        r_torque = np.exp(-(max_torque**2) / (2.0 * self.SIGMA_TORQUE**2))
 
         total = (
             self.W_POS * r_pos
