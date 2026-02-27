@@ -20,6 +20,12 @@ echo "Parallel envs: $NUM_ENVS"
 echo "Output: $OUTPUT_DIR"
 echo ""
 
+# Clean previous run
+if [ -d "$OUTPUT_DIR" ]; then
+    echo "Clearing previous trained models..."
+    rm -rf "$OUTPUT_DIR"
+fi
+
 # Step 1: Train
 echo "[1/2] Training tracking policy..."
 python -m rl.train \
