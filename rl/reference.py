@@ -40,6 +40,7 @@ class ReferenceTrajectory:
         joint_vel_traj: np.ndarray,
         grf_traj: np.ndarray,
         feedforward_torques: np.ndarray | None = None,
+        contact_sequence: np.ndarray | None = None,
         control_dt: float = 0.02,
     ):
         self.state_traj = state_traj.copy()
@@ -48,6 +49,12 @@ class ReferenceTrajectory:
         self.control_dt = control_dt
         self.max_phase = joint_vel_traj.shape[0]
         self.duration = self.max_phase * control_dt
+
+        # Contact sequence (4, N): 1=stance, 0=swing. Used for contact termination.
+        if contact_sequence is not None:
+            self.contact_sequence = contact_sequence.copy()
+        else:
+            self.contact_sequence = None
 
         # Precompute quaternions from MPC Euler angles
         self._body_quats = np.zeros((self.max_phase + 1, 4))
@@ -96,6 +103,29 @@ class ReferenceTrajectory:
         """Precomputed feedforward torque J^T·F (12,) in Nm."""
         return self._ff_torques[self._clamp_phase(phase)].copy()
 
+    def get_contact_state(self, phase: int) -> np.ndarray:
+        """Expected foot contact state (4,) binary: 1=stance, 0=swing."""
+        if self.contact_sequence is None:
+            raise ValueError("No contact sequence stored in reference")
+        k = self._clamp_phase(phase)
+        return self.contact_sequence[:, k].copy()
+
+    def is_near_contact_transition(
+        self, phase: int, foot: int, window: int = 6
+    ) -> bool:
+        """Check if foot is within `window` steps of a contact transition.
+
+        Used for the 120ms grace window (6 steps at 50Hz) in OPT-Mimic.
+        """
+        if self.contact_sequence is None:
+            return False
+        k = self._clamp_phase(phase)
+        current = self.contact_sequence[foot, k]
+        lo = max(0, k - window)
+        hi = min(self.max_phase - 1, k + window)
+        # Transition exists if any step in the window has a different contact state
+        return bool(np.any(self.contact_sequence[foot, lo : hi + 1] != current))
+
     def get_phase_encoding(self, phase: int) -> np.ndarray:
         """Sinusoidal phase encoding [cos, sin] (2,). Matches OPT-Mimic."""
         angle = 2.0 * np.pi * phase / self.max_phase
@@ -107,12 +137,17 @@ class ReferenceTrajectory:
         state_traj_path: str,
         joint_vel_traj_path: str,
         grf_traj_path: str,
+        contact_sequence_path: str | None = None,
         control_dt: float = 0.02,
     ) -> ReferenceTrajectory:
         """Load from .npy files (e.g. results/ directory)."""
+        contact_seq = None
+        if contact_sequence_path is not None:
+            contact_seq = np.load(contact_sequence_path)
         return cls(
             state_traj=np.load(state_traj_path),
             joint_vel_traj=np.load(joint_vel_traj_path),
             grf_traj=np.load(grf_traj_path),
+            contact_sequence=contact_seq,
             control_dt=control_dt,
         )

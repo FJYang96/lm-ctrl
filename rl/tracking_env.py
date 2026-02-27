@@ -15,6 +15,7 @@ from collections import deque
 from typing import Any
 
 import gymnasium
+import mujoco
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
 from gymnasium import spaces
@@ -53,7 +54,7 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
     def __init__(
         self,
         ref: ReferenceTrajectory,
-        sim_dt: float = 0.01,
+        sim_dt: float = 0.001,
         control_dt: float = 0.02,
         randomize: bool = True,
     ):
@@ -64,18 +65,24 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         self.substeps = int(control_dt / sim_dt)
         self.randomize = randomize
 
+        # Friction randomization: tuple enables per-reset sampling (OPT-Mimic Table I)
+        # Paper: μ=0.8, σ=0.25 → ±1σ range ≈ [0.55, 1.05]
+        ground_friction = (0.55, 1.05) if randomize else 0.8
         self._quad_env = QuadrupedEnv(
             robot="go2",
             scene="flat",
-            ground_friction_coeff=0.5,
+            ground_friction_coeff=ground_friction,
             state_obs_names=QuadrupedEnv._DEFAULT_OBS + ("contact_forces:base",),
             sim_dt=sim_dt,
         )
 
-        # Unbounded action space — tanh squashing applied in step()
+        # Cache ground geom IDs for restitution randomization
+        self._ground_geom_ids = self._find_ground_geom_ids()
+
+        # [-1, 1] action space, scaled by ACTION_LIMIT in step() (OPT-Mimic tanh output)
         self.action_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
+            low=-1.0,
+            high=1.0,
             shape=(12,),
             dtype=np.float32,
         )
@@ -94,6 +101,19 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         self._action_history: deque[np.ndarray] = deque(maxlen=3)
         self._joint_offset = np.zeros(12)
         self._torque_scale = 1.0
+        # Store default solref for restoring when randomize=False
+        self._default_solref = self._quad_env.mjModel.geom_solref.copy()
+
+    def _find_ground_geom_ids(self) -> list[int]:
+        """Find MuJoCo geom IDs for the ground surface."""
+        ground_names = {"ground", "floor", "hfield", "terrain"}
+        ids = []
+        model = self._quad_env.mjModel
+        for gid in range(model.ngeom):
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, gid)
+            if name and name.lower() in ground_names:
+                ids.append(gid)
+        return ids
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
@@ -106,24 +126,35 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
             self._torque_scale = float(
                 np.clip(self.np_random.normal(1.0, 0.1), 0.5, 1.5)
             )
+            # Restitution randomization (OPT-Mimic Table I: μ=0.0, σ=0.25, clipped [0,1])
+            # MuJoCo solref[1] is damping ratio: 1.0=no bounce, lower=bouncier
+            restitution = float(np.clip(self.np_random.normal(0.0, 0.25), 0.0, 1.0))
+            damping_ratio = 1.0 - restitution  # map restitution→damping
+            for gid in self._ground_geom_ids:
+                self._quad_env.mjModel.geom_solref[gid, 1] = damping_ratio
+            # Random phase initialization (OPT-Mimic Section III-C.4)
+            start_phase = int(self.np_random.integers(0, self.ref.max_phase))
         else:
             self._joint_offset = np.zeros(12)
             self._torque_scale = 1.0
+            # Restore default solref
+            self._quad_env.mjModel.geom_solref[:] = self._default_solref
+            start_phase = 0
 
-        # Reset MuJoCo to reference initial state
+        # Reset MuJoCo to reference state at start_phase
         init_qpos = np.zeros(19)
-        init_qpos[0:3] = self.ref.get_body_pos(0)
-        init_qpos[3:7] = self.ref.get_body_quat(0)
-        init_qpos[7:19] = self.ref.get_joint_pos(0)
+        init_qpos[0:3] = self.ref.get_body_pos(start_phase)
+        init_qpos[3:7] = self.ref.get_body_quat(start_phase)
+        init_qpos[7:19] = self.ref.get_joint_pos(start_phase)
 
         init_qvel = np.zeros(18)
-        init_qvel[0:3] = self.ref.get_body_vel(0)
-        init_qvel[3:6] = self.ref.get_body_ang_vel(0)
-        init_qvel[6:18] = self.ref.get_joint_vel(0)
+        init_qvel[0:3] = self.ref.get_body_vel(start_phase)
+        init_qvel[3:6] = self.ref.get_body_ang_vel(start_phase)
+        init_qvel[6:18] = self.ref.get_joint_vel(start_phase)
 
         self._quad_env.reset(qpos=init_qpos, qvel=init_qvel)
 
-        self._phase = 0
+        self._phase = start_phase
         self._prev_action = np.zeros(12)
         self._last_torque = np.zeros(12)
 
@@ -143,8 +174,8 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
     def step(
         self, action: np.ndarray
     ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
-        # tanh squashing (OPT-Mimic): smooth mapping to [-ACTION_LIMIT, ACTION_LIMIT]
-        action = np.tanh(action) * self.ACTION_LIMIT
+        # Scale [-1, 1] to [-ACTION_LIMIT, ACTION_LIMIT] (OPT-Mimic tanh output)
+        action = action * self.ACTION_LIMIT
 
         # PD + feedforward torque computation
         ref_joint_pos = self.ref.get_joint_pos(self._phase)
@@ -165,7 +196,7 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         torque = torque * self._torque_scale
         self._last_torque = torque.copy()
 
-        # Step MuJoCo (2 substeps per policy step)
+        # Step MuJoCo (substeps per policy step)
         for _ in range(self.substeps):
             sim_obs, _, _, _, _ = self._quad_env.step(action=torque)
 
@@ -251,6 +282,13 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         }
         return float(total), info
 
+    # GRF z-component indices for each foot in the 12D contact_forces:base vector
+    _GRF_Z_INDICES = [2, 5, 8, 11]  # FL_z, FR_z, RL_z, RR_z
+    CONTACT_FORCE_THRESHOLD = (
+        1.0  # Newtons — foot considered in contact if GRF_z > this
+    )
+    CONTACT_GRACE_WINDOW = 6  # steps (120ms at 50Hz) — tolerance near transitions
+
     def _check_termination(self, info: dict[str, float]) -> bool:
         """Early termination if any error exceeds 2.5× its sigma."""
         if info["pos_error"] > self.TERM_MULTIPLIER * self.SIGMA_POS:
@@ -267,6 +305,22 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         # Fall detection
         if self._quad_env._get_obs()["qpos"][2] < 0.05:
             return True
+
+        # Contact consistency termination (OPT-Mimic Section III-C.4)
+        if self.ref.contact_sequence is not None:
+            sim_obs = self._quad_env._get_obs()
+            grf = sim_obs["contact_forces:base"]
+            actual_contact = np.array(
+                [grf[i] > self.CONTACT_FORCE_THRESHOLD for i in self._GRF_Z_INDICES]
+            )
+            expected_contact = self.ref.get_contact_state(self._phase) > 0.5
+            for foot in range(4):
+                if actual_contact[foot] != expected_contact[foot]:
+                    # Allow mismatch near contact transitions
+                    if not self.ref.is_near_contact_transition(
+                        self._phase, foot, self.CONTACT_GRACE_WINDOW
+                    ):
+                        return True
 
         return False
 

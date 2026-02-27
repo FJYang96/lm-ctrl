@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import mujoco
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -87,6 +88,11 @@ def execute_policy_rollout(
 
     env.reset(qpos=init_qpos, qvel=init_qvel)
 
+    # Offscreen renderer for video capture (no GUI needed)
+    renderer = None
+    if config.experiment.render:
+        renderer = mujoco.Renderer(env.mjModel, height=480, width=640)
+
     # PD gains (must match training)
     KP = Go2TrackingEnv.KP
     KD = Go2TrackingEnv.KD
@@ -128,7 +134,7 @@ def execute_policy_rollout(
 
         # Query policy
         action, _ = policy.predict(obs, deterministic=True)
-        action = np.tanh(action) * Go2TrackingEnv.ACTION_LIMIT
+        action = action * Go2TrackingEnv.ACTION_LIMIT
 
         # PD + feedforward
         ref_joint_pos = ref.get_joint_pos(phase)
@@ -153,11 +159,9 @@ def execute_policy_rollout(
             qvel_traj_out.append(sim_obs["qvel"].copy())
             grf_traj_out.append(sim_obs["contact_forces:base"].copy())
 
-            if config.experiment.render:
-                image = env.render(mode="rgb_array", tint_robot=True)
-                if planned_traj_images is not None:
-                    idx = min(phase, len(planned_traj_images) - 1)
-                    image = np.uint8(0.7 * image + 0.3 * planned_traj_images[idx])
+            if renderer is not None:
+                renderer.update_scene(env.mjData)
+                image = renderer.render()
                 images.append(image)
 
         # Update histories
@@ -166,6 +170,8 @@ def execute_policy_rollout(
         action_history.pop(0)
         action_history.append(action.copy())
 
+    if renderer is not None:
+        renderer.close()
     if obs_normalizer is not None:
         obs_normalizer.venv.close()
 

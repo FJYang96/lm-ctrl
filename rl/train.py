@@ -33,6 +33,7 @@ def build_reference(
     state_traj_path: str,
     grf_traj_path: str,
     joint_vel_traj_path: str,
+    contact_sequence_path: str | None = None,
     control_dt: float = 0.02,
 ) -> ReferenceTrajectory:
     """Load MPC trajectory and precompute feedforward torques."""
@@ -40,6 +41,7 @@ def build_reference(
         state_traj_path,
         joint_vel_traj_path,
         grf_traj_path,
+        contact_sequence_path=contact_sequence_path,
         control_dt=control_dt,
     )
     kindyn = KinoDynamic_Model(config)
@@ -66,6 +68,7 @@ def train(args: argparse.Namespace) -> None:
         args.state_traj,
         args.grf_traj,
         args.joint_vel_traj,
+        contact_sequence_path=args.contact_sequence,
         control_dt=args.control_dt,
     )
 
@@ -150,10 +153,11 @@ if __name__ == "__main__":
     parser.add_argument("--state-traj", type=str, required=True)
     parser.add_argument("--grf-traj", type=str, required=True)
     parser.add_argument("--joint-vel-traj", type=str, required=True)
+    parser.add_argument("--contact-sequence", type=str, default=None)
     parser.add_argument("--output-dir", type=str, default="rl/trained_models")
     parser.add_argument("--total-timesteps", type=int, default=2_000_000)
     parser.add_argument("--num-envs", type=int, default=16)
-    parser.add_argument("--sim-dt", type=float, default=0.01)
+    parser.add_argument("--sim-dt", type=float, default=0.001)
     parser.add_argument("--control-dt", type=float, default=0.02)
     args = parser.parse_args()
     train(args)
