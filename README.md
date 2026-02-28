@@ -1,157 +1,148 @@
-# Quadruped Hopping MPC - Acados & CasADi Opti
+# LLM-Controlled Quadruped Locomotion
 
-This repository contains both the original Acados-based and the new CasADi Opti-based implementations of a quadruped hopping MPC controller.
+Natural language to dynamic quadruped behaviors. An LLM generates trajectory optimization constraints from commands like "do a backflip," a CasADi MPC solver plans the motion, and an RL tracking policy (OPT-Mimic) executes it in simulation.
 
-## 🚀 NEW: LLM-Enhanced Control
+## Architecture
 
-This repository now includes an **LLM feedback pipeline** that automatically generates trajectory optimization constraints from natural language commands. Turn "do a backflip" into precise robot control!
-
-### Quick LLM Demo
-
-```bash
-# Set up API key in .env file
-echo "ANTHROPIC_API_KEY=your_key_here" > .env
-
-# Install additional dependencies
-pip install -r requirements_llm.txt
-
-# Generate robot behaviors with natural language
-python llm_main.py "do a backflip"
-python llm_main.py "jump as high as possible"
-python llm_main.py "spin in a circle"
+```
+"do a backflip"
+      │
+      ▼
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+│  LLM        │────▶│  CasADi MPC  │────▶│  RL Tracking  │
+│  (Claude)   │     │  Optimizer   │     │  Policy (PPO) │
+│             │     │              │     │               │
+│ Generates   │     │ Plans state  │     │ Closed-loop   │
+│ constraints │◀────│ trajectory,  │     │ execution in  │
+│ from text   │ fb  │ GRFs, joints │     │ MuJoCo        │
+└─────────────┘     └──────────────┘     └──────────────┘
 ```
 
-## Run the LLM Frontend
-```bash
-cd frontend
-pip install requirements.txt
-python app.py
-```
-
-📖 **See [LLM_INTEGRATION_README.md](LLM_INTEGRATION_README.md) for complete documentation**
+**Three-stage pipeline:**
+1. **LLM constraint generation** — Claude translates natural language into CasADi optimization constraints with iterative feedback refinement
+2. **MPC trajectory optimization** — CasADi/IPOPT solves for state trajectories, ground reaction forces, and joint velocities using a Single Rigid Body dynamics model
+3. **RL tracking policy** — A PPO policy (OPT-Mimic) tracks the planned trajectory in MuJoCo with PD control + J^T·F feedforward torques
 
 ## Quick Start
 
-### Run the Opti Version (Recommended)
+### LLM Pipeline
+```bash
+# Set up API key
+echo "ANTHROPIC_API_KEY=your_key_here" > .env
+pip install -r requirements_llm.txt
+
+# Generate behaviors from natural language
+python llm_main.py "do a backflip"
+python llm_main.py "jump as high as possible"
+```
+
+### RL Tracking Policy
+```bash
+# Train and evaluate on an existing MPC trajectory
+./rl/run_smoke_test.sh 3000000 8  # 3M steps, 8 parallel envs
+
+# Or run steps individually:
+python -m rl.train --state-traj results/state_traj.npy --grf-traj results/grf_traj.npy --joint-vel-traj results/joint_vel_traj.npy
+python -m rl.evaluate --model-path rl/trained_models/smoke_test/best_model/best_model.zip
+python -m rl.generate_frames  # extract frames for visual comparison
+```
+
+### MPC Only (No LLM)
 ```bash
 ./run_opti.sh
 ```
 
-### Run the Original Acados Version
+### Web Frontend
 ```bash
-./run_acados.sh
+cd frontend && pip install -r requirements.txt && python app.py
 ```
 
-### Manual Docker Run (if needed)
-```bash
-docker run --rm -v $(pwd):/home/lm-ctrl --workdir /home/lm-ctrl quadruped-lm-ctrl \
-  /opt/conda/bin/conda run -n quadruped_pympc_ros2_env python main.py --solver opti
+## Project Structure
+
 ```
+├── llm_integration/                    # LLM feedback pipeline
+│   ├── pipeline/
+│   │   ├── feedback_pipeline.py        # Main iterative loop: generate → optimize → simulate → score → feedback
+│   │   ├── optimization.py             # Calls MPC solver, handles failures and retries
+│   │   ├── simulation.py               # Runs MuJoCo simulation on planned trajectories, captures video
+│   │   ├── constraint_generation.py    # Prompts LLM to generate CasADi constraint code
+│   │   ├── feedback_context.py         # Builds context string (metrics, history, feedback) for LLM
+│   │   └── utils.py                    # Iteration directory management, file I/O helpers
+│   ├── feedback/
+│   │   ├── llm_evaluation.py           # LLM-based scoring: success/failure判定, iteration summaries
+│   │   ├── constraint_feedback.py      # Analyzes constraint design and suggests fixes
+│   │   ├── reference_feedback.py       # RMSE metrics + physics plausibility of reference trajectory
+│   │   ├── video_extraction.py         # Extracts key frames from videos as base64 for LLM vision
+│   │   ├── format_metrics.py           # Formats numerical metrics for LLM prompts
+│   │   └── format_hardness.py          # Constraint violation severity formatting
+│   ├── client/
+│   │   ├── llm_client.py               # Anthropic API wrapper with retry logic
+│   │   └── code_extraction.py          # Parses Python code blocks from LLM responses
+│   ├── executor/
+│   │   ├── safe_executor.py            # Sandboxed exec() for LLM-generated constraint code
+│   │   └── globals.py                  # Allowed functions/variables exposed to LLM code
+│   ├── mpc/
+│   │   ├── llm_task_mpc.py             # Wraps MPC solver with LLM-generated constraints
+│   │   ├── constraint_wrapper.py       # Applies constraint code to CasADi Opti problem
+│   │   ├── config_management.py        # MPC config overrides per iteration
+│   │   └── contact_utils.py            # Contact sequence generation from phase descriptions
+│   └── _prompts/
+│       ├── system_prompt.py            # System prompt: robot specs, CasADi API, constraint format
+│       └── user_prompts.py             # User prompt templates for each LLM call
+│
+├── mpc/                                # Core MPC solver
+│   ├── mpc_opti.py                     # CasADi Opti-based MPC (base formulation)
+│   ├── mpc_opti_slack.py               # Slack variable formulation for soft constraints
+│   ├── mpc_config.py                   # MPC hyperparameters (horizon, dt, weights, bounds)
+│   ├── constraints.py                  # Standard constraint definitions (friction, kinematics)
+│   ├── config_complementarity.py       # Contact complementarity constraint config
+│   └── dynamics/
+│       └── model.py                    # Kinodynamic model: Jacobians, forward dynamics, mass matrix
+│
+├── rl/                                 # RL tracking policy (OPT-Mimic)
+│   ├── tracking_env.py                 # Go2 Gymnasium env: 39D obs, PD+feedforward, multiplicative reward
+│   ├── train.py                        # PPO training with SB3, LR schedule, domain randomization
+│   ├── evaluate.py                     # Compute tracking errors (pos/ori/joint RMS) and save video
+│   ├── rollout.py                      # Policy rollout — drop-in replacement for inverse dynamics
+│   ├── feedforward.py                  # J^T·F feedforward torques via CasADi Jacobians
+│   ├── reference.py                    # Wraps .npy arrays into per-timestep lookups (pos, vel, GRF, phase)
+│   ├── callbacks.py                    # VecNormalize saver, training logger, reward plots, diagnostics
+│   ├── generate_frames.py             # Extract video frames into folders for visual comparison
+│   └── run_smoke_test.sh               # End-to-end: train → evaluate → generate comparison frames
+│
+├── utils/
+│   ├── simulation.py                   # MuJoCo simulation loop: apply torques, capture frames
+│   ├── inv_dyn.py                      # Open-loop inverse dynamics (J^T·F torque computation)
+│   ├── visualization.py                # Trajectory comparison plots (planned vs simulated)
+│   └── conversion.py                   # State format conversion between MPC and MuJoCo representations
+│
+├── frontend/
+│   ├── app.py                          # Flask backend: API endpoints for running pipeline via web UI
+│   └── templates/index.html            # Single-page frontend with live logs and video playback
+│
+├── main.py                             # Standalone MPC pipeline (no LLM): optimize → simulate → save
+├── llm_main.py                         # LLM pipeline entry point: parse command → run feedback loop
+├── config.py                           # Global config: robot, experiment, MPC parameters
+└── configs/
+    ├── experiments/base.py             # Experiment settings (sim_dt, render, friction)
+    └── robots/robot_data.py            # Robot-specific parameters (Go2 mass, inertia, joint limits)
+```
+
+## Robot
+
+**Unitree Go2** — 12-DOF quadruped (15kg). Simulated in MuJoCo via [gym-quadruped](https://github.com/iit-DLSLab/gym-quadruped).
+
+## Key References
+
+- **OPT-Mimic** (Fuchioka et al., 2023) — RL tracking policy architecture
+- **CasADi** — Symbolic optimization framework for trajectory planning
+- **MuJoCo** — Physics simulation for policy training and evaluation
+- **Stable Baselines3** — PPO implementation
 
 ## Output Files
 
-Both versions generate:
-- **Trajectory data**: `state_traj*.npy`, `grf_traj*.npy`, `joint_vel_traj*.npy`
-- **Videos**: `planned_traj*.mp4`, `trajectory*.mp4`
-- Opti version files have `_opti` suffix
-
-## Key Files
-
-### Core Implementation
-- `examples/mpc_opti.py` - New CasADi Opti-based MPC
-- `examples/mpc.py` - Original Acados-based MPC
-- `examples/model.py` - Kinodynamic model (shared)
-- `config.py` - Robot and MPC parameters
-
-### Main Scripts
-- `main.py` - Unified pipeline (use `--solver opti` or `--solver acados`)
-
-### Docker Scripts
-- `run_opti.sh` - Run Opti version in Docker
-- `run_acados.sh` - Run original version in Docker
-
-## CasADi Opti Advantages
-
-1. **Intuitive Formulation** - Direct mathematical constraint specification
-2. **Faster Development** - No C code compilation overhead
-3. **Better Debugging** - Clear symbolic expressions
-4. **Future Ready** - Supports complementarity constraints
-5. **Equivalent Results** - Same quality optimization as Acados
-
-## Technical Details
-
-### Opti vs Acados Architecture Comparison
-
-**Original Acados Implementation:**
-```python
-# Complex setup with separate bound arrays
-ocp.constraints.lh = np.concatenate((lb_friction, lb_height, lb_velocity))
-ocp.constraints.uh = np.concatenate((ub_friction, ub_height, ub_velocity))
-
-# Compiled C code generation
-acados_ocp_solver = AcadosOcpSolver(ocp, build=True, generate=True)
-```
-
-**New Opti Implementation:**
-```python
-# Decision variables
-self.X = self.opti.variable(self.states_dim, self.horizon + 1)
-self.U = self.opti.variable(self.inputs_dim, self.horizon)
-
-# Objective function
-self.opti.minimize(cost)
-
-# Direct mathematical constraints
-self.opti.subject_to(x_next == x_k + dt * f_k)  # Dynamics
-self.opti.subject_to(f_tangential_norm <= self.P_mu * f[2])  # Friction
-self.opti.subject_to(height >= 0)  # Foot height
-
-# Direct solving
-sol = self.opti.solve()
-```
-
-### Implementation Features
-
-**Cost Function:**
-- Quadratic tracking cost for states and inputs
-- Separate terminal cost for final state
-- Weights from config parameters preserved
-
-**Constraints:**
-1. **Dynamics Constraints** - Using existing `forward_dynamics` from kinodynamic model
-2. **Friction Cone** - Coulomb friction with contact-dependent activation
-3. **Foot Height** - Ground clearance constraints based on contact sequence
-4. **Foot Velocity** - Velocity limits for contacted feet
-5. **Input Bounds** - Joint velocity and force limits
-
-**Solver Configuration:**
-- IPOPT solver with appropriate tolerances
-- Smart initial guess with gravity compensation
-- Error handling for failed optimizations
-
-### Parameter Management
-```python
-# Runtime parameters
-self.P_contact = self.opti.parameter(4, self.horizon)
-self.P_mu = self.opti.parameter()
-self.P_grf_min = self.opti.parameter()
-
-# Set at solve time
-self.opti.set_value(self.P_contact, contact_sequence)
-```
-
-## Future Enhancements
-
-The Opti framework enables several future improvements:
-
-1. **Complementarity Constraints** - For automatic contact detection
-2. **Variable Contact Sequences** - Optimization over gait patterns
-3. **Multi-Contact Scenarios** - Complex terrain interactions
-4. **Real-time Capabilities** - With warm-starting and reduced horizons
-
-## Requirements
-
-- Docker (for containerized execution)
-- All dependencies are included in the Docker image
-
-This transcription provides a solid foundation for advanced trajectory optimization research while maintaining compatibility with the existing codebase.
+After running the pipeline:
+- `results/state_traj.npy`, `grf_traj.npy`, `joint_vel_traj.npy` — planned trajectory
+- `results/trajectory.mp4` — planned trajectory video (MuJoCo, open-loop)
+- `results/rl_tracking.mp4` — RL tracking video (MuJoCo, closed-loop)
+- `results/comparison/` — extracted frames for visual comparison

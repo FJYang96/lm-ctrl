@@ -346,9 +346,9 @@ def diagnose_termination(
     log.info("=" * 60)
     log.info(f"Trajectory: {ref.max_phase} steps, {ref.duration:.2f}s")
     log.info(
-        f"Thresholds: pos>{2.5*env.SIGMA_POS:.3f}m  ori>{2.5*env.SIGMA_ORI:.3f}rad  "
-        f"joint>{2.5*env.SIGMA_JOINT:.3f}rad  smooth>{2.5*env.SIGMA_SMOOTH:.3f}rad  "
-        f"torque>{2.5*env.SIGMA_TORQUE:.1f}Nm"
+        f"Thresholds: pos>{2.5 * env.SIGMA_POS:.3f}m  ori>{2.5 * env.SIGMA_ORI:.3f}rad  "
+        f"joint>{2.5 * env.SIGMA_JOINT:.3f}rad  smooth>{2.5 * env.SIGMA_SMOOTH:.3f}rad  "
+        f"torque>{2.5 * env.SIGMA_TORQUE:.1f}Nm"
     )
     log.info("-" * 60)
     log.info(
@@ -380,7 +380,7 @@ def diagnose_termination(
             break
         if truncated:
             log.info("")
-            log.info(f">>> Completed full trajectory ({step+1} steps)")
+            log.info(f">>> Completed full trajectory ({step + 1} steps)")
             break
 
     if normalizer is not None:
