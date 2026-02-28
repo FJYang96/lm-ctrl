@@ -20,11 +20,12 @@ echo "Parallel envs: $NUM_ENVS"
 echo "Output: $OUTPUT_DIR"
 echo ""
 
-# Clean all previous trained models
+# Clean all previous trained models and diagnostics
 if [ -d "rl/trained_models" ]; then
     echo "Clearing rl/trained_models/..."
     rm -rf rl/trained_models
 fi
+rm -f rl/diagnostics.log
 
 # Step 1: Train
 echo "[1/2] Training tracking policy..."

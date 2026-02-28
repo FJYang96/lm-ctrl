@@ -45,9 +45,9 @@ def execute_policy_rollout(
     This replaces compute_joint_torques() + simulate_trajectory().
     Same return format: (qpos_traj, qvel_traj, grf_traj, images).
     """
-    sim_dt = config.experiment.sim_dt
+    sim_dt = 0.001  # 1kHz physics, matching RL training (OPT-Mimic)
     control_dt = config.mpc_config.mpc_dt
-    substeps = int(control_dt / sim_dt)
+    substeps = int(control_dt / sim_dt)  # 20 substeps per policy step
 
     # Build reference + feedforward
     ref = ReferenceTrajectory(
@@ -105,10 +105,16 @@ def execute_policy_rollout(
     grf_traj_out = []
     images = []
     for phase in range(num_policy_steps):
-        # Build 30D observation (same as tracking_env._build_obs)
+        # Build 39D observation (same as tracking_env._build_obs)
         sim_obs = env._get_obs()
         current_sensor = np.concatenate(
-            [sim_obs["qpos"][3:7], sim_obs["qpos"][7:19], sim_obs["qvel"][6:18]]
+            [
+                sim_obs["qpos"][0:3],  # body pos (3)
+                sim_obs["qpos"][3:7],  # body quat (4)
+                sim_obs["qpos"][7:19],  # joints (12)
+                sim_obs["qvel"][0:6],  # body vel (6)
+                sim_obs["qvel"][6:18],  # joint vel (12)
+            ]
         )
         phase_enc = ref.get_phase_encoding(phase)
         obs = np.concatenate([current_sensor, phase_enc]).astype(np.float32)

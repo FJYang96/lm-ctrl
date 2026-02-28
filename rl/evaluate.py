@@ -22,6 +22,7 @@ import config
 from mpc.dynamics.model import KinoDynamic_Model
 from utils.conversion import sim_to_mpc
 
+from .callbacks import diagnose_termination
 from .rollout import execute_policy_rollout
 
 
@@ -59,11 +60,22 @@ def evaluate(args: argparse.Namespace) -> None:
         scene="flat",
         ground_friction_coeff=config.experiment.mu_ground,
         state_obs_names=QuadrupedEnv._DEFAULT_OBS + ("contact_forces:base",),
-        sim_dt=config.experiment.sim_dt,
+        sim_dt=0.001,  # 1kHz physics, matching RL training (OPT-Mimic)
     )
 
     print(f"Running RL tracking policy from {args.model_path}...")
     policy = PPO.load(args.model_path)
+
+    # Diagnostic: run one episode in tracking env to see what kills it
+    diagnose_termination(
+        state_traj,
+        grf_traj,
+        joint_vel_traj,
+        kindyn,
+        policy,
+        vec_normalize_path=args.normalize_path,
+    )
+
     qpos_rl, qvel_rl, grf_rl, images = execute_policy_rollout(
         env,
         state_traj,

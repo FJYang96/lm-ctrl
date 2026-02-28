@@ -49,7 +49,9 @@ class FeedforwardComputer:
             + J_RL.T @ grf_sym[6:9]
             + J_RR.T @ grf_sym[9:12]
         )
-        tau_ff_joints = wrench_full[6:]  # skip 6 base DOFs -> (12,)
+        tau_ff_joints = -wrench_full[
+            6:
+        ]  # skip 6 base DOFs -> (12,); negate for MuJoCo sign convention
 
         self._ff_fun = cs.Function(
             "feedforward_torque",

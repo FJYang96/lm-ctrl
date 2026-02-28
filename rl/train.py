@@ -24,6 +24,12 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 import config
 from mpc.dynamics.model import KinoDynamic_Model
 
+from .callbacks import (
+    RewardPlotCallback,
+    TrainingLogCallback,
+    VecNormalizeSaveCallback,
+    write_training_header,
+)
 from .feedforward import FeedforwardComputer
 from .reference import ReferenceTrajectory
 from .tracking_env import Go2TrackingEnv
@@ -109,7 +115,7 @@ def train(args: argparse.Namespace) -> None:
         gamma=0.995,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.0,
+        ent_coef=0.005,  # prevent entropy collapse (SB3 shares actor/critic optimizer)
         vf_coef=0.5,
         max_grad_norm=0.5,
         verbose=1,
@@ -135,8 +141,18 @@ def train(args: argparse.Namespace) -> None:
             best_model_save_path=str(output_dir / "best_model"),
             deterministic=True,
         ),
+        VecNormalizeSaveCallback(
+            save_path=str(output_dir / "vec_normalize.pkl"),
+            save_freq=25_000,
+        ),
+        RewardPlotCallback(
+            plot_dir=str(output_dir),
+            plot_freq=100_000,
+        ),
+        TrainingLogCallback(),
     ]
 
+    write_training_header(args.total_timesteps, args.num_envs, ref)
     model.learn(total_timesteps=args.total_timesteps, callback=callbacks)
     model.save(str(output_dir / "tracking_policy_final"))
 
@@ -155,7 +171,7 @@ if __name__ == "__main__":
     parser.add_argument("--joint-vel-traj", type=str, required=True)
     parser.add_argument("--contact-sequence", type=str, default=None)
     parser.add_argument("--output-dir", type=str, default="rl/trained_models")
-    parser.add_argument("--total-timesteps", type=int, default=2_000_000)
+    parser.add_argument("--total-timesteps", type=int, default=10_000_000)
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--sim-dt", type=float, default=0.001)
     parser.add_argument("--control-dt", type=float, default=0.02)

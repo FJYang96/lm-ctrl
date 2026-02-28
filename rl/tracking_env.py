@@ -3,7 +3,7 @@
 Trains an RL policy to track a single MPC trajectory in closed loop.
 Adapted from Solo 8 (8 joints, 1.7kg) to Go2 (12 joints, 15kg).
 
-Observation (30D): sensor(28) + phase(2)  — matches OPT-Mimic minimal obs
+Observation (39D): body_pos(3) + body_quat(4) + joints(12) + body_vel(6) + joint_vel(12) + phase(2)
 Action (12D): residual joint position corrections
 Actuation: PD controller + J^T·F feedforward
 Reward: 5 Gaussian tracking terms (OPT-Mimic Eq. 16, Table I)
@@ -29,26 +29,27 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
     KP = 25.0
     KD = 1.5
 
-    TORQUE_LIMIT = 33.5  # Nm
-    ACTION_LIMIT = 2.7  # rad (OPT-Mimic actuation_limit)
+    TORQUE_LIMIT = 55.0  # Nm — must exceed max feedforward (49.2 Nm at landing)
+    ACTION_LIMIT = 0.5  # rad — Kp×0.5=12.5Nm residual for takeoff compensation
 
-    # Reward sigmas (OPT-Mimic Table I)
-    SIGMA_POS = 0.05
-    SIGMA_ORI = 0.14
-    SIGMA_JOINT = 0.3
-    SIGMA_SMOOTH = 0.35
-    SIGMA_TORQUE = 3.0
+    # Reward sigmas — OPT-Mimic Table I, joint/smooth/torque scaled for Go2
+    SIGMA_POS = 0.10  # tighter: with correct torques the robot should actually hop
+    SIGMA_ORI = 0.14  # Solo 8 value
+    SIGMA_JOINT = 0.5  # was 0.3; Go2 joint errors ~2× larger (heavier limbs)
+    SIGMA_SMOOTH = 1.0  # scaled for ACTION_LIMIT=0.5: max action rate ≈ 1.0
+    SIGMA_TORQUE = 40.0  # scaled for 55Nm limit; Gaussian=0.36 at clamp, gives gradient
 
-    # Reward weights (sum to 1.0)
-    W_POS = 0.3
-    W_ORI = 0.3
+    # Reward weights for geometric mean (sum to 1.0)
+    # Position gets highest weight — must actually track the hop
+    W_POS = 0.4
+    W_ORI = 0.2
     W_JOINT = 0.2
     W_SMOOTH = 0.1
     W_TORQUE = 0.1
 
     TERM_MULTIPLIER = 2.5  # early termination threshold
-    SENSOR_DIM = 28  # quat(4) + joints(12) + joint_vel(12)
-    OBS_DIM = 30  # sensor(28) + phase(2) — matches OPT-Mimic
+    SENSOR_DIM = 37  # body_pos(3) + quat(4) + joints(12) + body_vel(6) + joint_vel(12)
+    OBS_DIM = 39  # sensor(37) + phase(2) — full OPT-Mimic obs
 
     def __init__(
         self,
@@ -65,8 +66,8 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         self.randomize = randomize
 
         # Friction randomization: tuple enables per-reset sampling (OPT-Mimic Table I)
-        # Paper: μ=0.8, σ=0.25 → ±1σ range ≈ [0.55, 1.05]
-        ground_friction = (0.55, 1.05) if randomize else 0.8
+        # Centered on config μ=0.5 with σ=0.25 → ±1σ range ≈ [0.25, 0.75]
+        ground_friction = (0.25, 0.75) if randomize else 0.5
         self._quad_env = QuadrupedEnv(
             robot="go2",
             scene="flat",
@@ -129,8 +130,10 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
             damping_ratio = 1.0 - restitution  # map restitution→damping
             for gid in self._ground_geom_ids:
                 self._quad_env.mjModel.geom_solref[gid, 1] = damping_ratio
-            # Random phase initialization (OPT-Mimic Section III-C.4)
-            start_phase = int(self.np_random.integers(0, self.ref.max_phase))
+            # Random phase initialization — restrict to stance phases (0-14)
+            # Starting mid-flight is unrecoverable for hop trajectories
+            max_start = min(15, self.ref.max_phase)
+            start_phase = int(self.np_random.integers(0, max_start))
         else:
             self._joint_offset = np.zeros(12)
             self._torque_scale = 1.0
@@ -153,6 +156,7 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
 
         self._phase = start_phase
         self._prev_action = np.zeros(12)
+        self._first_step = True  # skip action_rate termination on first step
         self._last_torque = np.zeros(12)
 
         return self._build_obs(), {}
@@ -190,6 +194,7 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         reward, reward_info = self._compute_reward(sim_obs, action)
         terminated = self._check_termination(reward_info)
 
+        self._first_step = False
         self._phase += 1
         truncated = self._phase >= self.ref.max_phase
 
@@ -199,28 +204,30 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         return obs, reward, terminated, truncated, {"phase": self._phase, **reward_info}
 
     def _get_sensor(self) -> np.ndarray:
-        """Current sensor: [body_quat(4), joint_pos(12)+offset, joint_vel(12)] = 28D."""
+        """Current sensor: [body_pos(3), body_quat(4), joints(12), body_vel(6), joint_vel(12)] = 37D."""
         sim_obs = self._quad_env._get_obs()
         return np.concatenate(
             [
+                sim_obs["qpos"][0:3],  # body position (xyz)
                 sim_obs["qpos"][3:7],  # body quat
                 sim_obs["qpos"][7:19] + self._joint_offset,  # joints + offset
+                sim_obs["qvel"][0:6],  # body velocity (lin 3 + ang 3)
                 sim_obs["qvel"][6:18],  # joint vel
             ]
         )
 
     def _build_obs(self) -> np.ndarray:
-        """Build 30D obs: sensor(28) + phase(2) — matches OPT-Mimic."""
+        """Build 39D obs: sensor(37) + phase(2) — full OPT-Mimic."""
         return np.concatenate(
             [
-                self._get_sensor(),  # 28
+                self._get_sensor(),  # 37
                 self.ref.get_phase_encoding(self._phase),  # 2
             ]
         ).astype(np.float32)
 
     def _compute_reward(
         self, sim_obs: dict[str, Any], action: np.ndarray
-    ) -> tuple[float, dict[str, float]]:
+    ) -> tuple[float, dict[str, Any]]:
         """5-term Gaussian-exponential reward (OPT-Mimic). Total in [0, 1]."""
         qpos = sim_obs["qpos"]
 
@@ -245,12 +252,16 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         max_torque = np.max(np.abs(self._last_torque))
         r_torque = np.exp(-(max_torque**2) / (2.0 * self.SIGMA_TORQUE**2))
 
+        # Geometric weighted mean: r = r_pos^w_pos * r_ori^w_ori * ...
+        # All terms must be good — can't compensate bad position with good joints.
+        # Clamp individual terms to avoid log(0).
+        eps = 1e-8
         total = (
-            self.W_POS * r_pos
-            + self.W_ORI * r_ori
-            + self.W_JOINT * r_joint
-            + self.W_SMOOTH * r_smooth
-            + self.W_TORQUE * r_torque
+            max(r_pos, eps) ** self.W_POS
+            * max(r_ori, eps) ** self.W_ORI
+            * max(r_joint, eps) ** self.W_JOINT
+            * max(r_smooth, eps) ** self.W_SMOOTH
+            * max(r_torque, eps) ** self.W_TORQUE
         )
 
         info = {
@@ -259,6 +270,12 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
             "joint_error": np.sqrt(joint_err_sq),
             "action_rate": np.sqrt(rate_sq),
             "max_torque": max_torque,
+            # Individual reward components (before weighting)
+            "rw_pos": float(r_pos),
+            "rw_ori": float(r_ori),
+            "rw_joint": float(r_joint),
+            "rw_smooth": float(r_smooth),
+            "rw_torque": float(r_torque),
         }
         return float(total), info
 
@@ -269,21 +286,47 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
     )
     CONTACT_GRACE_WINDOW = 6  # steps (120ms at 50Hz) — tolerance near transitions
 
-    def _check_termination(self, info: dict[str, float]) -> bool:
-        """Early termination if any error exceeds 2.5× its sigma."""
-        if info["pos_error"] > self.TERM_MULTIPLIER * self.SIGMA_POS:
+    def _check_termination(self, info: dict[str, Any]) -> bool:
+        """Early termination if any error exceeds 2.5× its sigma.
+
+        Sets info["termination_reason"] to the cause for diagnostics.
+        """
+        thresh_pos = self.TERM_MULTIPLIER * self.SIGMA_POS
+        thresh_ori = self.TERM_MULTIPLIER * self.SIGMA_ORI
+        thresh_joint = self.TERM_MULTIPLIER * self.SIGMA_JOINT
+        thresh_smooth = self.TERM_MULTIPLIER * self.SIGMA_SMOOTH
+        thresh_torque = self.TERM_MULTIPLIER * self.SIGMA_TORQUE
+
+        if info["pos_error"] > thresh_pos:
+            info["termination_reason"] = (
+                f"pos_error {info['pos_error']:.4f} > {thresh_pos:.4f}"
+            )
             return True
-        if info["ori_error"] > self.TERM_MULTIPLIER * self.SIGMA_ORI:
+        if info["ori_error"] > thresh_ori:
+            info["termination_reason"] = (
+                f"ori_error {info['ori_error']:.4f} > {thresh_ori:.4f}"
+            )
             return True
-        if info["joint_error"] > self.TERM_MULTIPLIER * self.SIGMA_JOINT:
+        if info["joint_error"] > thresh_joint:
+            info["termination_reason"] = (
+                f"joint_error {info['joint_error']:.4f} > {thresh_joint:.4f}"
+            )
             return True
-        if info["action_rate"] > self.TERM_MULTIPLIER * self.SIGMA_SMOOTH:
+        if not self._first_step and info["action_rate"] > thresh_smooth:
+            info["termination_reason"] = (
+                f"action_rate {info['action_rate']:.4f} > {thresh_smooth:.4f}"
+            )
             return True
-        if info["max_torque"] > self.TERM_MULTIPLIER * self.SIGMA_TORQUE:
+        if info["max_torque"] > thresh_torque:
+            info["termination_reason"] = (
+                f"max_torque {info['max_torque']:.4f} > {thresh_torque:.4f}"
+            )
             return True
 
         # Fall detection
-        if self._quad_env._get_obs()["qpos"][2] < 0.05:
+        body_height = self._quad_env._get_obs()["qpos"][2]
+        if body_height < 0.05:
+            info["termination_reason"] = f"fall: height {body_height:.4f} < 0.05"
             return True
 
         # Contact consistency termination (OPT-Mimic Section III-C.4)
@@ -300,6 +343,12 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
                     if not self.ref.is_near_contact_transition(
                         self._phase, foot, self.CONTACT_GRACE_WINDOW
                     ):
+                        foot_names = ["FL", "FR", "RL", "RR"]
+                        info["termination_reason"] = (
+                            f"contact_mismatch: {foot_names[foot]} "
+                            f"actual={actual_contact[foot]} "
+                            f"expected={expected_contact[foot]}"
+                        )
                         return True
 
         return False
