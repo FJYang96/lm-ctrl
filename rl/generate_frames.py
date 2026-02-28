@@ -1,6 +1,6 @@
 """Extract key frames from planned and RL tracking videos for visual comparison.
 
- To help with maybe potenial LLM suggestions
+To help with maybe potenial LLM suggestions
 
 """
 
