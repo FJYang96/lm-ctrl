@@ -107,7 +107,7 @@ def main() -> None:
     # Save simulation video
     if config.experiment.render:
         fps = 1 / config.experiment.sim_dt
-        imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)  # type: ignore[arg-type]
+        imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
 
 
 if __name__ == "__main__":

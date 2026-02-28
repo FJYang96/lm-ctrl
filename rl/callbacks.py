@@ -267,7 +267,7 @@ class RewardPlotCallback(BaseCallback):  # type: ignore[misc]
         )
 
         for ax, key, label, color in zip(
-            axes, COMPONENT_KEYS, COMPONENT_LABELS, COMPONENT_COLORS
+            axes, COMPONENT_KEYS, COMPONENT_LABELS, COMPONENT_COLORS, strict=False
         ):
             vals = np.array(self.component_history[key])
             smooth_v = np.convolve(vals, kernel, mode="valid")

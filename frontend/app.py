@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# mypy: disable-error-code="misc,no-any-return"
 """
 Flask backend for LLM-Enhanced Quadruped Control Frontend
 
@@ -15,9 +16,10 @@ import re
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, TypedDict
+from typing import TypedDict
 
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from flask_cors import CORS
