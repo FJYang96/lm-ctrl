@@ -2,6 +2,34 @@
 
 This repository contains both the original Acados-based and the new CasADi Opti-based implementations of a quadruped hopping MPC controller.
 
+## 🚀 NEW: LLM-Enhanced Control
+
+This repository now includes an **LLM feedback pipeline** that automatically generates trajectory optimization constraints from natural language commands. Turn "do a backflip" into precise robot control!
+
+### Quick LLM Demo
+
+```bash
+# Set up API key in .env file
+echo "ANTHROPIC_API_KEY=your_key_here" > .env
+
+# Install additional dependencies
+pip install -r requirements_llm.txt
+
+# Generate robot behaviors with natural language
+python llm_main.py "do a backflip"
+python llm_main.py "jump as high as possible"
+python llm_main.py "spin in a circle"
+```
+
+## Run the LLM Frontend
+```bash
+cd frontend
+pip install requirements.txt
+python app.py
+```
+
+📖 **See [LLM_INTEGRATION_README.md](LLM_INTEGRATION_README.md) for complete documentation**
+
 ## Quick Start
 
 ### Run the Opti Version (Recommended)

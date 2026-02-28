@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import casadi as cs
 import numpy as np
 from liecasadi import SO3
@@ -11,7 +13,7 @@ def compute_joint_torques_robust(
     grf_traj: np.ndarray,
     contact_sequence: np.ndarray,
     dt: float,
-    joint_vel_traj: np.ndarray = None,
+    joint_vel_traj: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     ROBUST VERSION: Computes joint torques using dynamics-derived accelerations.
@@ -234,7 +236,7 @@ def compute_joint_torques(
     grf_traj: np.ndarray,
     contact_sequence: np.ndarray,
     dt: float,
-    joint_vel_traj: np.ndarray = None,
+    joint_vel_traj: np.ndarray | None = None,
 ) -> np.ndarray:
     """Wrapper that calls the robust version."""
     return compute_joint_torques_robust(

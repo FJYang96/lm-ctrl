@@ -1,0 +1,3 @@
+LLM-Enhanced Quadruped Control
+
+To run the LLM-Enhanced Quadruped Control system, first add your Anthropic API key to a .env file in the project root (ANTHROPIC_API_KEY=your_key_here). Once the key is set, you can execute any natural-language robot command directly through the Docker wrapper script—for example: ./run_llm_docker.sh "jump as high as possible" or ./run_llm_docker.sh "do a backflip". The pipeline will automatically call the LLM to generate CasADi optimization constraints, run MPC trajectory optimization, execute the resulting motion in simulation, and refine the behavior through iterative feedback. All results—including logs, generated constraint code, trajectory arrays, and simulation videos—are saved under results/llm_iterations/<command>_<timestamp>/.

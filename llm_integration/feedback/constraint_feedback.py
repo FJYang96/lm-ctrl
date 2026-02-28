@@ -1,0 +1,149 @@
+"""Constraint-specific LLM feedback generation."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ..logging_config import logger
+from .format_metrics import format_trajectory_metrics_text
+from .llm_evaluation import get_evaluator
+
+
+def generate_constraint_feedback(
+    command: str,
+    constraint_code: str,
+    images: list[str] | None,
+    visual_summary: str,
+    hardness_report: str,
+    constraint_violations: dict[str, Any],
+    trajectory_analysis: dict[str, Any],
+    opt_success: bool,
+    error_info: dict[str, Any] | None,
+    pivot_signal: str | None,
+) -> str:
+    """Generate constraint-specific feedback via LLM.
+
+    Args:
+        command: The task command
+        constraint_code: Full constraint code from the LLM
+        images: Video frames from the trajectory
+        visual_summary: Text summary of the video frames
+        hardness_report: Formatted constraint hardness analysis text
+        constraint_violations: Dict of constraint violations
+        trajectory_analysis: Trajectory metrics dict
+        opt_success: Whether the solver converged
+        error_info: Error information (if solver failed)
+        pivot_signal: "pivot", "tweak", or None
+
+    Returns:
+        Multi-paragraph analysis text for the code-gen LLM
+    """
+    system_prompt = """You are an expert analyzing constraint design for quadruped MPC trajectory optimization.
+
+Your job is to provide targeted feedback on the CONSTRAINT CODE specifically — what bounds are working,
+what bounds are failing, and what changes to make.
+
+=== CONSTRAINT-REFERENCE INTERPLAY ===
+
+Constraints define the FEASIBLE REGION — the set of trajectories the solver is allowed to explore.
+The reference trajectory provides the INITIAL GUESS — where the solver starts searching.
+
+Key interactions:
+- Tight constraints + bad reference = solver failure (starts outside feasible region, can't recover)
+- Constraints with loopholes = no fix from reference (solver finds the easy way out regardless of starting point)
+- Constraints that EXCLUDE the initial state at k=0 = immediate infeasibility
+- Constraints must be CONTINUOUS across timesteps — no sudden jumps in bounds
+
+Your feedback should focus ONLY on the constraints. Reference trajectory feedback is handled separately.
+
+=== HARDNESS DATA ===
+
+You will receive raw constraint hardness data: slack values, violation timesteps, and worst offenders.
+YOU must assess the severity of each violation from the raw numbers and determine what is critical
+vs acceptable. YOU must generate all recommendations — what bounds to change, what strategies to try,
+what phase timing to adjust. There are no pre-classified severity labels or pre-built suggestions.
+
+=== OUTPUT FORMAT ===
+
+Write multi-paragraph analysis. Be specific about:
+1. Which constraints are working (low slack) and which are failing (high slack) — assess severity yourself
+2. Root cause analysis: WHY are constraints being violated at those specific timesteps?
+3. Specific bound values to change, with concrete numbers and reasoning
+4. Timing issues (wrong phase, wrong timestep range) and how to fix them
+
+Do NOT return JSON. Return readable analysis text."""
+
+    mode_text = ""
+    if pivot_signal == "pivot":
+        mode_text = """MODE: MANDATORY PIVOT
+The current constraint approach has stagnated or is declining. Suggest FUNDAMENTALLY DIFFERENT
+constraint structures — different variables to constrain, different phase strategies, different
+mathematical formulations. Do not suggest incremental adjustments."""
+    elif pivot_signal == "tweak":
+        mode_text = """MODE: ADJUSTMENT SUGGESTED
+The current approach shows some promise. Suggest incremental changes — bound adjustments,
+parameter tuning, timing shifts. Keep the overall constraint structure."""
+    else:
+        mode_text = """MODE: FIRST ITERATION
+This is the first attempt. Analyze the constraint design and suggest improvements based
+on the trajectory results."""
+
+    # Format constraint violations
+    violations_text = ""
+    if constraint_violations:
+        violation_lines = []
+        for key, val in constraint_violations.items():
+            if isinstance(val, list):
+                for item in val:
+                    violation_lines.append(f"  {key}: {item}")
+            else:
+                violation_lines.append(f"  {key}: {val}")
+        violations_text = "\n".join(violation_lines) if violation_lines else "None"
+    else:
+        violations_text = "None"
+
+    # Format trajectory metrics (comprehensive shared formatter)
+    metrics_text = format_trajectory_metrics_text(trajectory_analysis)
+
+    error_text = ""
+    if error_info:
+        err_parts = []
+        if error_info.get("error_message"):
+            err_parts.append(f"Error: {error_info['error_message']}")
+        if error_info.get("solver_iterations"):
+            err_parts.append(f"Solver iterations: {error_info['solver_iterations']}")
+        error_text = "\n".join(err_parts)
+
+    user_message = f"""COMMAND: {command}
+
+{mode_text}
+
+SOLVER STATUS: {"CONVERGED" if opt_success else "FAILED"}
+{error_text}
+
+CONSTRAINT CODE:
+```python
+{constraint_code}
+```
+
+TRAJECTORY METRICS:
+{metrics_text}
+
+CONSTRAINT VIOLATIONS:
+{violations_text}
+
+CONSTRAINT HARDNESS ANALYSIS:
+{hardness_report if hardness_report else "Not available"}
+
+VISUAL SUMMARY:
+{visual_summary if visual_summary else "Not available"}
+
+Provide targeted feedback on the constraint design."""
+
+    try:
+        evaluator = get_evaluator()
+        response = evaluator._call_llm(system_prompt, user_message, images)
+        return response.strip()
+    except Exception as e:
+        logger.error(f"Constraint feedback generation failed: {e}")
+        return ""

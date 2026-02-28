@@ -136,22 +136,21 @@ def foot_velocity_constraints(
     foot_vel_RL = kindyn_model.jacobian_RL_fun(H, joint_positions)[0:3, :] @ qvel
     foot_vel_RR = kindyn_model.jacobian_RR_fun(H, joint_positions)[0:3, :] @ qvel
 
-    # Stack all foot velocities
+    # Stack only x and y foot velocities (exclude z-direction)
+    # The z-direction no-slip constraint is redundant because foot-height constraints already enforce it
     foot_velocities = cs.vertcat(
-        foot_vel_FL, foot_vel_FR, foot_vel_RL, foot_vel_RR
-    )  # Dimension: 4 x 3 = 12
-    foot_velocity_min = cs.repmat(
+        foot_vel_FL[0:2], foot_vel_FR[0:2], foot_vel_RL[0:2], foot_vel_RR[0:2]
+    )  # Dimension: 4 x 2 = 8 (only x and y components)
+    foot_velocity_min = cs.kron(
         -config.mpc_config.path_constraint_params["NO_SLIP_EPS"] * contact_k
         - INF * (1 - contact_k),
-        3,
-        1,
-    ).reshape((-1, 1))
-    foot_velocity_max = cs.repmat(
+        cs.DM.ones(2, 1),  # Repeat each foot's bound for its x, y components
+    )
+    foot_velocity_max = cs.kron(
         config.mpc_config.path_constraint_params["NO_SLIP_EPS"] * contact_k
         + INF * (1 - contact_k),
-        3,
-        1,
-    ).reshape((-1, 1))
+        cs.DM.ones(2, 1),  # Repeat each foot's bound for its x, y components
+    )
 
     return foot_velocities, foot_velocity_min, foot_velocity_max
 
@@ -223,7 +222,9 @@ def body_clearance_constraints(
     body_half_width = 0.10
     body_half_height = 0.05
 
-    tilt_clearance = body_half_length * cs.fabs(pitch) + body_half_width * cs.fabs(roll)
+    tilt_clearance = body_half_length * cs.fabs(
+        cs.sin(pitch)
+    ) + body_half_width * cs.fabs(cs.sin(roll))
     body_clearance_margin = body_half_height + tilt_clearance
     effective_clearance = com_position_z - body_clearance_margin
 

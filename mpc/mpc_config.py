@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -32,10 +34,6 @@ class MPCConfig:
     # Reference trajectory
     ref_state: np.ndarray | None
     ref_input: np.ndarray | None
-
-    # Warmstart trajectory
-    warmstart_state: np.ndarray | None
-    warmstart_input: np.ndarray | None
 
     # Path constraints
     path_constraints: list[

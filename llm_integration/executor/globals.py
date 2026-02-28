@@ -1,0 +1,367 @@
+"""Restricted globals and import processing for safe code execution."""
+
+from __future__ import annotations
+
+import ast
+import logging
+from typing import Any
+
+import numpy as np
+
+# Use module-level logger
+logger = logging.getLogger("llm_integration.executor.globals")
+
+
+# ── State / input index constants (exposed to LLM code) ──
+STATES_DIM = 30
+INPUTS_DIM = 24
+
+# State vector slices
+IDX_POS = slice(0, 3)  # COM position [x, y, z]
+IDX_VEL = slice(3, 6)  # COM velocity [vx, vy, vz]
+IDX_EULER = slice(6, 9)  # Euler angles [roll, pitch, yaw]
+IDX_ANG_VEL = slice(9, 12)  # Angular velocity [wx, wy, wz]
+IDX_JOINTS = slice(12, 24)  # Joint angles (12 joints)
+IDX_INTEGRALS = slice(24, 30)  # Integral states (padding/zeros)
+
+# Scalar pitch index (row 7 in state vector)
+IDX_PITCH = 7
+
+# Input vector slices
+IDX_U_JOINT_VEL = slice(0, 12)  # Joint velocities
+IDX_U_GRF = slice(12, 24)  # Ground reaction forces (4 legs × 3)
+
+# GRF z-component indices (one per foot: FL, FR, RL, RR)
+IDX_GRF_Z = [14, 17, 20, 23]
+
+
+def _min_jerk_scalar(t: float) -> float:
+    """Min-jerk basis for a scalar t in [0,1]. Returns smooth s in [0,1]."""
+    return 10 * t**3 - 15 * t**4 + 6 * t**5
+
+
+def min_jerk_trajectory(
+    start: float | np.ndarray, end: float | np.ndarray, num_steps: int
+) -> np.ndarray:
+    """
+    Generate a minimum-jerk (5th-order polynomial) smooth interpolation.
+
+    Produces a trajectory from `start` to `end` over `num_steps` points
+    with zero velocity and acceleration at both endpoints.
+
+    Args:
+        start: Starting value (scalar or array)
+        end: Ending value (scalar or array)
+        num_steps: Number of points in the trajectory
+
+    Returns:
+        Array of shape (num_steps,) or (num_steps, dim) with smooth trajectory
+    """
+    t = np.linspace(0, 1, num_steps)
+    # 5th order polynomial: 10t^3 - 15t^4 + 6t^5
+    s = 10 * t**3 - 15 * t**4 + 6 * t**5
+    start_arr = np.asarray(start)
+    end_arr = np.asarray(end)
+    if start_arr.ndim == 0:
+        return np.asarray(start_arr + (end_arr - start_arr) * s)
+    else:
+        return np.asarray(start_arr[None, :] + np.outer(s, end_arr - start_arr))
+
+
+def ballistic_trajectory(
+    z0: float, vz0: float, g: float, dt: float, num_steps: int
+) -> np.ndarray:
+    """
+    Generate a ballistic (projectile) height trajectory under gravity.
+
+    z(t) = z0 + vz0*t - 0.5*g*t^2
+
+    Args:
+        z0: Initial height (m)
+        vz0: Initial vertical velocity (m/s, positive = upward)
+        g: Gravitational acceleration (m/s^2, positive value e.g. 9.81)
+        dt: Time step (s)
+        num_steps: Number of points in the trajectory
+
+    Returns:
+        Array of shape (num_steps,) with height values
+    """
+    t = np.arange(num_steps) * dt
+    return z0 + vz0 * t - 0.5 * g * t**2
+
+
+# Allowed imports for constraint generation
+ALLOWED_IMPORTS = {
+    "casadi": [
+        "cs",
+        "MX",
+        "SX",
+        "vertcat",
+        "mtimes",
+        "fabs",
+        "sin",
+        "cos",
+        "sqrt",
+        "exp",
+        "sum1",
+        "fmax",
+        "fmin",
+        "inf",
+        "horzcat",
+        "DM",
+        "transpose",
+        "norm_2",
+        "atan2",
+        "tan",
+        "asin",
+        "acos",
+        "tanh",
+        "sinh",
+        "cosh",
+    ],
+    "numpy": [
+        "np",
+        "array",
+        "zeros",
+        "ones",
+        "eye",
+        "pi",
+        "sin",
+        "cos",
+        "sqrt",
+        "inf",
+        "concatenate",
+        "stack",
+        "linalg",
+        "maximum",
+        "minimum",
+    ],
+    "math": [
+        "pi",
+        "sin",
+        "cos",
+        "sqrt",
+        "exp",
+        "log",
+        "fabs",
+        "atan2",
+        "tan",
+        "asin",
+        "acos",
+        "tanh",
+        "sinh",
+        "cosh",
+        "radians",
+        "degrees",
+    ],
+    "typing": ["Any", "Tuple", "List", "Union", "Optional"],
+    "liecasadi": ["SO3", "SE3"],  # Allow LieCasadi for rotation matrices
+}
+
+
+def create_restricted_globals(
+    allowed_imports: dict[str, list[str]] | None = None,
+    additional_imports: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Create a restricted global namespace for code execution.
+
+    Args:
+        allowed_imports: Dictionary of allowed imports (defaults to ALLOWED_IMPORTS)
+        additional_imports: Optional list of additional imports to include
+    """
+    if allowed_imports is None:
+        allowed_imports = ALLOWED_IMPORTS
+
+    restricted_globals: dict[str, Any] = {
+        "__builtins__": {
+            # Basic Python built-ins needed for constraint functions
+            "abs": abs,
+            "max": max,
+            "min": min,
+            "len": len,
+            "range": range,
+            "enumerate": enumerate,
+            "zip": zip,
+            "print": print,  # For debugging
+            "float": float,
+            "int": int,
+            "str": str,
+            "list": list,
+            "tuple": tuple,
+            "dict": dict,
+            "hasattr": hasattr,
+            "getattr": getattr,
+            "isinstance": isinstance,
+            "type": type,
+            "__import__": __import__,  # Needed for dynamic imports
+        }
+    }
+
+    # Import allowed modules
+    try:
+        import math
+
+        # from typing import Any, List, Optional, Tuple, Union
+        import casadi as cs
+        import numpy as np
+        from liecasadi import SO3
+
+        # Add main module references
+        restricted_globals["cs"] = cs
+        restricted_globals["np"] = np
+        restricted_globals["math"] = math
+        restricted_globals["SO3"] = SO3
+
+        # Make liecasadi module available too
+        import liecasadi
+
+        restricted_globals["liecasadi"] = liecasadi
+
+        # Add ALL commonly used CasADi functions directly
+        restricted_globals["vertcat"] = cs.vertcat
+        restricted_globals["horzcat"] = cs.horzcat
+        restricted_globals["mtimes"] = cs.mtimes
+        restricted_globals["fabs"] = cs.fabs
+        restricted_globals["fmax"] = cs.fmax
+        restricted_globals["fmin"] = cs.fmin
+        restricted_globals["sum1"] = cs.sum1
+        restricted_globals["sqrt"] = cs.sqrt
+        restricted_globals["sin"] = cs.sin
+        restricted_globals["cos"] = cs.cos
+        restricted_globals["tan"] = cs.tan
+        restricted_globals["exp"] = cs.exp
+        restricted_globals["log"] = cs.log
+        restricted_globals["atan2"] = cs.atan2
+        restricted_globals["asin"] = cs.asin
+        restricted_globals["acos"] = cs.acos
+        restricted_globals["tanh"] = cs.tanh
+        restricted_globals["sinh"] = cs.sinh
+        restricted_globals["cosh"] = cs.cosh
+        restricted_globals["norm_2"] = cs.norm_2
+        restricted_globals["transpose"] = cs.transpose
+        restricted_globals["inv"] = cs.inv
+        restricted_globals["dot"] = cs.dot
+        restricted_globals["cross"] = cs.cross
+        restricted_globals["repmat"] = cs.repmat
+        restricted_globals["reshape"] = cs.reshape
+        restricted_globals["if_else"] = cs.if_else
+        restricted_globals["logic_and"] = cs.logic_and
+        restricted_globals["logic_or"] = cs.logic_or
+
+        # Constants
+        restricted_globals["inf"] = cs.inf
+        restricted_globals["pi"] = np.pi
+
+        # CasADi types
+        restricted_globals["MX"] = cs.MX
+        restricted_globals["SX"] = cs.SX
+        restricted_globals["DM"] = cs.DM
+
+        # Matrix creation functions
+        restricted_globals["eye"] = cs.MX.eye
+        restricted_globals["zeros"] = cs.MX.zeros
+        restricted_globals["ones"] = cs.MX.ones
+
+        # Helper functions for reference trajectory generation
+        restricted_globals["min_jerk_trajectory"] = min_jerk_trajectory
+        restricted_globals["ballistic_trajectory"] = ballistic_trajectory
+        restricted_globals["_min_jerk_scalar"] = _min_jerk_scalar
+
+        # State/input index constants
+        restricted_globals["STATES_DIM"] = STATES_DIM
+        restricted_globals["INPUTS_DIM"] = INPUTS_DIM
+        restricted_globals["IDX_POS"] = IDX_POS
+        restricted_globals["IDX_VEL"] = IDX_VEL
+        restricted_globals["IDX_EULER"] = IDX_EULER
+        restricted_globals["IDX_ANG_VEL"] = IDX_ANG_VEL
+        restricted_globals["IDX_JOINTS"] = IDX_JOINTS
+        restricted_globals["IDX_INTEGRALS"] = IDX_INTEGRALS
+        restricted_globals["IDX_PITCH"] = IDX_PITCH
+        restricted_globals["IDX_U_JOINT_VEL"] = IDX_U_JOINT_VEL
+        restricted_globals["IDX_U_GRF"] = IDX_U_GRF
+        restricted_globals["IDX_GRF_Z"] = IDX_GRF_Z
+
+        # Process additional imports from LLM code
+        if additional_imports:
+            process_dynamic_imports(
+                restricted_globals, additional_imports, allowed_imports
+            )
+
+    except ImportError as e:
+        logger.warning(f"Could not import required modules: {e}")
+
+    return restricted_globals
+
+
+def process_dynamic_imports(
+    globals_dict: dict[str, Any],
+    import_requests: list[str],
+    allowed_imports: dict[str, list[str]] | None = None,
+) -> None:
+    """
+    Process dynamic import requests from LLM code and add them to globals.
+
+    Args:
+        globals_dict: Dictionary to add imports to
+        import_requests: List of import statements to process
+        allowed_imports: Dictionary of allowed imports (defaults to ALLOWED_IMPORTS)
+    """
+    if allowed_imports is None:
+        allowed_imports = ALLOWED_IMPORTS
+
+    for import_request in import_requests:
+        try:
+            # Parse the import statement
+            tree = ast.parse(import_request)
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name in allowed_imports:
+                            # Import the module
+                            module = __import__(alias.name)
+                            alias_name = alias.asname if alias.asname else alias.name
+                            globals_dict[alias_name] = module
+
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module and node.module in allowed_imports:
+                        module = __import__(
+                            node.module,
+                            fromlist=[alias.name for alias in node.names],
+                        )
+                        for alias in node.names:
+                            if alias.name in allowed_imports[node.module]:
+                                attr = getattr(module, alias.name)
+                                alias_name = (
+                                    alias.asname if alias.asname else alias.name
+                                )
+                                globals_dict[alias_name] = attr
+
+        except Exception as e:
+            logger.warning(f"Could not process import '{import_request}': {e}")
+
+
+def extract_imports_from_code(code: str) -> list[str]:
+    """
+    Extract import statements from LLM code for dynamic processing.
+
+    Args:
+        code: Python code to analyze
+
+    Returns:
+        List of import statements found in the code
+    """
+    imports = []
+    try:
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                # Reconstruct the import statement
+                import_stmt = ast.get_source_segment(code, node)
+                if import_stmt:
+                    imports.append(import_stmt)
+    except Exception:
+        pass  # If parsing fails, return empty list
+
+    return imports

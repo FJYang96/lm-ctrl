@@ -51,8 +51,6 @@ if CONSTRAINT_MODE == "complementarity":
             "NO_SLIP_EPS": 0.01,
             "BODY_CLEARANCE_MIN": 0.02,  # Minimum body clearance from ground (meters)
         },
-        warmstart_state=None,
-        warmstart_input=None,
         _contact_sequence=None,
     )
 else:  # standard mode
@@ -81,8 +79,6 @@ else:  # standard mode
             "STANCE_HEIGHT_EPS": 0.0,
             "NO_SLIP_EPS": 0.0,
         },
-        warmstart_state=None,
-        warmstart_input=None,
         _contact_sequence=None,
     )
 

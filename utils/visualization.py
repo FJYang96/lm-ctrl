@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import matplotlib.pyplot as plt
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
@@ -328,12 +330,13 @@ def plot_trajectory_comparison(
 
     for i, quantity in enumerate(quantities_to_plot):
         ax = axes_flat[i]
-        mpc_data = available_quantities[quantity]["mpc_data"]
-        sim_data = available_quantities[quantity]["sim_data"]
-        labels = available_quantities[quantity]["labels"]
-        title = available_quantities[quantity]["title"]
-        mpc_time_q = available_quantities[quantity]["mpc_time"]
-        sim_time_q = available_quantities[quantity]["sim_time"]
+        meta = available_quantities[quantity]
+        mpc_data = meta["mpc_data"]
+        sim_data = meta["sim_data"]
+        labels = meta["labels"]
+        title = meta["title"]
+        mpc_time_q = meta["mpc_time"]
+        sim_time_q = meta["sim_time"]
 
         # Plot each component
         for j in range(mpc_data.shape[1]):
@@ -380,7 +383,10 @@ def plot_trajectory_comparison(
     mse_results: dict[str, float] = {}
     for q_name, meta in available_quantities.items():
         mse_val = compute_aligned_mse(
-            meta["mpc_time"], meta["sim_time"], meta["mpc_data"], meta["sim_data"]
+            meta["mpc_time"],
+            meta["sim_time"],
+            meta["mpc_data"],
+            meta["sim_data"],
         )
         if mse_val is not None and np.isfinite(mse_val):
             mse_results[q_name] = mse_val
