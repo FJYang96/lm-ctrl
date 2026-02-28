@@ -28,7 +28,7 @@ fi
 rm -f rl/diagnostics.log
 
 # Step 1: Train
-echo "[1/2] Training tracking policy..."
+echo "[1/3] Training tracking policy..."
 python -m rl.train \
     --state-traj results/state_traj.npy \
     --grf-traj results/grf_traj.npy \
@@ -39,7 +39,7 @@ python -m rl.train \
 
 # Step 2: Evaluate
 echo ""
-echo "[2/2] Comparing RL policy vs open-loop inverse dynamics..."
+echo "[2/3] Comparing RL policy vs open-loop inverse dynamics..."
 
 MODEL_PATH="$OUTPUT_DIR/best_model/best_model.zip"
 if [ ! -f "$MODEL_PATH" ]; then
@@ -49,3 +49,9 @@ fi
 python -m rl.evaluate \
     --model-path "$MODEL_PATH" \
     --normalize-path "$OUTPUT_DIR/vec_normalize.pkl"
+
+# Step 3: Generate comparison frames
+echo ""
+echo "[3/3] Generating comparison frames..."
+rm -rf results/comparison
+python -m rl.generate_frames --num-frames 20
