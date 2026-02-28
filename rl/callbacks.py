@@ -260,12 +260,9 @@ class RewardPlotCallback(BaseCallback):  # type: ignore[misc]
         kernel = np.ones(window) / window
         smooth_s = steps[window - 1 :]
 
-        # Max weight for shared y-axis scale
-        max_w = max(0.3, 0.3, 0.2, 0.1, 0.1)
-
         fig, axes = plt.subplots(len(COMPONENT_KEYS), 1, figsize=(10, 12), sharex=True)
         fig.suptitle(
-            f"Weighted Reward Components (mean per episode, {self.num_timesteps:,} steps)",
+            f"Raw Reward Components (mean per episode, {self.num_timesteps:,} steps)",
             fontsize=13,
         )
 
@@ -276,7 +273,7 @@ class RewardPlotCallback(BaseCallback):  # type: ignore[misc]
             smooth_v = np.convolve(vals, kernel, mode="valid")
             ax.plot(smooth_s, smooth_v, linewidth=0.8, color=color)
             ax.set_ylabel(label, fontsize=9)
-            ax.set_ylim(-0.01, max_w + 0.02)
+            ax.set_ylim(-0.01, 1.02)  # raw Gaussian rewards are in [0, 1]
             ax.grid(True, alpha=0.3)
 
         axes[-1].set_xlabel("Timesteps")
