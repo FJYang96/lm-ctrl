@@ -20,12 +20,14 @@ echo "Parallel envs: $NUM_ENVS"
 echo "Output: $OUTPUT_DIR"
 echo ""
 
-# Clean all previous trained models and diagnostics
+# Clean all previous trained models, diagnostics, and old outputs
 if [ -d "rl/trained_models" ]; then
     echo "Clearing rl/trained_models/..."
     rm -rf rl/trained_models
 fi
 rm -f rl/diagnostics.log
+rm -rf results/comparison
+rm -f results/rl_tracking.mp4
 
 # Step 1: Train
 echo "[1/3] Training tracking policy..."
@@ -53,5 +55,4 @@ python -m rl.evaluate \
 # Step 3: Generate comparison frames
 echo ""
 echo "[3/3] Generating comparison frames..."
-rm -rf results/comparison
 python -m rl.generate_frames --num-frames 20
