@@ -6,7 +6,7 @@ Adapted from Solo 8 (8 joints, 1.7kg) to Go2 (12 joints, 15kg).
 Observation (39D): body_pos(3) + body_quat(4) + joints(12) + body_vel(6) + joint_vel(12) + phase(2)
 Action (12D): residual joint position corrections
 Actuation: PD controller + J^T·F feedforward
-Reward: 5 Gaussian tracking terms (OPT-Mimic Eq. 16, Table I)
+Reward: Additive weighted sum of 5 Gaussian terms (OPT-Mimic Eq. 15-16, Table I)
 """
 
 from __future__ import annotations
@@ -39,10 +39,9 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
     SIGMA_SMOOTH = 1.0  # scaled for ACTION_LIMIT=0.5: max action rate ≈ 1.0
     SIGMA_TORQUE = 40.0  # scaled for 55Nm limit; Gaussian=0.36 at clamp, gives gradient
 
-    # Reward weights for geometric mean (sum to 1.0)
-    # Position gets highest weight — must actually track the hop
-    W_POS = 0.4
-    W_ORI = 0.2
+    # Reward weights for additive weighted sum (OPT-Mimic Table I, sum to 1.0)
+    W_POS = 0.3
+    W_ORI = 0.3
     W_JOINT = 0.2
     W_SMOOTH = 0.1
     W_TORQUE = 0.1
@@ -228,7 +227,7 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
     def _compute_reward(
         self, sim_obs: dict[str, Any], action: np.ndarray
     ) -> tuple[float, dict[str, Any]]:
-        """5-term Gaussian-exponential reward (OPT-Mimic). Total in [0, 1]."""
+        """Additive weighted sum of 5 Gaussian terms (OPT-Mimic Eq. 15). Total in [0, 1]."""
         qpos = sim_obs["qpos"]
 
         # Position tracking
@@ -252,16 +251,13 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         max_torque = np.max(np.abs(self._last_torque))
         r_torque = np.exp(-(max_torque**2) / (2.0 * self.SIGMA_TORQUE**2))
 
-        # Geometric weighted mean: r = r_pos^w_pos * r_ori^w_ori * ...
-        # All terms must be good — can't compensate bad position with good joints.
-        # Clamp individual terms to avoid log(0).
-        eps = 1e-8
+        # Additive weighted sum (OPT-Mimic Eq. 15)
         total = (
-            max(r_pos, eps) ** self.W_POS
-            * max(r_ori, eps) ** self.W_ORI
-            * max(r_joint, eps) ** self.W_JOINT
-            * max(r_smooth, eps) ** self.W_SMOOTH
-            * max(r_torque, eps) ** self.W_TORQUE
+            self.W_POS * r_pos
+            + self.W_ORI * r_ori
+            + self.W_JOINT * r_joint
+            + self.W_SMOOTH * r_smooth
+            + self.W_TORQUE * r_torque
         )
 
         info = {
