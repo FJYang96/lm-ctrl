@@ -64,9 +64,8 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         self.substeps = int(control_dt / sim_dt)
         self.randomize = randomize
 
-        # Friction randomization: tuple enables per-reset sampling (OPT-Mimic Table I)
-        # Centered on config μ=0.5 with σ=0.25 → ±1σ range ≈ [0.25, 0.75]
-        ground_friction = (0.25, 0.75) if randomize else 0.5
+        # Friction: fixed at μ=0.8 (OPT-Mimic Table I)
+        ground_friction = 0.8
         self._quad_env = QuadrupedEnv(
             robot="go2",
             scene="flat",
