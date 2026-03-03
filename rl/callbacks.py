@@ -28,8 +28,8 @@ RAW_KEYS = ["pos_error", "ori_error", "joint_error", "action_rate", "max_torque"
 # Weighted reward component keys (actual contribution to total reward)
 COMPONENT_KEYS = ["rw_pos", "rw_ori", "rw_joint", "rw_smooth", "rw_torque"]
 COMPONENT_LABELS = [
-    "Position (w=0.4)",
-    "Orientation (w=0.2)",
+    "Position (w=0.3)",
+    "Orientation (w=0.3)",
     "Joint (w=0.2)",
     "Smoothness (w=0.1)",
     "Torque (w=0.1)",

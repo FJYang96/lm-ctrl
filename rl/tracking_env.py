@@ -98,6 +98,8 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
         self._last_torque = np.zeros(12)
         self._joint_offset = np.zeros(12)
         self._torque_scale = 1.0
+        # Cache foot body IDs for non-foot contact termination (OPT-Mimic III-C.4)
+        self._foot_body_ids = self._find_foot_body_ids()
         # Store default solref for restoring when randomize=False
         self._default_solref = self._quad_env.mjModel.geom_solref.copy()
 
@@ -111,6 +113,33 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
             if name and name.lower() in ground_names:
                 ids.append(gid)
         return ids
+
+    def _find_foot_body_ids(self) -> set[int]:
+        """Find MuJoCo body IDs for the four foot geoms (FL, FR, RL, RR)."""
+        model = self._quad_env.mjModel
+        foot_geom_names = ["FL", "FR", "RL", "RR"]
+        ids = set()
+        for name in foot_geom_names:
+            gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+            if gid >= 0:
+                ids.add(int(model.geom_bodyid[gid]))
+        return ids
+
+    def _has_non_foot_ground_contact(self) -> bool:
+        """Check if any non-foot body of the robot contacts the ground (OPT-Mimic III-C.4)."""
+        data = self._quad_env.mjData
+        model = self._quad_env.mjModel
+        for i in range(data.ncon):
+            contact = data.contact[i]
+            body1 = int(model.geom_bodyid[contact.geom1])
+            body2 = int(model.geom_bodyid[contact.geom2])
+            if body1 == 0:
+                if body2 not in self._foot_body_ids and body2 != 0:
+                    return True
+            elif body2 == 0:
+                if body1 not in self._foot_body_ids:
+                    return True
+        return False
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
@@ -319,10 +348,9 @@ class Go2TrackingEnv(gymnasium.Env):  # type: ignore[misc]
             )
             return True
 
-        # Fall detection
-        body_height = self._quad_env._get_obs()["qpos"][2]
-        if body_height < 0.05:
-            info["termination_reason"] = f"fall: height {body_height:.4f} < 0.05"
+        # Non-foot body contact with ground (OPT-Mimic Section III-C.4, condition 2)
+        if self._has_non_foot_ground_contact():
+            info["termination_reason"] = "non_foot_ground_contact"
             return True
 
         # Contact consistency termination (OPT-Mimic Section III-C.4)
