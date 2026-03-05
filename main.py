@@ -1,4 +1,3 @@
-import imageio
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
 
@@ -6,17 +5,12 @@ import config
 from mpc.dynamics.model import KinoDynamic_Model
 from mpc.mpc_opti import QuadrupedMPCOpti
 from utils import conversion
-from utils.inv_dyn import compute_joint_torques
 from utils.logging import color_print
 from utils.simulation import (
     create_reference_trajectory,
     save_trajectory_results,
-    simulate_trajectory,
 )
-from utils.visualization import (
-    plot_trajectory_comparison,
-    render_and_save_planned_trajectory,
-)
+from utils.visualization import render_and_save_planned_trajectory
 
 
 def main() -> None:
@@ -63,51 +57,10 @@ def main() -> None:
     )
 
     # Render planned trajectory if rendering is enabled
-    planned_traj_images = None
     if config.experiment.render:
-        planned_traj_images = render_and_save_planned_trajectory(
+        render_and_save_planned_trajectory(
             state_traj, input_traj, env, suffix
         )
-
-    # ========================================================
-    # Stage 2: Inverse Dynamics + Simulation
-    # ========================================================
-    color_print("orange", "Stage 2: Inverse Dynamics + Simulation")
-
-    # Compute joint torques using updated inverse dynamics
-    color_print("green", "Computing joint torques using updated inverse dynamics")
-    joint_torques_traj = compute_joint_torques(
-        kinodynamic_model,
-        state_traj,
-        grf_traj,
-        config.mpc_config.contact_sequence,
-        config.mpc_config.mpc_dt,
-        joint_vel_traj,
-    )
-    np.save(f"results/joint_torques_traj{suffix}.npy", joint_torques_traj)
-
-    qpos_traj, qvel_traj, grf_traj, images = simulate_trajectory(
-        env, joint_torques_traj, planned_traj_images
-    )
-
-    # Plot comparison between planned and simulated trajectories
-    plot_trajectory_comparison(
-        state_traj,
-        input_traj,
-        qpos_traj,
-        qvel_traj,
-        grf_traj,
-        quantities=config.plot_quantities,
-        mpc_dt=config.mpc_config.mpc_dt,
-        sim_dt=config.experiment.sim_dt,
-        save_path="results/trajectory_comparison.png",
-        show_plot=False,
-    )
-
-    # Save simulation video
-    if config.experiment.render:
-        fps = 1 / config.experiment.sim_dt
-        imageio.mimsave(f"results/trajectory{suffix}.mp4", images, fps=fps)
 
 
 if __name__ == "__main__":
