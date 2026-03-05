@@ -53,6 +53,12 @@ docker run --rm \
         export LD_LIBRARY_PATH=/Quadruped-PyMPC/quadruped_pympc/acados/lib:/Quadruped-PyMPC/quadruped_pympc/acados/build/external/hpipm:\$LD_LIBRARY_PATH
         export ACADOS_SOURCE_DIR=/Quadruped-PyMPC/quadruped_pympc/acados
         export MUJOCO_GL=osmesa
+        export MPLBACKEND=Agg
+
+        # Prevent OpenBLAS/MUMPS thread deadlock in Docker
+        export OMP_NUM_THREADS=4
+        export OPENBLAS_NUM_THREADS=4
+        export MKL_NUM_THREADS=4
 
         # Create results directory
         mkdir -p results/llm_iterations
@@ -69,7 +75,7 @@ docker run --rm \
 
         # Run LLM pipeline
         echo '🧠 Starting LLM pipeline...'
-        python llm_main.py \"$COMMAND\" $OPTIONS
+        xvfb-run -a python llm_main.py \"$COMMAND\" $OPTIONS
 
         echo '✅ LLM pipeline complete! Check results/llm_iterations/ for outputs.'
     "

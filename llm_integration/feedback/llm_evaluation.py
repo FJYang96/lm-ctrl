@@ -298,8 +298,7 @@ reference_feedback_summary (4-6 sentences):
   - Specific parameter changes recommended with concrete numbers
 
 simulation_summary (3-5 sentences):
-  - Whether simulation succeeded or failed and why
-  - Tracking error magnitude and what it means
+  - Whether rendering of the planned trajectory succeeded or failed
   - What the robot actually DID (visible motion from video frames)
   - Landing quality and any ground penetration or instability
 
@@ -308,7 +307,7 @@ metrics_summary (compact but COMPLETE):
   - Height gain, max height, final height
   - Flight duration, total duration
   - Solver status (converged/failed, iteration count)
-  - Tracking error, simulation success/failure
+  - Rendering success/failure
   - Key constraint slack values (worst offenders)
   - Reference RMSE (height, pitch, vz)
 
@@ -323,10 +322,9 @@ Return ONLY valid JSON, no markdown, no extra text."""
         sim_text = ""
         if simulation_result:
             sim_success = simulation_result.get("success", False)
-            tracking_err = simulation_result.get("tracking_error", "N/A")
-            sim_text = f"Simulation: {'success' if sim_success else 'failed'}, tracking_error={tracking_err}"
+            sim_text = f"Rendering: {'success' if sim_success else 'failed'}"
             if simulation_result.get("error"):
-                sim_text += f"\nSimulation error: {str(simulation_result['error'])}"
+                sim_text += f"\nRendering error: {str(simulation_result['error'])}"
 
         hardness_section = ""
         if hardness_text:
