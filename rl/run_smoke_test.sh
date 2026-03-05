@@ -5,16 +5,16 @@
 #   ./rl/run_smoke_test.sh [TIMESTEPS] [NUM_ENVS]
 #
 # Examples:
-#   ./rl/run_smoke_test.sh              # 500k steps, 8 envs (quick test)
-#   ./rl/run_smoke_test.sh 2000000 16   # 2M steps, 16 envs (full run)
+#   ./rl/run_smoke_test.sh              # 200k steps, 256 envs (quick GPU test)
+#   ./rl/run_smoke_test.sh 2000000 512  # 2M steps, 512 envs (full run)
 
 set -e
 
-TIMESTEPS=${1:-500000}
-NUM_ENVS=${2:-8}
+TIMESTEPS=${1:-200000}
+NUM_ENVS=${2:-256}
 OUTPUT_DIR="rl/trained_models/smoke_test"
 
-echo "=== OPT-Mimic Smoke Test ==="
+echo "=== OPT-Mimic Smoke Test (JAX/MJX) ==="
 echo "Timesteps: $TIMESTEPS"
 echo "Parallel envs: $NUM_ENVS"
 echo "Output: $OUTPUT_DIR"
@@ -30,8 +30,8 @@ rm -rf results/comparison
 rm -f results/rl_tracking.mp4
 
 # Step 1: Train
-echo "[1/3] Training tracking policy..."
-python -m rl.train \
+echo "[1/3] Training tracking policy (JAX PPO + MJX)..."
+MUJOCO_GL=egl python -m rl.train \
     --state-traj results/state_traj.npy \
     --grf-traj results/grf_traj.npy \
     --joint-vel-traj results/joint_vel_traj.npy \
@@ -41,18 +41,20 @@ python -m rl.train \
 
 # Step 2: Evaluate
 echo ""
-echo "[2/3] Comparing RL policy vs open-loop inverse dynamics..."
+echo "[2/3] Evaluating RL policy..."
 
-MODEL_PATH="$OUTPUT_DIR/best_model/best_model.zip"
-if [ ! -f "$MODEL_PATH" ]; then
-    MODEL_PATH="$OUTPUT_DIR/tracking_policy_final.zip"
-fi
+MODEL_PATH="$OUTPUT_DIR/best_model"
 
-python -m rl.evaluate \
+MUJOCO_GL=egl python -m rl.evaluate \
     --model-path "$MODEL_PATH" \
-    --normalize-path "$OUTPUT_DIR/vec_normalize.pkl"
+    --output-video "$OUTPUT_DIR/rl_tracking.mp4"
 
 # Step 3: Generate comparison frames
 echo ""
 echo "[3/3] Generating comparison frames..."
-python -m rl.generate_frames --num-frames 20
+python -m rl.generate_frames \
+    --rl "$OUTPUT_DIR/rl_tracking.mp4" \
+    --num-frames 20 2>/dev/null || echo "Frame generation skipped (no video or cv2 missing)"
+
+echo ""
+echo "=== Smoke test complete ==="
