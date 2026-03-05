@@ -21,7 +21,8 @@ docker run --rm \
         export OPENBLAS_NUM_THREADS=4
         export MKL_NUM_THREADS=4
 
-        # Create results directory if it doesn't exist
+        # Clear and recreate results directory
+        rm -rf results
         mkdir -p results
 
         # Check environment
@@ -33,6 +34,9 @@ docker run --rm \
         # Run the Opti-based implementation
         echo '📊 Running Opti-based trajectory optimization...'
         xvfb-run -a python main.py --solver opti
+
+        # Fix ownership so host user can manage output files
+        chown -R $(id -u):$(id -g) results/
 
         echo '✅ Optimization complete! Check results/ directory for outputs.'
     "
