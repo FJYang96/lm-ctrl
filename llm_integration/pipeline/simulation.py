@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from utils.visualization import render_and_save_planned_trajectory
+from utils.visualization import render_planned_trajectory
 
 from ..logging_config import logger
 
@@ -46,27 +46,21 @@ def execute_simulation(
 
     try:
         state_traj = optimization_result["state_trajectory"]
-        grf_traj = optimization_result["grf_trajectory"]
         joint_vel_traj = optimization_result["joint_vel_trajectory"]
 
-        # Create input trajectory for rendering
-        input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
-
         # Render planned trajectory
-        planned_traj_images = render_and_save_planned_trajectory(
-            state_traj, input_traj, self.env, f"_iter_{iteration}"
+        planned_traj_images = render_planned_trajectory(
+            state_traj, joint_vel_traj, self.env
         )
 
-        # Get the video directory (uses VIDEO_DIR env var if set)
-        video_dir = get_video_dir(run_dir)
-
-        # Save planned trajectory video
+        # Save planned trajectory video to run dir
         if planned_traj_images:
             import imageio
 
-            fps = 1 / self.config.experiment.sim_dt
-            planned_video_path = video_dir / f"planned_traj_iter_{iteration}.mp4"
-            imageio.mimsave(str(planned_video_path), planned_traj_images, fps=fps)
+            video_dir = get_video_dir(run_dir)
+            fps = 1 / self.config.mpc_config.mpc_dt
+            video_path = video_dir / f"planned_traj_iter_{iteration}.mp4"
+            imageio.mimsave(str(video_path), planned_traj_images, fps=fps)
 
         return {
             "success": True,
@@ -119,20 +113,14 @@ def render_failed_trajectory(
 
     try:
         # Get whatever trajectory data we have
-        grf_traj = optimization_result.get(
-            "grf_trajectory", np.zeros((max(1, state_traj.shape[0] - 1), 12))
-        )
         joint_vel_traj = optimization_result.get(
             "joint_vel_trajectory", np.zeros((max(1, state_traj.shape[0] - 1), 12))
         )
 
-        # Create input trajectory for rendering
-        input_traj = np.concatenate([joint_vel_traj, grf_traj], axis=1)
-
         # Render the debug trajectory (what solver was attempting)
         logger.info("Rendering debug trajectory from failed optimization...")
-        debug_traj_images = render_and_save_planned_trajectory(
-            state_traj, input_traj, self.env, f"_iter_{iteration}_DEBUG"
+        debug_traj_images = render_planned_trajectory(
+            state_traj, joint_vel_traj, self.env
         )
 
         # Get the video directory (uses VIDEO_DIR env var if set)
@@ -142,7 +130,7 @@ def render_failed_trajectory(
         if debug_traj_images and len(debug_traj_images) > 0:
             import imageio
 
-            fps = 1 / self.config.experiment.sim_dt
+            fps = 1 / self.config.mpc_config.mpc_dt
             video_path = video_dir / f"debug_trajectory_iter_{iteration}.mp4"
             imageio.mimsave(str(video_path), debug_traj_images, fps=fps)
             logger.info(f"Saved debug trajectory video: {video_path}")
