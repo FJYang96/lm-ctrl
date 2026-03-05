@@ -14,6 +14,12 @@ docker run --rm \
         export LD_LIBRARY_PATH=/Quadruped-PyMPC/quadruped_pympc/acados/lib:/Quadruped-PyMPC/quadruped_pympc/acados/build/external/hpipm:\$LD_LIBRARY_PATH
         export ACADOS_SOURCE_DIR=/Quadruped-PyMPC/quadruped_pympc/acados
         export MUJOCO_GL=osmesa
+        export MPLBACKEND=Agg
+
+        # Prevent OpenBLAS/MUMPS thread deadlock in Docker
+        export OMP_NUM_THREADS=4
+        export OPENBLAS_NUM_THREADS=4
+        export MKL_NUM_THREADS=4
 
         # Create results directory if it doesn't exist
         mkdir -p results
@@ -26,7 +32,7 @@ docker run --rm \
 
         # Run the Opti-based implementation
         echo '📊 Running Opti-based trajectory optimization...'
-        python main.py --solver opti
+        xvfb-run -a python main.py --solver opti
 
         echo '✅ Optimization complete! Check results/ directory for outputs.'
     "

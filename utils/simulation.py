@@ -148,7 +148,10 @@ def _run_simulation_with_rendering(
         Tuple of (qpos_traj, qvel_traj, images) - position, velocity trajectories, and rendered images
     """
 
+    import mujoco
+
     num_steps = int(config.experiment.duration / config.experiment.sim_dt)
+    renderer = mujoco.Renderer(env.mjModel, height=480, width=640)
     images = []
     qpos_traj = []
     qvel_traj = []
@@ -165,7 +168,8 @@ def _run_simulation_with_rendering(
         qvel_traj.append(state["qvel"].copy())
         grf_traj.append(state["contact_forces:base"].copy())
         # Render and composite images
-        image = env.render(mode="rgb_array", tint_robot=True)
+        renderer.update_scene(env.mjData)
+        image = renderer.render()
         overplotted_image = np.uint8(
             0.7 * image
             + 0.3
@@ -177,4 +181,5 @@ def _run_simulation_with_rendering(
         )
         images.append(overplotted_image)
 
+    renderer.close()
     return np.array(qpos_traj), np.array(qvel_traj), np.array(grf_traj), images

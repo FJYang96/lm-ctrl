@@ -12,13 +12,15 @@ def render_planned_trajectory(
     state_traj: np.ndarray, joint_vel_traj: np.ndarray, env: QuadrupedEnv
 ) -> list[np.ndarray]:
     """
-    Renders the planned trajectory.
+    Renders the planned trajectory using offscreen mujoco.Renderer.
     Args:
         state_traj: (N, 12)
         joint_vel_traj: (N, 12)
         env: gym.Env
     """
+    import mujoco
 
+    renderer = mujoco.Renderer(env.mjModel, height=480, width=640)
     images = []
     for i in range(state_traj.shape[0]):
         state = state_traj[i]
@@ -27,7 +29,9 @@ def render_planned_trajectory(
         )
         qpos, qvel = mpc_to_sim(state, joint_vel)
         env.reset(qpos=qpos, qvel=qvel)
-        images.append(env.render(mode="rgb_array"))
+        renderer.update_scene(env.mjData)
+        images.append(renderer.render())
+    renderer.close()
     return images
 
 
