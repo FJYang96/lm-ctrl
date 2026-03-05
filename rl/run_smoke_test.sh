@@ -11,7 +11,7 @@
 set -e
 
 TIMESTEPS=${1:-200000}
-NUM_ENVS=${2:-256}
+NUM_ENVS=${2:-1024}
 OUTPUT_DIR="rl/trained_models/smoke_test"
 
 echo "=== OPT-Mimic Smoke Test (JAX/MJX) ==="

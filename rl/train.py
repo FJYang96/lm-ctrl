@@ -1,6 +1,7 @@
 """Train a per-trajectory Go2 tracking policy using JAX PPO (OPT-Mimic).
 
-GPU-accelerated training with MuJoCo MJX. Falls back to CPU JAX if no GPU.
+Multi-GPU accelerated training with MuJoCo MJX via jax.pmap.
+Single compiled train_step (rollout + PPO) for maximum throughput.
 
 Usage:
     python -m rl.train \
@@ -9,25 +10,28 @@ Usage:
         --joint-vel-traj results/joint_vel_traj.npy \
         --output-dir rl/trained_models \
         --total-timesteps 2000000 \
-        --num-envs 256
+        --num-envs 1024
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import time
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import mujoco
+import mujoco.mjx as mjx
 import numpy as np
 import optax
 
 import config
 from mpc.dynamics.model import KinoDynamic_Model
 
-from .callbacks import get_log, write_training_header_jax, save_reward_curve, save_component_plot
+from .callbacks import get_log, save_reward_curve, write_training_header_jax
 from .feedforward import FeedforwardComputer
 from .ppo import (
     ActorCritic,
@@ -42,15 +46,15 @@ from .ppo import (
 )
 from .reference import ReferenceTrajectory
 from .tracking_env import (
-    EnvState,
-    RefData,
-    load_mjx_model,
-    make_ref_data,
-    get_obs,
-    reset_fast,
-    step as env_step,
     _get_foot_body_ids,
     _get_ground_geom_id,
+    get_obs,
+    load_mjx_model,
+    make_ref_data,
+    reset_fast,
+)
+from .tracking_env import (
+    step as env_step,
 )
 
 
@@ -76,11 +80,10 @@ def build_reference(
 
 
 def train(args: argparse.Namespace) -> None:
-    # Suppress warp import warnings
     os.environ.setdefault("MUJOCO_GL", "egl")
 
-    print(f"JAX devices: {jax.devices()}")
-    print(f"JAX backend: {jax.default_backend()}")
+    n_devices = jax.local_device_count()
+    print(f"JAX devices: {jax.devices()} ({n_devices} GPUs)")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -101,12 +104,14 @@ def train(args: argparse.Namespace) -> None:
     foot_body_ids = _get_foot_body_ids(mj_model)
     ground_geom_id = _get_ground_geom_id(mj_model)
 
+    # Round num_envs to multiple of n_devices
+    num_envs = max(n_devices, (args.num_envs // n_devices) * n_devices)
+    envs_per_device = num_envs // n_devices
+
     # PPO hyperparameters
-    num_envs = args.num_envs
     samples_per_update = 20000
     n_steps = max(1, samples_per_update // num_envs)
     n_updates = args.total_timesteps // samples_per_update
-    batch_size = min(5000, n_steps * num_envs)
     n_epochs = args.n_epochs
     gamma = 0.995
     gae_lambda = 0.95
@@ -115,22 +120,27 @@ def train(args: argparse.Namespace) -> None:
     vf_coef = 0.5
     max_grad_norm = 0.5
 
-    print(f"Training: {args.total_timesteps} steps, {num_envs} envs, "
-          f"{n_steps} steps/update, {n_updates} updates, {n_epochs} epochs")
+    # Batch size per device (must divide evenly into per-device samples)
+    per_device_samples = n_steps * envs_per_device
+    n_minibatches = max(1, per_device_samples // 5000)
+    batch_size = per_device_samples // n_minibatches
+
+    print(f"Training: {args.total_timesteps} steps, {num_envs} envs "
+          f"({envs_per_device}/GPU x {n_devices} GPUs)")
+    print(f"  {n_steps} steps/update, {n_updates} updates, {n_epochs} epochs, "
+          f"{n_minibatches} minibatches of {batch_size}")
 
     # Initialize network
     network = ActorCritic(action_dim=12)
     rng = jax.random.PRNGKey(42)
     rng, init_rng = jax.random.split(rng)
-    dummy_obs = jnp.zeros(39)
-    params = network.init(init_rng, dummy_obs)
+    params = network.init(init_rng, jnp.zeros(39))
+    apply_fn = network.apply
 
-    # Optimizer with LR schedule (exponential decay 0.99 per update)
+    # Optimizer with LR schedule
+    lr_denom = n_epochs * n_minibatches
     def lr_schedule(step):
-        # step = update_idx * n_epochs * n_minibatches + ...
-        # We approximate: lr decays per outer update
-        update_approx = step / (n_epochs * max(1, (n_steps * num_envs) // batch_size))
-        return 1e-3 * (0.99 ** update_approx)
+        return 1e-3 * (0.99 ** (step / lr_denom))
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(max_grad_norm),
@@ -138,233 +148,210 @@ def train(args: argparse.Namespace) -> None:
         optax.adam(learning_rate=lr_schedule),
     )
     opt_state = optimizer.init(params)
-
-    # Observation normalizer
     normalizer = init_normalizer(39)
 
-    # Initialize environments
+    # Create MJX data template
+    mjx_data_template = mjx.put_data(mj_model, mujoco.MjData(mj_model))
+
+    # --- Initialize envs (num_envs total, then reshape for pmap) ---
     print("Initializing environments...")
-    import mujoco as mj
-    mj_data_template = mj.MjData(mj_model)
-    mjx_data_template = jax.jit(lambda: __import__('mujoco').mjx.put_data(mj_model, mj_data_template))()
-
-    rng, *env_rngs = jax.random.split(rng, num_envs + 1)
-    env_rngs = jnp.stack(env_rngs)
-
-    # Vectorized reset
     def reset_one(rng):
         return reset_fast(rng, mjx_model, mjx_data_template, ref_data, randomize=True)
 
-    print("Compiling reset...")
-    t0 = time.time()
-    batched_reset = jax.jit(jax.vmap(reset_one))
-    env_states = batched_reset(env_rngs)
-    env_states.phase.block_until_ready()
-    print(f"Reset compiled in {time.time() - t0:.1f}s")
+    rng, init_rng = jax.random.split(rng)
+    all_rngs = jax.random.split(init_rng, num_envs)
+    all_states = jax.jit(jax.vmap(reset_one))(all_rngs)
+    all_states.phase.block_until_ready()
 
-    # Compile step function
-    def step_one(state, action):
-        return env_step(state, action, mjx_model, ref_data, foot_body_ids, ground_geom_id)
+    # Reshape to (n_devices, envs_per_device, ...)
+    env_states = jax.tree.map(
+        lambda x: x.reshape(n_devices, envs_per_device, *x.shape[1:]),
+        all_states,
+    )
 
-    batched_step = jax.vmap(step_one)
+    # Replicate params/opt_state/normalizer across devices
+    def _replicate(x):
+        return jnp.stack([x] * n_devices)
 
-    def get_obs_one(state):
+    params = jax.tree.map(_replicate, params)
+    opt_state = jax.tree.map(_replicate, opt_state)
+    normalizer = jax.tree.map(_replicate, normalizer)
+
+    # Device RNGs: (n_devices, 2)
+    rng, *d_rngs = jax.random.split(rng, n_devices + 1)
+    device_rngs = jnp.stack(d_rngs)
+
+    # --- Build single compiled train_step (rollout + PPO) ---
+    def _get_obs_fn(state):
         return get_obs(state, ref_data)
 
-    batched_get_obs = jax.vmap(get_obs_one)
+    def _step_fn(state, action):
+        return env_step(state, action, mjx_model, ref_data, foot_body_ids, ground_geom_id)
 
-    # Compile a single step to warm up
-    print("Compiling step...")
-    t0 = time.time()
-    dummy_actions = jnp.zeros((num_envs, 12))
-    _test_out = jax.jit(batched_step)(env_states, dummy_actions)
-    _test_out[0].phase.block_until_ready()
-    print(f"Step compiled in {time.time() - t0:.1f}s")
+    def _maybe_reset(state, done, rng):
+        new_state = reset_fast(rng, mjx_model, state.mjx_data, ref_data, randomize=True)
+        return jax.tree.map(lambda n, o: jnp.where(done, n, o), new_state, state)
 
-    # Apply function
-    apply_fn = network.apply
-
-    # JIT-compiled rollout collection
-    @jax.jit
-    def collect_rollout(params, normalizer, env_states, rng):
-        """Collect n_steps of experience from all envs."""
-        def scan_step(carry, _):
+    @functools.partial(jax.pmap, axis_name="d")
+    def train_step(params, opt_state, normalizer, env_states, rng):
+        # ---- Rollout collection ----
+        def scan_body(carry, _):
             states, norm, rng = carry
             rng, act_rng, reset_rng = jax.random.split(rng, 3)
 
-            obs = batched_get_obs(states)
+            obs = jax.vmap(_get_obs_fn)(states)
             obs_norm = jax.vmap(lambda o: normalize_obs(norm, o))(obs)
 
-            # Sample actions
-            act_rngs = jax.random.split(act_rng, num_envs)
+            act_rngs = jax.random.split(act_rng, envs_per_device)
             actions, log_probs, values = jax.vmap(
-                lambda p, o, r: sample_action(p, apply_fn, o, r),
-                in_axes=(None, 0, 0)
-            )(params, obs_norm, act_rngs)
+                lambda o, r: sample_action(params, apply_fn, o, r)
+            )(obs_norm, act_rngs)
 
-            # Step all envs
-            new_states, next_obs, rewards, dones = batched_step(states, actions)
+            new_states, _, rewards, dones = jax.vmap(_step_fn)(states, actions)
 
-            # Auto-reset done envs
-            reset_rngs = jax.random.split(reset_rng, num_envs)
+            reset_rngs = jax.random.split(reset_rng, envs_per_device)
+            new_states = jax.vmap(_maybe_reset)(new_states, dones, reset_rngs)
 
-            def maybe_reset(state, done, rng):
-                new_state = reset_fast(rng, mjx_model, state.mjx_data, ref_data, randomize=True)
-                return jax.tree.map(
-                    lambda n, o: jnp.where(done, n, o), new_state, state
-                )
-
-            new_states = jax.vmap(maybe_reset)(new_states, dones, reset_rngs)
-
-            # Update normalizer with raw obs
             norm = update_normalizer(norm, obs)
 
-            transition = {
-                "obs": obs_norm,
-                "actions": actions,
-                "log_probs": log_probs,
-                "values": values,
-                "rewards": rewards,
-                "dones": dones,
-            }
+            return (new_states, norm, rng), (obs_norm, actions, log_probs, values, rewards, dones)
 
-            return (new_states, norm, rng), transition
-
-        (env_states_out, normalizer_out, rng_out), rollout = jax.lax.scan(
-            scan_step, (env_states, normalizer, rng), None, length=n_steps
+        (env_states, normalizer, rng), rollout = jax.lax.scan(
+            scan_body, (env_states, normalizer, rng), None, length=n_steps
         )
+        obs_r, act_r, lp_r, val_r, rew_r, done_r = rollout
 
         # Last value for GAE
-        last_obs = batched_get_obs(env_states_out)
-        last_obs_norm = jax.vmap(lambda o: normalize_obs(normalizer_out, o))(last_obs)
-        _, _, last_values = jax.vmap(
-            lambda p, o: apply_fn(p, o), in_axes=(None, 0)
-        )(params, last_obs_norm)
-
-        return env_states_out, normalizer_out, rng_out, rollout, last_values
-
-    # JIT-compiled PPO update
-    @jax.jit
-    def ppo_update(params, opt_state, rollout, last_values, rng):
-        """Run n_epochs of minibatch PPO updates."""
-        obs = rollout["obs"]  # (T, N, 39)
-        actions = rollout["actions"]  # (T, N, 12)
-        old_log_probs = rollout["log_probs"]  # (T, N)
-        values = rollout["values"]  # (T, N)
-        rewards = rollout["rewards"]  # (T, N)
-        dones = rollout["dones"]  # (T, N)
+        last_obs = jax.vmap(_get_obs_fn)(env_states)
+        last_obs_norm = jax.vmap(lambda o: normalize_obs(normalizer, o))(last_obs)
+        _, _, last_vals = jax.vmap(lambda o: apply_fn(params, o))(last_obs_norm)
 
         # GAE
-        advantages, returns = compute_gae(rewards, values, dones, last_values, gamma, gae_lambda)
+        advs, rets = compute_gae(rew_r, val_r, done_r, last_vals, gamma, gae_lambda)
 
-        # Flatten
-        T, N = obs.shape[0], obs.shape[1]
-        total_samples = T * N
-        obs_flat = obs.reshape(total_samples, -1)
-        actions_flat = actions.reshape(total_samples, -1)
-        old_lp_flat = old_log_probs.reshape(total_samples)
-        adv_flat = advantages.reshape(total_samples)
-        ret_flat = returns.reshape(total_samples)
+        # Flatten for PPO
+        total = n_steps * envs_per_device
+        obs_f = obs_r.reshape(total, -1)
+        act_f = act_r.reshape(total, -1)
+        lp_f = lp_r.reshape(total)
+        adv_f = advs.reshape(total)
+        ret_f = rets.reshape(total)
 
-        def epoch_step(carry, rng_epoch):
+        # ---- PPO update ----
+        rng, ppo_rng = jax.random.split(rng)
+
+        def epoch_fn(carry, epoch_rng):
             params, opt_state = carry
-            # Shuffle
-            perm = jax.random.permutation(rng_epoch, total_samples)
-            n_batches = max(1, total_samples // batch_size)
+            perm = jax.random.permutation(epoch_rng, total)
 
-            def batch_step(carry, batch_idx):
+            def mb_fn(carry, mb_idx):
                 params, opt_state = carry
-                start = batch_idx * batch_size
-                idx = jax.lax.dynamic_slice(perm, (start,), (batch_size,))
-
-                mb_obs = obs_flat[idx]
-                mb_actions = actions_flat[idx]
-                mb_old_lp = old_lp_flat[idx]
-                mb_adv = adv_flat[idx]
-                mb_ret = ret_flat[idx]
-
+                idx = jax.lax.dynamic_slice(perm, (mb_idx * batch_size,), (batch_size,))
                 grad_fn = jax.grad(ppo_loss, has_aux=True)
                 grads, info = grad_fn(
-                    params, apply_fn, mb_obs, mb_actions, mb_old_lp,
-                    mb_adv, mb_ret, clip_range, vf_coef, ent_coef,
+                    params, apply_fn, obs_f[idx], act_f[idx], lp_f[idx],
+                    adv_f[idx], ret_f[idx], clip_range, vf_coef, ent_coef,
                 )
-                updates, new_opt_state = optimizer.update(grads, opt_state, params)
-                new_params = optax.apply_updates(params, updates)
-                return (new_params, new_opt_state), info
+                # Sync gradients across GPUs
+                grads = jax.lax.pmean(grads, axis_name="d")
+                updates, opt_state = optimizer.update(grads, opt_state, params)
+                params = optax.apply_updates(params, updates)
+                return (params, opt_state), info
 
             (params, opt_state), infos = jax.lax.scan(
-                batch_step, (params, opt_state), jnp.arange(n_batches)
+                mb_fn, (params, opt_state), jnp.arange(n_minibatches)
             )
             return (params, opt_state), infos
 
-        epoch_rngs = jax.random.split(rng, n_epochs)
+        epoch_rngs = jax.random.split(ppo_rng, n_epochs)
         (params, opt_state), all_infos = jax.lax.scan(
-            epoch_step, (params, opt_state), epoch_rngs
+            epoch_fn, (params, opt_state), epoch_rngs
         )
 
-        # Average metrics across last epoch's batches
-        last_info = jax.tree.map(lambda x: jnp.mean(x[-1]), all_infos)
-        mean_reward = jnp.mean(rewards)
-        last_info["mean_reward"] = mean_reward
-        last_info["mean_ep_length"] = jnp.mean(jnp.sum(1.0 - dones.astype(jnp.float32), axis=0))
+        # Sync normalizer across GPUs
+        normalizer = NormalizerState(
+            mean=jax.lax.pmean(normalizer.mean, axis_name="d"),
+            var=jax.lax.pmean(normalizer.var, axis_name="d"),
+            count=normalizer.count,
+        )
 
-        return params, opt_state, last_info
+        # ---- Metrics ----
+        metrics = jax.tree.map(lambda x: jnp.mean(x[-1]), all_infos)
+        metrics["mean_reward"] = jnp.mean(rew_r)
 
-    # Training loop
+        # Episode returns
+        def _ep_scan(running, step_data):
+            r, d = step_data
+            running = running + r
+            ep_ret = jnp.where(d, running, 0.0)
+            ep_valid = d.astype(jnp.float32)
+            running = jnp.where(d, 0.0, running)
+            return running, (ep_ret, ep_valid)
+
+        _, (ep_rets, ep_valids) = jax.lax.scan(
+            _ep_scan, jnp.zeros(envs_per_device), (rew_r, done_r)
+        )
+        n_eps = jnp.sum(ep_valids)
+        metrics["total_ep_return"] = jnp.where(
+            n_eps > 0, jnp.sum(ep_rets) / n_eps, jnp.sum(rew_r) / envs_per_device
+        )
+
+        return (params, opt_state, normalizer, env_states, rng), metrics
+
+    # --- Training loop ---
     log = get_log()
     write_training_header_jax(args.total_timesteps, num_envs, ref)
 
     reward_history = []
-    component_history = {"rw_pos": [], "rw_ori": [], "rw_joint": [], "rw_smooth": [], "rw_torque": []}
     timestep_history = []
-
     total_steps = 0
+
     print(f"\nStarting training ({n_updates} updates)...")
     t_start = time.time()
 
     for update_idx in range(n_updates):
         t_update = time.time()
 
-        # Collect rollout
-        rng, rollout_rng = jax.random.split(rng)
-        env_states, normalizer, rng, rollout, last_values = collect_rollout(
-            params, normalizer, env_states, rollout_rng
+        carry, metrics = train_step(
+            params, opt_state, normalizer, env_states, device_rngs
         )
+        params, opt_state, normalizer, env_states, device_rngs = carry
 
-        # PPO update
-        rng, ppo_rng = jax.random.split(rng)
-        params, opt_state, update_info = ppo_update(
-            params, opt_state, rollout, last_values, ppo_rng
-        )
-
-        total_steps += n_steps * num_envs
+        # Block for timing
+        jax.tree.map(lambda x: x.block_until_ready(), metrics)
         dt = time.time() - t_update
 
-        # Log every update
-        mean_reward = float(update_info["mean_reward"])
-        reward_history.append(mean_reward)
+        total_steps += n_steps * num_envs
+
+        # Metrics from device 0
+        ep_return = float(metrics["total_ep_return"][0])
+        reward_history.append(ep_return)
         timestep_history.append(total_steps)
 
-        if update_idx % 1 == 0:
-            pg_loss = float(update_info["pg_loss"])
-            vf_loss = float(update_info["vf_loss"])
-            entropy = float(update_info["entropy"])
-            kl = float(update_info["approx_kl"])
-            clip_frac = float(update_info["clip_fraction"])
+        pg_loss = float(metrics["pg_loss"][0])
+        vf_loss = float(metrics["vf_loss"][0])
+        entropy = float(metrics["entropy"][0])
+        kl = float(metrics["approx_kl"][0])
+        clip_frac = float(metrics["clip_fraction"][0])
 
-            msg = (
-                f"[step {total_steps:>9,}  update {update_idx + 1:>5}]  "
-                f"reward={mean_reward:.4f}  pg_loss={pg_loss:.5g}  "
-                f"vf_loss={vf_loss:.5g}  kl={kl:.5g}  clip={clip_frac:.3f}  "
-                f"entropy={entropy:.3f}  dt={dt:.1f}s"
-            )
-            log.info(msg)
-            print(msg)
+        msg = (
+            f"[step {total_steps:>9,}  update {update_idx + 1:>5}]  "
+            f"ep_return={ep_return:.2f}  pg_loss={pg_loss:.5g}  "
+            f"vf_loss={vf_loss:.5g}  kl={kl:.5g}  clip={clip_frac:.3f}  "
+            f"entropy={entropy:.3f}  dt={dt:.1f}s"
+        )
+        log.info(msg)
+        print(msg)
 
         # Save checkpoint periodically
         if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:
+            # Extract device 0 params for saving
+            params_cpu = jax.tree.map(lambda x: x[0], params)
+            norm_cpu = NormalizerState(
+                mean=normalizer.mean[0], var=normalizer.var[0], count=normalizer.count[0]
+            )
             ckpt_path = str(output_dir / "checkpoints" / f"step_{total_steps}")
-            save_checkpoint(ckpt_path, params, normalizer, total_steps)
+            save_checkpoint(ckpt_path, params_cpu, norm_cpu, total_steps)
 
         # Save plots periodically
         if (update_idx + 1) % max(1, n_updates // 5) == 0 or update_idx == n_updates - 1:
@@ -376,17 +363,20 @@ def train(args: argparse.Namespace) -> None:
     elapsed = time.time() - t_start
     print(f"\nTraining complete in {elapsed:.1f}s ({total_steps:,} steps)")
 
-    # Save final checkpoint as "best_model"
+    # Save final checkpoint
+    params_cpu = jax.tree.map(lambda x: x[0], params)
+    norm_cpu = NormalizerState(
+        mean=normalizer.mean[0], var=normalizer.var[0], count=normalizer.count[0]
+    )
     best_dir = str(output_dir / "best_model")
-    save_checkpoint(best_dir, params, normalizer, total_steps)
+    save_checkpoint(best_dir, params_cpu, norm_cpu, total_steps)
     print(f"Model saved to {best_dir}")
 
-    # Save normalizer stats separately for backward compatibility
     np.savez(
         str(output_dir / "normalizer.npz"),
-        mean=np.array(normalizer.mean),
-        var=np.array(normalizer.var),
-        count=np.array(normalizer.count),
+        mean=np.array(norm_cpu.mean),
+        var=np.array(norm_cpu.var),
+        count=np.array(norm_cpu.count),
     )
 
 
@@ -398,7 +388,7 @@ if __name__ == "__main__":
     parser.add_argument("--contact-sequence", type=str, default=None)
     parser.add_argument("--output-dir", type=str, default="rl/trained_models")
     parser.add_argument("--total-timesteps", type=int, default=10_000_000)
-    parser.add_argument("--num-envs", type=int, default=256)
+    parser.add_argument("--num-envs", type=int, default=1024)
     parser.add_argument("--n-epochs", type=int, default=10)
     parser.add_argument("--sim-dt", type=float, default=0.001)
     parser.add_argument("--control-dt", type=float, default=0.02)

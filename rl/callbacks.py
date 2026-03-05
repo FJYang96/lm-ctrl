@@ -75,7 +75,7 @@ def save_reward_curve(
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 4))
     ax.plot(smooth_s, smooth_r, linewidth=0.8)
-    ax.set_ylabel("Mean Reward")
+    ax.set_ylabel("Episode Return")
     ax.set_xlabel("Timesteps")
     ax.set_title(f"Training Progress ({total_steps:,} steps)")
     ax.grid(True, alpha=0.3)
@@ -197,9 +197,9 @@ def diagnose_termination(
     )
     log.info("-" * 60)
 
-    import jax
     import jax.numpy as jnp
-    from .ppo import normalize_obs as norm_obs, NormalizerState
+
+    from .ppo import normalize_obs as norm_obs
 
     for step_idx in range(ref.max_phase):
         obs_jnp = jnp.array(obs)
