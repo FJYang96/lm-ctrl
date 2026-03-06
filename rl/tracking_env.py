@@ -110,9 +110,11 @@ def load_mjx_model(sim_dt: float = 0.001) -> tuple[mujoco.MjModel, Any]:
 
     mj_model = mujoco.MjModel.from_xml_path(_XML_PATH)
     mj_model.opt.timestep = sim_dt
-    # MJX solver iterations: 6 is sufficient and much faster than default 100
-    mj_model.opt.iterations = 6
-    mj_model.opt.ls_iterations = 6
+    # MJX solver iterations: 12 for better contact resolution on landing impacts
+    mj_model.opt.iterations = 12
+    mj_model.opt.ls_iterations = 8
+    # Increase contact damping to reduce landing bounce (o_solref = [timeconst, damping])
+    mj_model.opt.o_solref[1] = 1.5
 
     # Convert collision cylinders to capsules (MJX doesn't support cylinder-box)
     for i in range(mj_model.ngeom):

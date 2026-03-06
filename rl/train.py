@@ -114,7 +114,7 @@ def train(args: argparse.Namespace) -> None:
     gamma = 0.995
     gae_lambda = 0.95
     clip_range = 0.2
-    ent_coef = 0.005
+    ent_coef = 0.01
     vf_coef = 0.5
     max_grad_norm = 0.5
 
@@ -138,7 +138,7 @@ def train(args: argparse.Namespace) -> None:
     # Optimizer with LR schedule
     lr_denom = n_epochs * n_minibatches
     def lr_schedule(step):
-        return 1e-3 * (0.99 ** (step / lr_denom))
+        return 1e-3 * (0.999 ** (step / lr_denom))
 
     optimizer = optax.chain(
         optax.clip_by_global_norm(max_grad_norm),
