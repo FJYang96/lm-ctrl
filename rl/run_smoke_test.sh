@@ -1,37 +1,41 @@
 #!/bin/bash
-# Smoke test: train RL tracking policy on results/ trajectory, then compare vs open-loop.
+# Smoke test: train RL tracking policy on a trajectory, then evaluate.
 #
 # Usage:
-#   ./rl/run_smoke_test.sh [TIMESTEPS] [NUM_ENVS]
+#   ./rl/run_smoke_test.sh [TIMESTEPS] [NUM_ENVS] [STATE_TRAJ] [GRF_TRAJ] [JOINT_VEL_TRAJ] [PLANNED_VIDEO]
 #
 # Examples:
-#   ./rl/run_smoke_test.sh              # 200k steps, 256 envs (quick GPU test)
-#   ./rl/run_smoke_test.sh 2000000 512  # 2M steps, 512 envs (full run)
+#   ./rl/run_smoke_test.sh                          # defaults: 200k steps, results/ trajectories
+#   ./rl/run_smoke_test.sh 500000 1024 path/to/state.npy path/to/grf.npy path/to/jvel.npy path/to/planned.mp4
 
 set -e
 
-TIMESTEPS=${1:-200000}
+TIMESTEPS=${1:-10000000}
 NUM_ENVS=${2:-1024}
-OUTPUT_DIR="rl/trained_models/smoke_test"
+ITER_DIR="results/llm_iterations/jump_around_and_turn_around_180_degrees_1772754153"
+STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_17.npy}
+GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_17.npy}
+JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_17.npy}
+PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_17.mp4}
+
+# Create a new timestamped run directory (never delete previous runs)
+RUN_TAG="run_$(date +%Y%m%d_%H%M%S)"
+OUTPUT_DIR="rl/trained_models/$RUN_TAG"
 LOG_FILE="$OUTPUT_DIR/experiment.log"
 
-# Clean all previous trained models and old outputs
-if [ -d "rl/trained_models" ]; then
-    rm -rf rl/trained_models
-fi
-rm -f results/rl_tracking.mp4
-
-# Ensure output directory exists (Python scripts also create it, but shell needs it for early logging)
 mkdir -p "$OUTPUT_DIR"
+
+echo "Output directory: $OUTPUT_DIR"
+echo "Trajectories: $STATE_TRAJ"
 
 EXPERIMENT_START=$SECONDS
 
 # Step 1: Train
 echo "[1/3] Training tracking policy (JAX PPO + MJX)..."
 MUJOCO_GL=egl python -m rl.train \
-    --state-traj results/state_traj.npy \
-    --grf-traj results/grf_traj.npy \
-    --joint-vel-traj results/joint_vel_traj.npy \
+    --state-traj "$STATE_TRAJ" \
+    --grf-traj "$GRF_TRAJ" \
+    --joint-vel-traj "$JOINT_VEL_TRAJ" \
     --output-dir "$OUTPUT_DIR" \
     --total-timesteps "$TIMESTEPS" \
     --num-envs "$NUM_ENVS"
@@ -41,12 +45,15 @@ echo "[2/3] Evaluating RL policy..."
 MODEL_PATH="$OUTPUT_DIR/best_model"
 MUJOCO_GL=egl python -m rl.evaluate \
     --model-path "$MODEL_PATH" \
+    --state-traj "$STATE_TRAJ" \
+    --grf-traj "$GRF_TRAJ" \
+    --joint-vel-traj "$JOINT_VEL_TRAJ" \
     --output-video "$OUTPUT_DIR/rl_tracking.mp4"
 
 # Step 3: Generate comparison frames
 echo "[3/3] Generating comparison frames..."
 python -m rl.generate_frames \
-    --planned results/planned_traj.mp4 \
+    --planned "$PLANNED_VIDEO" \
     --rl "$OUTPUT_DIR/rl_tracking.mp4" \
     --output-dir "$OUTPUT_DIR/comparison" \
     --num-frames 20 2>/dev/null || echo "Frame generation skipped (no video or cv2 missing)"

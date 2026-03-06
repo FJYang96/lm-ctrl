@@ -353,10 +353,9 @@ def reset(
     """Reset environment to reference state with domain randomization."""
     rng, rng_phase, rng_offset, rng_torque = jax.random.split(rng, 4)
 
-    max_start = jnp.minimum(15, ref_data.max_phase)
     start_phase = jnp.where(
         randomize,
-        jax.random.randint(rng_phase, (), 0, max_start),
+        jax.random.randint(rng_phase, (), 0, ref_data.max_phase),
         jnp.int32(0),
     )
 
@@ -411,10 +410,9 @@ def reset_fast(
     """Fast reset using existing mjx_data (no mj_model needed). For auto-reset in scan."""
     rng, rng_phase, rng_offset, rng_torque = jax.random.split(rng, 4)
 
-    max_start = jnp.minimum(15, ref_data.max_phase)
     start_phase = jnp.where(
         randomize,
-        jax.random.randint(rng_phase, (), 0, max_start),
+        jax.random.randint(rng_phase, (), 0, ref_data.max_phase),
         jnp.int32(0),
     )
 
