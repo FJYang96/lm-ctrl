@@ -45,6 +45,8 @@ W_TORQUE = 0.1
 TERM_MULTIPLIER = 2.5
 OBS_DIM = 39
 N_SUBSTEPS = 20  # 50Hz policy / 1kHz physics
+CONTACT_GRACE_WINDOW = 6  # 120ms at 50Hz
+FOOT_GEOM_NAMES = ("FL", "FR", "RL", "RR")
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +73,10 @@ class RefData(NamedTuple):
     body_ang_vel: jnp.ndarray  # (N+1, 3)
     ff_torques: jnp.ndarray  # (N, 12)
     max_phase: jnp.ndarray  # int32 scalar
+    contact_sequence: jnp.ndarray  # (4, N) — 1=stance, 0=swing, -1=unavailable
+    ground_geom_id: jnp.ndarray  # int32 scalar
+    foot_geom_ids: jnp.ndarray  # (4,) int32
+    near_transition: jnp.ndarray  # (4, N) — 1.0 if near contact transition
 
 
 # ---------------------------------------------------------------------------
@@ -117,26 +123,25 @@ def load_mjx_model(sim_dt: float = 0.001) -> tuple[mujoco.MjModel, Any]:
     return mj_model, mjx_model
 
 
-def _get_foot_body_ids(mj_model: mujoco.MjModel) -> jnp.ndarray:
-    """Get body IDs for the four foot geoms (FL, FR, RL, RR)."""
-    ids = []
-    for name in ["FL", "FR", "RL", "RR"]:
-        gid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_GEOM, name)
-        ids.append(int(mj_model.geom_bodyid[gid]))
-    return jnp.array(ids, dtype=jnp.int32)
-
-
 def _get_ground_geom_id(mj_model: mujoco.MjModel) -> int:
     """Get the ground geom ID (floor)."""
     gid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
     return int(gid)
 
 
+def _get_foot_geom_ids(mj_model: mujoco.MjModel) -> np.ndarray:
+    """Get foot geom IDs for FL, FR, RL, RR. Returns (4,) int32."""
+    return np.array([
+        mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        for name in FOOT_GEOM_NAMES
+    ], dtype=np.int32)
+
+
 # ---------------------------------------------------------------------------
 # Reference data conversion
 # ---------------------------------------------------------------------------
 
-def make_ref_data(ref: ReferenceTrajectory) -> RefData:
+def make_ref_data(ref: ReferenceTrajectory, mj_model: mujoco.MjModel) -> RefData:
     """Convert CPU ReferenceTrajectory to JAX RefData arrays."""
     N = ref.max_phase
     body_pos = np.zeros((N + 1, 3))
@@ -158,6 +163,28 @@ def make_ref_data(ref: ReferenceTrajectory) -> RefData:
         joint_vel[k] = ref.get_joint_vel(k)
         ff_torques[k] = ref.get_feedforward_torque(k)
 
+    # Contact sequence: (4, N) with -1 sentinel when unavailable
+    if ref.contact_sequence is not None:
+        contact_sequence = ref.contact_sequence[:, :N].astype(np.float32)
+    else:
+        contact_sequence = -np.ones((4, N), dtype=np.float32)
+
+    # Geom IDs for contact termination
+    ground_geom_id = _get_ground_geom_id(mj_model)
+    foot_geom_ids = _get_foot_geom_ids(mj_model)
+
+    # Precompute near-transition mask for contact grace window (120ms)
+    near_transition = np.ones((4, N), dtype=np.float32)  # default: all grace
+    if ref.contact_sequence is not None:
+        near_transition = np.zeros((4, N), dtype=np.float32)
+        for foot in range(4):
+            for k in range(N):
+                current = ref.contact_sequence[foot, k]
+                lo = max(0, k - CONTACT_GRACE_WINDOW)
+                hi = min(N - 1, k + CONTACT_GRACE_WINDOW)
+                if np.any(ref.contact_sequence[foot, lo:hi + 1] != current):
+                    near_transition[foot, k] = 1.0
+
     return RefData(
         body_pos=jnp.array(body_pos),
         body_quat=jnp.array(body_quat),
@@ -167,6 +194,10 @@ def make_ref_data(ref: ReferenceTrajectory) -> RefData:
         body_ang_vel=jnp.array(body_ang_vel),
         ff_torques=jnp.array(ff_torques),
         max_phase=jnp.int32(N),
+        contact_sequence=jnp.array(contact_sequence),
+        ground_geom_id=jnp.int32(ground_geom_id),
+        foot_geom_ids=jnp.array(foot_geom_ids),
+        near_transition=jnp.array(near_transition),
     )
 
 
@@ -261,9 +292,13 @@ def compute_reward(
 
 def check_termination(
     state: EnvState, reward_info: dict[str, jnp.ndarray],
-    foot_body_ids: jnp.ndarray, ground_geom_id: int,
+    ref_data: RefData,
 ) -> jnp.ndarray:
-    """Early termination if any error exceeds 2.5x sigma or non-foot contact."""
+    """Early termination per OPT-Mimic III-C.4:
+    1. Any tracking error exceeds 2.5x sigma.
+    2. Non-foot body touches ground.
+    3. Foot contact mismatch with reference (120ms grace window).
+    """
     thresh_pos = TERM_MULTIPLIER * SIGMA_POS
     thresh_ori = TERM_MULTIPLIER * SIGMA_ORI
     thresh_joint = TERM_MULTIPLIER * SIGMA_JOINT
@@ -279,47 +314,33 @@ def check_termination(
     )
     term = jnp.where(reward_info["max_torque"] > thresh_torque, 1.0, term)
 
-    # Non-foot body contact with ground (OPT-Mimic III-C.4)
-    data = state.mjx_data
-    contact_geom1 = data.contact.geom1  # (ncon,)
-    contact_geom2 = data.contact.geom2  # (ncon,)
-    contact_dist = data.contact.dist  # (ncon,) negative = penetrating
+    # Condition 2: non-foot body ground contact
+    contact = state.mjx_data.contact
+    active = contact.dist <= 0  # (ncon,)
+    g1_ground = contact.geom1 == ref_data.ground_geom_id
+    g2_ground = contact.geom2 == ref_data.ground_geom_id
+    involves_ground = (g1_ground | g2_ground) & active
+    other_geom = jnp.where(g1_ground, contact.geom2, contact.geom1)
+    is_foot = jnp.any(
+        other_geom[:, None] == ref_data.foot_geom_ids[None, :], axis=1
+    )  # (ncon,)
+    non_foot_ground = jnp.any(involves_ground & ~is_foot)
+    term = jnp.where(non_foot_ground, 1.0, term)
 
-    # Get body IDs for each contact geom
-    # mjx_model geom_bodyid is not in data, we need to check geom IDs directly
-    # Contact is active when dist < 0
-    active = contact_dist < 0.0
+    # Condition 3: foot contact mismatch with grace window
+    phase = _clamp_phase(state.phase, ref_data.max_phase)
+    ref_contact = ref_data.contact_sequence[:, phase]  # (4,)
+    has_contact_info = ref_contact[0] >= 0  # -1 sentinel = unavailable
+    foot_match = other_geom[:, None] == ref_data.foot_geom_ids[None, :]  # (ncon, 4)
+    actual_contact = jnp.any(foot_match & involves_ground[:, None], axis=0)  # (4,)
+    expected_contact = ref_contact > 0.5  # (4,) bool
+    grace = ref_data.near_transition[:, phase]  # (4,) — 1.0 if near transition
+    mismatch = (actual_contact != expected_contact) & (grace < 0.5)
+    contact_mismatch = has_contact_info & jnp.any(mismatch)
+    term = jnp.where(contact_mismatch, 1.0, term)
 
-    # For each contact, check if one geom is floor and the other is non-foot robot body
-    # We use the geom_bodyid from the model, stored as a static array
-    # Since we can't access model here, we pass foot_body_ids and ground_geom_id
-    # ground_geom_id = 0 for floor
-    g1_is_floor = contact_geom1 == ground_geom_id
-    g2_is_floor = contact_geom2 == ground_geom_id
-
-    # Check contact involves floor
-    floor_contact = active & (g1_is_floor | g2_is_floor)
-
-    # For floor contacts, get the non-floor geom
-    # We need geom_bodyid to check - pass it as static data
-    # For now, check using the foot geom IDs directly
-    # Foot geoms: FL=20, FR=32, RL=44, RR=56
-    non_floor_geom = jnp.where(g1_is_floor, contact_geom2, contact_geom1)
-
-    # Check if the non-floor geom is a foot geom (by checking body ID)
-    # We'll use a simplified approach: check if geom is one of the foot geoms
-    # foot_geom_ids are passed in via the foot_body_ids (actually body IDs)
-    # We need the actual foot geom IDs instead
-    # This will be set up properly when we know the model
-    # For now, use a working approach:
-    # A contact is "non-foot" if the non-floor geom body is not in foot_body_ids
-    # We can't get geom_bodyid in pure JAX from data alone, so we pass foot_geom_ids
-
-    has_non_foot_contact = jnp.float32(0.0)
-    term = jnp.where(has_non_foot_contact > 0.5, 1.0, term)
-
-    # Check for NaN in qpos (physics divergence)
-    has_nan = jnp.any(jnp.isnan(data.qpos))
+    # NaN check (physics divergence)
+    has_nan = jnp.any(jnp.isnan(state.mjx_data.qpos))
     term = jnp.where(has_nan, 1.0, term)
 
     return term > 0.5
@@ -330,7 +351,7 @@ def reset(
     ref_data: RefData, randomize: bool = True,
 ) -> EnvState:
     """Reset environment to reference state with domain randomization."""
-    rng, rng_phase, rng_offset, rng_torque, rng_restit = jax.random.split(rng, 5)
+    rng, rng_phase, rng_offset, rng_torque = jax.random.split(rng, 4)
 
     max_start = jnp.minimum(15, ref_data.max_phase)
     start_phase = jnp.where(
@@ -384,7 +405,7 @@ def reset(
 
 
 def reset_fast(
-    rng: jnp.ndarray, mjx_model: Any, mjx_data_template: Any,
+    rng: jnp.ndarray, mjx_data_template: Any,
     ref_data: RefData, randomize: bool = True,
 ) -> EnvState:
     """Fast reset using existing mjx_data (no mj_model needed). For auto-reset in scan."""
@@ -444,7 +465,7 @@ def reset_fast(
 
 def step(
     state: EnvState, action: jnp.ndarray, mjx_model: Any,
-    ref_data: RefData, foot_body_ids: jnp.ndarray, ground_geom_id: int,
+    ref_data: RefData,
 ) -> tuple[EnvState, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Step environment: apply PD+ff torque, substep physics, compute reward/done.
 
@@ -491,7 +512,7 @@ def step(
     )
 
     reward, reward_info = compute_reward(new_state, action, ref_data)
-    terminated = check_termination(new_state, reward_info, foot_body_ids, ground_geom_id)
+    terminated = check_termination(new_state, reward_info, ref_data)
     truncated = new_state.phase >= ref_data.max_phase
 
     done = terminated | truncated
@@ -514,17 +535,16 @@ def step(
 
 def make_batched_fns(
     mjx_model: Any, ref_data: RefData,
-    foot_body_ids: jnp.ndarray, ground_geom_id: int,
 ):
     """Create batched (vmapped) reset and step functions.
 
     Returns (batched_reset, batched_step, batched_get_obs).
     """
     def _reset_single(rng, mjx_data_template):
-        return reset_fast(rng, mjx_model, mjx_data_template, ref_data, randomize=True)
+        return reset_fast(rng, mjx_data_template, ref_data, randomize=True)
 
     def _step_single(state, action):
-        return step(state, action, mjx_model, ref_data, foot_body_ids, ground_geom_id)
+        return step(state, action, mjx_model, ref_data)
 
     def _get_obs_single(state):
         return get_obs(state, ref_data)

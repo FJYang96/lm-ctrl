@@ -1,6 +1,7 @@
 """Logging, diagnostics, and plotting for RL training and evaluation.
 
-All logging goes through this module and writes to rl/diagnostics.log.
+All logging goes through this module. Call set_log_dir() to set the output
+directory; the log file is written to <output_dir>/experiment.log.
 No SB3 dependency — pure Python + matplotlib.
 """
 
@@ -16,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-LOG_PATH = Path("rl/diagnostics.log")
+_LOG_PATH: Path | None = None
 
 RAW_KEYS = ["pos_error", "ori_error", "joint_error", "action_rate", "max_torque"]
 COMPONENT_KEYS = ["rw_pos", "rw_ori", "rw_joint", "rw_smooth", "rw_torque"]
@@ -30,12 +31,27 @@ COMPONENT_LABELS = [
 COMPONENT_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
 
 
+def set_log_dir(output_dir: str | Path) -> Path:
+    """Set the log directory. Returns the log file path."""
+    global _LOG_PATH
+    _LOG_PATH = Path(output_dir) / "experiment.log"
+    # Reset logger so next get_log() picks up the new path
+    logger = logging.getLogger("rl.diagnostics")
+    for h in logger.handlers[:]:
+        logger.removeHandler(h)
+        h.close()
+    return _LOG_PATH
+
+
 def get_log() -> logging.Logger:
     """Get or create the RL diagnostics file logger."""
+    global _LOG_PATH
+    if _LOG_PATH is None:
+        _LOG_PATH = Path("rl/experiment.log")
     logger = logging.getLogger("rl.diagnostics")
     if not logger.handlers:
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(LOG_PATH, mode="a")
+        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(_LOG_PATH, mode="a")
         handler.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
@@ -231,4 +247,3 @@ def diagnose_termination(
 
     env.close()
     log.info("=" * 60)
-    print(f"Diagnostics written to {LOG_PATH}")

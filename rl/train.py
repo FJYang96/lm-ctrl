@@ -31,7 +31,7 @@ import optax
 import config
 from mpc.dynamics.model import KinoDynamic_Model
 
-from .callbacks import get_log, save_reward_curve, write_training_header_jax
+from .callbacks import get_log, save_reward_curve, set_log_dir, write_training_header_jax
 from .feedforward import FeedforwardComputer
 from .ppo import (
     ActorCritic,
@@ -46,8 +46,6 @@ from .ppo import (
 )
 from .reference import ReferenceTrajectory
 from .tracking_env import (
-    _get_foot_body_ids,
-    _get_ground_geom_id,
     get_obs,
     load_mjx_model,
     make_ref_data,
@@ -82,27 +80,27 @@ def build_reference(
 def train(args: argparse.Namespace) -> None:
     os.environ.setdefault("MUJOCO_GL", "egl")
 
-    n_devices = jax.local_device_count()
-    print(f"JAX devices: {jax.devices()} ({n_devices} GPUs)")
-
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    set_log_dir(output_dir)
+    log = get_log()
+
+    n_devices = jax.local_device_count()
+    log.info(f"JAX devices: {jax.devices()} ({n_devices} GPUs)")
+
+    # Load MJX model
+    log.info("Loading MJX model...")
+    mj_model, mjx_model = load_mjx_model(sim_dt=args.sim_dt)
 
     # Load reference trajectory (CPU)
-    print("Loading reference trajectory...")
+    log.info("Loading reference trajectory...")
     ref = build_reference(
         args.state_traj, args.grf_traj, args.joint_vel_traj,
         contact_sequence_path=args.contact_sequence,
         control_dt=args.control_dt,
     )
-    ref_data = make_ref_data(ref)
-    print(f"Reference: {ref.max_phase} steps, {ref.duration:.2f}s")
-
-    # Load MJX model
-    print("Loading MJX model...")
-    mj_model, mjx_model = load_mjx_model(sim_dt=args.sim_dt)
-    foot_body_ids = _get_foot_body_ids(mj_model)
-    ground_geom_id = _get_ground_geom_id(mj_model)
+    ref_data = make_ref_data(ref, mj_model)
+    log.info(f"Reference: {ref.max_phase} steps, {ref.duration:.2f}s")
 
     # Round num_envs to multiple of n_devices
     num_envs = max(n_devices, (args.num_envs // n_devices) * n_devices)
@@ -125,10 +123,10 @@ def train(args: argparse.Namespace) -> None:
     n_minibatches = max(1, per_device_samples // 5000)
     batch_size = per_device_samples // n_minibatches
 
-    print(f"Training: {args.total_timesteps} steps, {num_envs} envs "
-          f"({envs_per_device}/GPU x {n_devices} GPUs)")
-    print(f"  {n_steps} steps/update, {n_updates} updates, {n_epochs} epochs, "
-          f"{n_minibatches} minibatches of {batch_size}")
+    log.info(f"Training: {args.total_timesteps} steps, {num_envs} envs "
+             f"({envs_per_device}/GPU x {n_devices} GPUs)")
+    log.info(f"  {n_steps} steps/update, {n_updates} updates, {n_epochs} epochs, "
+             f"{n_minibatches} minibatches of {batch_size}")
 
     # Initialize network
     network = ActorCritic(action_dim=12)
@@ -154,9 +152,9 @@ def train(args: argparse.Namespace) -> None:
     mjx_data_template = mjx.put_data(mj_model, mujoco.MjData(mj_model))
 
     # --- Initialize envs (num_envs total, then reshape for pmap) ---
-    print("Initializing environments...")
+    log.info("Initializing environments...")
     def reset_one(rng):
-        return reset_fast(rng, mjx_model, mjx_data_template, ref_data, randomize=True)
+        return reset_fast(rng, mjx_data_template, ref_data, randomize=True)
 
     rng, init_rng = jax.random.split(rng)
     all_rngs = jax.random.split(init_rng, num_envs)
@@ -185,15 +183,24 @@ def train(args: argparse.Namespace) -> None:
     def _get_obs_fn(state):
         return get_obs(state, ref_data)
 
-    def _step_fn(state, action):
-        return env_step(state, action, mjx_model, ref_data, foot_body_ids, ground_geom_id)
-
     def _maybe_reset(state, done, rng):
-        new_state = reset_fast(rng, mjx_model, state.mjx_data, ref_data, randomize=True)
+        new_state = reset_fast(rng, state.mjx_data, ref_data, randomize=True)
         return jax.tree.map(lambda n, o: jnp.where(done, n, o), new_state, state)
 
     @functools.partial(jax.pmap, axis_name="d")
     def train_step(params, opt_state, normalizer, env_states, rng):
+        # Per-update friction DR: generate on each device, sync via all_gather
+        rng, dr_rng = jax.random.split(rng)
+        friction_coeff = jnp.clip(
+            0.8 + jax.random.normal(dr_rng, ()) * 0.25, 0.1, 1.0
+        )
+        friction_coeff = jax.lax.all_gather(friction_coeff, axis_name="d")[0]
+        dr_model = mjx_model.replace(
+            geom_friction=mjx_model.geom_friction.at[:, 0].set(friction_coeff),
+        )
+
+        def _step_fn(state, action):
+            return env_step(state, action, dr_model, ref_data)
         # ---- Rollout collection ----
         def scan_body(carry, _):
             states, norm, rng = carry
@@ -299,14 +306,13 @@ def train(args: argparse.Namespace) -> None:
         return (params, opt_state, normalizer, env_states, rng), metrics
 
     # --- Training loop ---
-    log = get_log()
     write_training_header_jax(args.total_timesteps, num_envs, ref)
 
     reward_history = []
     timestep_history = []
     total_steps = 0
 
-    print(f"\nStarting training ({n_updates} updates)...")
+    log.info(f"\nStarting training ({n_updates} updates)...")
     t_start = time.time()
 
     for update_idx in range(n_updates):
@@ -341,7 +347,6 @@ def train(args: argparse.Namespace) -> None:
             f"entropy={entropy:.3f}  dt={dt:.1f}s"
         )
         log.info(msg)
-        print(msg)
 
         # Save checkpoint periodically
         if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:
@@ -361,7 +366,7 @@ def train(args: argparse.Namespace) -> None:
             )
 
     elapsed = time.time() - t_start
-    print(f"\nTraining complete in {elapsed:.1f}s ({total_steps:,} steps)")
+    log.info(f"\nTraining complete in {elapsed:.1f}s ({total_steps:,} steps)")
 
     # Save final checkpoint
     params_cpu = jax.tree.map(lambda x: x[0], params)
@@ -370,7 +375,7 @@ def train(args: argparse.Namespace) -> None:
     )
     best_dir = str(output_dir / "best_model")
     save_checkpoint(best_dir, params_cpu, norm_cpu, total_steps)
-    print(f"Model saved to {best_dir}")
+    log.info(f"Model saved to {best_dir}")
 
     np.savez(
         str(output_dir / "normalizer.npz"),

@@ -73,7 +73,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--planned",
         type=str,
-        default="results/trajectory.mp4",
+        default="results/planned_traj.mp4",
         help="Path to planned trajectory video",
     )
     parser.add_argument(

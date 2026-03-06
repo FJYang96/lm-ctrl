@@ -22,7 +22,7 @@ import config
 from mpc.dynamics.model import KinoDynamic_Model
 from utils.conversion import sim_to_mpc
 
-from .callbacks import diagnose_termination
+from .callbacks import diagnose_termination, get_log, set_log_dir
 from .ppo import ActorCritic, NormalizerState, load_checkpoint
 from .rollout import execute_policy_rollout
 
@@ -49,6 +49,12 @@ def compute_tracking_error(
 def evaluate(args: argparse.Namespace) -> None:
     os.environ.setdefault("MUJOCO_GL", "egl")
 
+    # Log to the same directory as the model (parent of best_model/)
+    model_dir = Path(args.model_path)
+    output_dir = model_dir.parent if model_dir.name == "best_model" else model_dir
+    set_log_dir(output_dir)
+    log = get_log()
+
     state_traj = np.load(args.state_traj)
     grf_traj = np.load(args.grf_traj)
     joint_vel_traj = np.load(args.joint_vel_traj)
@@ -56,11 +62,11 @@ def evaluate(args: argparse.Namespace) -> None:
     kindyn = KinoDynamic_Model(config)
 
     # Load JAX policy
-    print(f"Loading JAX policy from {args.model_path}...")
+    log.info(f"Loading JAX policy from {args.model_path}...")
     params, normalizer, step_count = load_checkpoint(args.model_path)
     network = ActorCritic(action_dim=12)
     apply_fn = network.apply
-    print(f"  Loaded checkpoint at step {step_count}")
+    log.info(f"  Loaded checkpoint at step {step_count}")
 
     # Diagnostic: termination analysis
     diagnose_termination(
@@ -81,14 +87,15 @@ def evaluate(args: argparse.Namespace) -> None:
         "pos_rms": float("nan"), "ori_rms": float("nan"), "joint_rms": float("nan")
     }
 
-    print("\n" + "=" * 40)
-    print("RL TRACKING ERRORS")
-    print("=" * 40)
-    print(f"  Steps tracked: {n_tracked}/{state_traj.shape[0] - 1}")
-    print(f"  Position RMS:  {err['pos_rms']:.4f} m")
-    print(f"  Orientation RMS: {err['ori_rms']:.4f} rad")
-    print(f"  Joint RMS:     {err['joint_rms']:.4f} rad")
-    print("=" * 40)
+    log.info("")
+    log.info("=" * 40)
+    log.info("RL TRACKING ERRORS")
+    log.info("=" * 40)
+    log.info(f"  Steps tracked: {n_tracked}/{state_traj.shape[0] - 1}")
+    log.info(f"  Position RMS:  {err['pos_rms']:.4f} m")
+    log.info(f"  Orientation RMS: {err['ori_rms']:.4f} rad")
+    log.info(f"  Joint RMS:     {err['joint_rms']:.4f} rad")
+    log.info("=" * 40)
 
     # Save video
     if images:
@@ -97,11 +104,11 @@ def evaluate(args: argparse.Namespace) -> None:
         try:
             fps = int(1.0 / config.mpc_config.mpc_dt)
             imageio.mimsave(str(output_path), images, fps=fps)
-            print(f"\nVideo saved to {output_path}")
+            log.info(f"Video saved to {output_path}")
         except Exception as e:
-            print(f"\nFailed to save video: {e}")
+            log.info(f"Failed to save video: {e}")
     else:
-        print("\nNo frames captured -- video not saved.")
+        log.info("No frames captured -- video not saved.")
 
 
 if __name__ == "__main__":
