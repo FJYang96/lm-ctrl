@@ -28,7 +28,7 @@ from .reference import ReferenceTrajectory
 KP = 25.0
 KD = 1.5
 TORQUE_LIMIT = 55.0
-ACTION_LIMIT = 0.5
+ACTION_LIMIT = 0.2
 
 SIGMA_POS = 0.10
 SIGMA_ORI = 0.14
@@ -466,10 +466,10 @@ def reset_fast(
 def step(
     state: EnvState, action: jnp.ndarray, mjx_model: Any,
     ref_data: RefData,
-) -> tuple[EnvState, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+) -> tuple[EnvState, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
     """Step environment: apply PD+ff torque, substep physics, compute reward/done.
 
-    Returns (new_state, obs, reward, done).
+    Returns (new_state, obs, reward, done, reward_info).
     """
     # Scale action
     action = action * ACTION_LIMIT
@@ -526,7 +526,7 @@ def step(
     # Replace NaN obs with 0
     obs = jnp.where(jnp.isnan(obs), 0.0, obs)
 
-    return new_state, obs, reward, done
+    return new_state, obs, reward, done, reward_info
 
 
 # ---------------------------------------------------------------------------

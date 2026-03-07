@@ -114,7 +114,8 @@ def train(args: argparse.Namespace) -> None:
     gamma = 0.995
     gae_lambda = 0.95
     clip_range = 0.2
-    ent_coef = 0.01
+    ent_coef_start = 0.005
+    ent_coef_end = 0.0005
     vf_coef = 0.5
     max_grad_norm = 0.5
 
@@ -188,7 +189,10 @@ def train(args: argparse.Namespace) -> None:
         return jax.tree.map(lambda n, o: jnp.where(done, n, o), new_state, state)
 
     @functools.partial(jax.pmap, axis_name="d")
-    def train_step(params, opt_state, normalizer, env_states, rng):
+    def train_step(params, opt_state, normalizer, env_states, rng, update_frac):
+        # Anneal entropy coefficient
+        ent_coef = ent_coef_start + (ent_coef_end - ent_coef_start) * update_frac
+
         # Per-update friction DR: generate on each device, sync via all_gather
         rng, dr_rng = jax.random.split(rng)
         friction_coeff = jnp.clip(
@@ -214,19 +218,19 @@ def train(args: argparse.Namespace) -> None:
                 lambda o, r: sample_action(params, apply_fn, o, r)
             )(obs_norm, act_rngs)
 
-            new_states, _, rewards, dones = jax.vmap(_step_fn)(states, actions)
+            new_states, _, rewards, dones, rw_info = jax.vmap(_step_fn)(states, actions)
 
             reset_rngs = jax.random.split(reset_rng, envs_per_device)
             new_states = jax.vmap(_maybe_reset)(new_states, dones, reset_rngs)
 
             norm = update_normalizer(norm, obs)
 
-            return (new_states, norm, rng), (obs_norm, actions, log_probs, values, rewards, dones)
+            return (new_states, norm, rng), (obs_norm, actions, log_probs, values, rewards, dones, rw_info)
 
         (env_states, normalizer, rng), rollout = jax.lax.scan(
             scan_body, (env_states, normalizer, rng), None, length=n_steps
         )
-        obs_r, act_r, lp_r, val_r, rew_r, done_r = rollout
+        obs_r, act_r, lp_r, val_r, rew_r, done_r, rw_info_r = rollout
 
         # Last value for GAE
         last_obs = jax.vmap(_get_obs_fn)(env_states)
@@ -259,6 +263,11 @@ def train(args: argparse.Namespace) -> None:
                     params, apply_fn, obs_f[idx], act_f[idx], lp_f[idx],
                     adv_f[idx], ret_f[idx], clip_range, vf_coef, ent_coef,
                 )
+                # Grad norm before clipping
+                grad_norm = jnp.sqrt(sum(
+                    jnp.sum(x**2) for x in jax.tree.leaves(grads)
+                ))
+                info["grad_norm"] = grad_norm
                 # Sync gradients across GPUs
                 grads = jax.lax.pmean(grads, axis_name="d")
                 updates, opt_state = optimizer.update(grads, opt_state, params)
@@ -285,22 +294,43 @@ def train(args: argparse.Namespace) -> None:
         # ---- Metrics ----
         metrics = jax.tree.map(lambda x: jnp.mean(x[-1]), all_infos)
         metrics["mean_reward"] = jnp.mean(rew_r)
+        metrics["ent_coef"] = ent_coef
 
-        # Episode returns
+        # Per-component reward means (nanmean: NaN qpos from physics divergence)
+        metrics["r_pos"] = jnp.nanmean(rw_info_r["rw_pos"])
+        metrics["r_ori"] = jnp.nanmean(rw_info_r["rw_ori"])
+        metrics["r_joint"] = jnp.nanmean(rw_info_r["rw_joint"])
+        metrics["r_smooth"] = jnp.nanmean(rw_info_r["rw_smooth"])
+        metrics["r_torque"] = jnp.nanmean(rw_info_r["rw_torque"])
+
+        # Mean std from log_std parameter
+        log_std_val = params["params"]["log_std"]
+        metrics["mean_std"] = jnp.mean(jnp.exp(log_std_val))
+
+        # Episode returns and lengths
         def _ep_scan(running, step_data):
             r, d = step_data
-            running = running + r
-            ep_ret = jnp.where(d, running, 0.0)
+            ret, length = running
+            ret = ret + r
+            length = length + 1.0
+            ep_ret = jnp.where(d, ret, 0.0)
+            ep_len = jnp.where(d, length, 0.0)
             ep_valid = d.astype(jnp.float32)
-            running = jnp.where(d, 0.0, running)
-            return running, (ep_ret, ep_valid)
+            ret = jnp.where(d, 0.0, ret)
+            length = jnp.where(d, 0.0, length)
+            return (ret, length), (ep_ret, ep_len, ep_valid)
 
-        _, (ep_rets, ep_valids) = jax.lax.scan(
-            _ep_scan, jnp.zeros(envs_per_device), (rew_r, done_r)
+        _, (ep_rets, ep_lens, ep_valids) = jax.lax.scan(
+            _ep_scan,
+            (jnp.zeros(envs_per_device), jnp.zeros(envs_per_device)),
+            (rew_r, done_r),
         )
         n_eps = jnp.sum(ep_valids)
         metrics["total_ep_return"] = jnp.where(
             n_eps > 0, jnp.sum(ep_rets) / n_eps, jnp.sum(rew_r) / envs_per_device
+        )
+        metrics["ep_length"] = jnp.where(
+            n_eps > 0, jnp.sum(ep_lens) / n_eps, jnp.float32(n_steps)
         )
 
         return (params, opt_state, normalizer, env_states, rng), metrics
@@ -311,15 +341,20 @@ def train(args: argparse.Namespace) -> None:
     reward_history = []
     timestep_history = []
     total_steps = 0
+    best_ep_return = -float("inf")
 
     log.info(f"\nStarting training ({n_updates} updates)...")
+    log.info(f"  ent_coef: {ent_coef_start} -> {ent_coef_end} (annealed)")
     t_start = time.time()
 
     for update_idx in range(n_updates):
         t_update = time.time()
 
+        # Annealing fraction (replicated across devices)
+        update_frac = jnp.array([update_idx / max(1, n_updates - 1)] * n_devices)
+
         carry, metrics = train_step(
-            params, opt_state, normalizer, env_states, device_rngs
+            params, opt_state, normalizer, env_states, device_rngs, update_frac
         )
         params, opt_state, normalizer, env_states, device_rngs = carry
 
@@ -339,18 +374,40 @@ def train(args: argparse.Namespace) -> None:
         entropy = float(metrics["entropy"][0])
         kl = float(metrics["approx_kl"][0])
         clip_frac = float(metrics["clip_fraction"][0])
+        grad_norm = float(metrics["grad_norm"][0])
+        mean_std = float(metrics["mean_std"][0])
+        ep_len = float(metrics["ep_length"][0])
+        r_pos = float(metrics["r_pos"][0])
+        r_ori = float(metrics["r_ori"][0])
+        r_joint = float(metrics["r_joint"][0])
+        r_smooth = float(metrics["r_smooth"][0])
+        r_torque = float(metrics["r_torque"][0])
+        cur_ent_coef = float(metrics["ent_coef"][0])
 
         msg = (
             f"[step {total_steps:>9,}  update {update_idx + 1:>5}]  "
-            f"ep_return={ep_return:.2f}  pg_loss={pg_loss:.5g}  "
-            f"vf_loss={vf_loss:.5g}  kl={kl:.5g}  clip={clip_frac:.3f}  "
-            f"entropy={entropy:.3f}  dt={dt:.1f}s"
+            f"ep_return={ep_return:.2f}  ep_len={ep_len:.1f}  "
+            f"r_pos={r_pos:.3f}  r_ori={r_ori:.3f}  r_joint={r_joint:.3f}  "
+            f"r_smooth={r_smooth:.3f}  r_torque={r_torque:.3f}  "
+            f"std={mean_std:.3f}  grad_norm={grad_norm:.3f}  "
+            f"pg={pg_loss:.4g}  vf={vf_loss:.4g}  kl={kl:.4g}  "
+            f"clip={clip_frac:.3f}  ent={entropy:.2f}  "
+            f"ent_c={cur_ent_coef:.4f}  dt={dt:.1f}s"
         )
         log.info(msg)
 
+        # Save best checkpoint
+        if ep_return > best_ep_return:
+            best_ep_return = ep_return
+            params_cpu = jax.tree.map(lambda x: x[0], params)
+            norm_cpu = NormalizerState(
+                mean=normalizer.mean[0], var=normalizer.var[0], count=normalizer.count[0]
+            )
+            best_dir = str(output_dir / "best_model")
+            save_checkpoint(best_dir, params_cpu, norm_cpu, total_steps)
+
         # Save checkpoint periodically
         if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:
-            # Extract device 0 params for saving
             params_cpu = jax.tree.map(lambda x: x[0], params)
             norm_cpu = NormalizerState(
                 mean=normalizer.mean[0], var=normalizer.var[0], count=normalizer.count[0]
@@ -367,15 +424,17 @@ def train(args: argparse.Namespace) -> None:
 
     elapsed = time.time() - t_start
     log.info(f"\nTraining complete in {elapsed:.1f}s ({total_steps:,} steps)")
+    log.info(f"Best ep_return: {best_ep_return:.2f}")
 
-    # Save final checkpoint
+    # Save final checkpoint (separate from best)
     params_cpu = jax.tree.map(lambda x: x[0], params)
     norm_cpu = NormalizerState(
         mean=normalizer.mean[0], var=normalizer.var[0], count=normalizer.count[0]
     )
-    best_dir = str(output_dir / "best_model")
-    save_checkpoint(best_dir, params_cpu, norm_cpu, total_steps)
-    log.info(f"Model saved to {best_dir}")
+    final_dir = str(output_dir / "final_model")
+    save_checkpoint(final_dir, params_cpu, norm_cpu, total_steps)
+    log.info(f"Final model saved to {final_dir}")
+    log.info(f"Best model saved to {str(output_dir / 'best_model')}")
 
     np.savez(
         str(output_dir / "normalizer.npz"),
