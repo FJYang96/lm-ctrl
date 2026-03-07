@@ -32,8 +32,8 @@ class ActorCritic(nn.Module):
         a = nn.relu(a)
         mean = nn.Dense(self.action_dim, kernel_init=nn.initializers.orthogonal(0.01))(a)
         mean = nn.tanh(mean)
-        log_std = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
-        log_std = jnp.clip(log_std, -1.0, 0.5)
+        log_std = self.param("log_std", nn.initializers.constant(-0.7), (self.action_dim,))
+        log_std = jnp.clip(log_std, -2.0, 0.0)
 
         # Critic: 39 -> 512 -> 512 -> 1
         v = nn.Dense(512, kernel_init=nn.initializers.orthogonal(np.sqrt(2)))(x)

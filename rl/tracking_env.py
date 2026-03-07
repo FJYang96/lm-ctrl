@@ -110,9 +110,9 @@ def load_mjx_model(sim_dt: float = 0.001) -> tuple[mujoco.MjModel, Any]:
 
     mj_model = mujoco.MjModel.from_xml_path(_XML_PATH)
     mj_model.opt.timestep = sim_dt
-    # MJX solver iterations: 12 for better contact resolution on landing impacts
-    mj_model.opt.iterations = 12
-    mj_model.opt.ls_iterations = 8
+    # MJX solver iterations: 20 to reduce NaN divergence on aggressive motions
+    mj_model.opt.iterations = 20
+    mj_model.opt.ls_iterations = 12
     # Increase contact damping to reduce landing bounce (o_solref = [timeconst, damping])
     mj_model.opt.o_solref[1] = 1.5
 
@@ -295,11 +295,14 @@ def compute_reward(
 def check_termination(
     state: EnvState, reward_info: dict[str, jnp.ndarray],
     ref_data: RefData,
-) -> jnp.ndarray:
+) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Early termination per OPT-Mimic III-C.4:
     1. Any tracking error exceeds 2.5x sigma.
     2. Non-foot body touches ground.
     3. Foot contact mismatch with reference (120ms grace window).
+
+    Returns (terminated: bool, reason: int32).
+    Reason codes: 0=none, 1=threshold, 2=body_contact, 3=contact_mismatch, 4=nan.
     """
     thresh_pos = TERM_MULTIPLIER * SIGMA_POS
     thresh_ori = TERM_MULTIPLIER * SIGMA_ORI
@@ -307,14 +310,17 @@ def check_termination(
     thresh_smooth = TERM_MULTIPLIER * SIGMA_SMOOTH
     thresh_torque = TERM_MULTIPLIER * SIGMA_TORQUE
 
-    term = jnp.float32(0.0)
-    term = jnp.where(reward_info["pos_error"] > thresh_pos, 1.0, term)
-    term = jnp.where(reward_info["ori_error"] > thresh_ori, 1.0, term)
-    term = jnp.where(reward_info["joint_error"] > thresh_joint, 1.0, term)
-    term = jnp.where(
-        (~state.first_step) & (reward_info["action_rate"] > thresh_smooth), 1.0, term
+    reason = jnp.int32(0)
+
+    # Condition 1: tracking error thresholds
+    thresh_hit = (
+        (reward_info["pos_error"] > thresh_pos)
+        | (reward_info["ori_error"] > thresh_ori)
+        | (reward_info["joint_error"] > thresh_joint)
+        | ((~state.first_step) & (reward_info["action_rate"] > thresh_smooth))
+        | (reward_info["max_torque"] > thresh_torque)
     )
-    term = jnp.where(reward_info["max_torque"] > thresh_torque, 1.0, term)
+    reason = jnp.where(thresh_hit, jnp.int32(1), reason)
 
     # Condition 2: non-foot body ground contact
     contact = state.mjx_data.contact
@@ -327,7 +333,7 @@ def check_termination(
         other_geom[:, None] == ref_data.foot_geom_ids[None, :], axis=1
     )  # (ncon,)
     non_foot_ground = jnp.any(involves_ground & ~is_foot)
-    term = jnp.where(non_foot_ground, 1.0, term)
+    reason = jnp.where(non_foot_ground & (reason == 0), jnp.int32(2), reason)
 
     # Condition 3: foot contact mismatch with grace window
     phase = _clamp_phase(state.phase, ref_data.max_phase)
@@ -339,13 +345,14 @@ def check_termination(
     grace = ref_data.near_transition[:, phase]  # (4,) — 1.0 if near transition
     mismatch = (actual_contact != expected_contact) & (grace < 0.5)
     contact_mismatch = has_contact_info & jnp.any(mismatch)
-    term = jnp.where(contact_mismatch, 1.0, term)
+    reason = jnp.where(contact_mismatch & (reason == 0), jnp.int32(3), reason)
 
     # NaN check (physics divergence)
     has_nan = jnp.any(jnp.isnan(state.mjx_data.qpos))
-    term = jnp.where(has_nan, 1.0, term)
+    reason = jnp.where(has_nan & (reason == 0), jnp.int32(4), reason)
 
-    return term > 0.5
+    terminated = reason > 0
+    return terminated, reason
 
 
 def reset(
@@ -512,10 +519,13 @@ def step(
     )
 
     reward, reward_info = compute_reward(new_state, action, ref_data)
-    terminated = check_termination(new_state, reward_info, ref_data)
+    terminated, term_reason = check_termination(new_state, reward_info, ref_data)
     truncated = new_state.phase >= ref_data.max_phase
 
     done = terminated | truncated
+    # Truncation = reason 5 (only if not already terminated)
+    term_reason = jnp.where(truncated & ~terminated, jnp.int32(5), term_reason)
+    reward_info["term_reason"] = term_reason.astype(jnp.float32)
 
     # Force reward to 0 if NaN
     reward = jnp.where(jnp.isnan(reward), 0.0, reward)

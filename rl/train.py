@@ -54,6 +54,7 @@ from .tracking_env import (
 from .tracking_env import (
     step as env_step,
 )
+from .rollout import execute_policy_rollout
 
 
 def build_reference(
@@ -62,7 +63,7 @@ def build_reference(
     joint_vel_traj_path: str,
     contact_sequence_path: str | None = None,
     control_dt: float = 0.02,
-) -> ReferenceTrajectory:
+) -> tuple[ReferenceTrajectory, KinoDynamic_Model]:
     """Load MPC trajectory and precompute feedforward torques."""
     ref = ReferenceTrajectory.from_files(
         state_traj_path,
@@ -74,7 +75,7 @@ def build_reference(
     kindyn = KinoDynamic_Model(config)
     ff = FeedforwardComputer(kindyn)
     ref.set_feedforward(ff.precompute_trajectory(ref))
-    return ref
+    return ref, kindyn
 
 
 def train(args: argparse.Namespace) -> None:
@@ -94,7 +95,7 @@ def train(args: argparse.Namespace) -> None:
 
     # Load reference trajectory (CPU)
     log.info("Loading reference trajectory...")
-    ref = build_reference(
+    ref, kindyn = build_reference(
         args.state_traj, args.grf_traj, args.joint_vel_traj,
         contact_sequence_path=args.contact_sequence,
         control_dt=args.control_dt,
@@ -107,14 +108,15 @@ def train(args: argparse.Namespace) -> None:
     envs_per_device = num_envs // n_devices
 
     # PPO hyperparameters
-    samples_per_update = 20000
-    n_steps = max(1, samples_per_update // num_envs)
-    n_updates = args.total_timesteps // samples_per_update
+    # n_steps must cover at least one full episode for good GAE credit assignment
+    n_steps = ref.max_phase  # match episode length (e.g. 80)
+    samples_per_update = n_steps * num_envs
+    n_updates = max(1, args.total_timesteps // samples_per_update)
     n_epochs = args.n_epochs
     gamma = 0.995
     gae_lambda = 0.95
     clip_range = 0.2
-    ent_coef_start = 0.005
+    ent_coef_start = 0.002
     ent_coef_end = 0.0005
     vf_coef = 0.5
     max_grad_norm = 0.5
@@ -333,6 +335,15 @@ def train(args: argparse.Namespace) -> None:
             n_eps > 0, jnp.sum(ep_lens) / n_eps, jnp.float32(n_steps)
         )
 
+        # Termination reason breakdown
+        term_r = rw_info_r["term_reason"]  # (n_steps, envs_per_device)
+        metrics["n_episodes"] = n_eps
+        metrics["term_thresh"] = jnp.sum((term_r == 1.0) & done_r)
+        metrics["term_body"] = jnp.sum((term_r == 2.0) & done_r)
+        metrics["term_contact"] = jnp.sum((term_r == 3.0) & done_r)
+        metrics["term_nan"] = jnp.sum((term_r == 4.0) & done_r)
+        metrics["term_trunc"] = jnp.sum((term_r == 5.0) & done_r)
+
         return (params, opt_state, normalizer, env_states, rng), metrics
 
     # --- Training loop ---
@@ -342,6 +353,9 @@ def train(args: argparse.Namespace) -> None:
     timestep_history = []
     total_steps = 0
     best_ep_return = -float("inf")
+    best_params_cpu = None
+    best_norm_cpu = None
+    next_video_step = 100_000
 
     log.info(f"\nStarting training ({n_updates} updates)...")
     log.info(f"  ent_coef: {ent_coef_start} -> {ent_coef_end} (annealed)")
@@ -384,6 +398,21 @@ def train(args: argparse.Namespace) -> None:
         r_torque = float(metrics["r_torque"][0])
         cur_ent_coef = float(metrics["ent_coef"][0])
 
+        # Termination breakdown
+        n_eps = float(metrics["n_episodes"][0])
+        if n_eps > 0:
+            t_thresh = float(metrics["term_thresh"][0]) / n_eps * 100
+            t_body = float(metrics["term_body"][0]) / n_eps * 100
+            t_contact = float(metrics["term_contact"][0]) / n_eps * 100
+            t_nan = float(metrics["term_nan"][0]) / n_eps * 100
+            t_trunc = float(metrics["term_trunc"][0]) / n_eps * 100
+            term_str = (
+                f"term: thresh={t_thresh:.0f}% body={t_body:.0f}% "
+                f"cntct={t_contact:.0f}% nan={t_nan:.0f}% trunc={t_trunc:.0f}%"
+            )
+        else:
+            term_str = "term: no_eps"
+
         msg = (
             f"[step {total_steps:>9,}  update {update_idx + 1:>5}]  "
             f"ep_return={ep_return:.2f}  ep_len={ep_len:.1f}  "
@@ -392,7 +421,8 @@ def train(args: argparse.Namespace) -> None:
             f"std={mean_std:.3f}  grad_norm={grad_norm:.3f}  "
             f"pg={pg_loss:.4g}  vf={vf_loss:.4g}  kl={kl:.4g}  "
             f"clip={clip_frac:.3f}  ent={entropy:.2f}  "
-            f"ent_c={cur_ent_coef:.4f}  dt={dt:.1f}s"
+            f"ent_c={cur_ent_coef:.4f}  dt={dt:.1f}s  "
+            f"{term_str}"
         )
         log.info(msg)
 
@@ -403,8 +433,32 @@ def train(args: argparse.Namespace) -> None:
             norm_cpu = NormalizerState(
                 mean=normalizer.mean[0], var=normalizer.var[0], count=normalizer.count[0]
             )
+            best_params_cpu = params_cpu
+            best_norm_cpu = norm_cpu
             best_dir = str(output_dir / "best_model")
             save_checkpoint(best_dir, params_cpu, norm_cpu, total_steps)
+
+        # Periodic video rendering (every 100K steps)
+        if total_steps >= next_video_step and best_params_cpu is not None:
+            video_path = output_dir / "runs" / f"step_{total_steps:07d}.mp4"
+            log.info(f"  Rendering tracking video at step {total_steps:,}...")
+            try:
+                import imageio
+                _, _, _, images = execute_policy_rollout(
+                    ref.state_traj, ref.grf_traj, ref.joint_vel_traj,
+                    kindyn, best_params_cpu, apply_fn,
+                    normalizer=best_norm_cpu, render=True,
+                )
+                if images:
+                    video_path.parent.mkdir(parents=True, exist_ok=True)
+                    fps = int(1.0 / args.control_dt)
+                    imageio.mimsave(str(video_path), images, fps=fps)
+                    log.info(f"  Video saved: {video_path}")
+                else:
+                    log.info(f"  No frames captured for video")
+            except Exception as e:
+                log.info(f"  Video render failed: {e}")
+            next_video_step = (total_steps // 100_000 + 1) * 100_000
 
         # Save checkpoint periodically
         if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:
