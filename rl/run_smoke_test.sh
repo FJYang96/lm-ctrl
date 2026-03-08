@@ -12,12 +12,12 @@ set -e
 
 TIMESTEPS=${1:-10000000}
 NUM_ENVS=${2:-1024}
-ITER_DIR="results/llm_iterations/jump_around_and_turn_around_180_degrees_1772754153"
-STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_17.npy}
-GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_17.npy}
-JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_17.npy}
-PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_17.mp4}
-CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_17.npy}
+ITER_DIR="results/llm_iterations/jump_180_degrees_entirely_and_land_1772942532"
+STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_7.npy}
+GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_7.npy}
+JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_7.npy}
+PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_7.mp4}
+CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_7.npy}
 
 # Create a new timestamped run directory (never delete previous runs)
 RUN_TAG="run_$(date +%Y%m%d_%H%M%S)"

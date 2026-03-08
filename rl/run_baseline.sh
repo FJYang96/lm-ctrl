@@ -10,10 +10,13 @@
 
 set -e
 
-ITER_DIR="results/llm_iterations/jump_around_and_turn_around_180_degrees_1772754153"
-STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_17.npy}
-GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_17.npy}
-JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_17.npy}
+# Ensure we run from the project root (needed for python -m rl.*)
+cd "$(dirname "$0")/.."
+
+ITER_DIR="results/llm_iterations/jump_180_degrees_entirely_and_land_1772942532"
+STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_7.npy}
+GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_7.npy}
+JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_7.npy}
 
 RUN_TAG="baseline_$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="rl/trained_models/$RUN_TAG"
