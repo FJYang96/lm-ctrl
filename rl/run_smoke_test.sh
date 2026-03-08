@@ -17,6 +17,7 @@ STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_17.npy}
 GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_17.npy}
 JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_17.npy}
 PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_17.mp4}
+CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_17.npy}
 
 # Create a new timestamped run directory (never delete previous runs)
 RUN_TAG="run_$(date +%Y%m%d_%H%M%S)"
@@ -32,13 +33,19 @@ EXPERIMENT_START=$SECONDS
 
 # Step 1: Train
 echo "[1/3] Training tracking policy (JAX PPO + MJX)..."
+CONTACT_SEQ_FLAG=""
+if [ -f "$CONTACT_SEQ" ]; then
+    CONTACT_SEQ_FLAG="--contact-sequence $CONTACT_SEQ"
+fi
+
 MUJOCO_GL=egl python -m rl.train \
     --state-traj "$STATE_TRAJ" \
     --grf-traj "$GRF_TRAJ" \
     --joint-vel-traj "$JOINT_VEL_TRAJ" \
     --output-dir "$OUTPUT_DIR" \
     --total-timesteps "$TIMESTEPS" \
-    --num-envs "$NUM_ENVS"
+    --num-envs "$NUM_ENVS" \
+    $CONTACT_SEQ_FLAG
 
 # Step 2: Evaluate
 echo "[2/3] Evaluating RL policy..."
@@ -48,7 +55,8 @@ MUJOCO_GL=egl python -m rl.evaluate \
     --state-traj "$STATE_TRAJ" \
     --grf-traj "$GRF_TRAJ" \
     --joint-vel-traj "$JOINT_VEL_TRAJ" \
-    --output-video "$OUTPUT_DIR/rl_tracking.mp4"
+    --output-video "$OUTPUT_DIR/rl_tracking.mp4" \
+    $CONTACT_SEQ_FLAG
 
 # Step 3: Generate comparison frames
 echo "[3/3] Generating comparison frames..."

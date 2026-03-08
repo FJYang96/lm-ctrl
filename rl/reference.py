@@ -54,7 +54,8 @@ class ReferenceTrajectory:
         if contact_sequence is not None:
             self.contact_sequence = contact_sequence.copy()
         else:
-            self.contact_sequence = None
+            # Derive from GRF: foot is in stance if vertical force > 1N
+            self.contact_sequence = self._contact_from_grf(grf_traj)
 
         # Precompute quaternions from MPC Euler angles
         self._body_quats = np.zeros((self.max_phase + 1, 4))
@@ -66,6 +67,16 @@ class ReferenceTrajectory:
             self._ff_torques = feedforward_torques.copy()
         else:
             self._ff_torques = np.zeros((self.max_phase, 12))
+
+    @staticmethod
+    def _contact_from_grf(grf_traj: np.ndarray) -> np.ndarray:
+        """Derive contact sequence from GRF vertical forces (Fz > 1N = stance)."""
+        N = grf_traj.shape[0]
+        contact = np.zeros((4, N), dtype=np.float64)
+        for foot in range(4):
+            fz = grf_traj[:, foot * 3 + 2]  # z-component per foot
+            contact[foot] = (fz > 1.0).astype(np.float64)
+        return contact
 
     def set_feedforward(self, feedforward_torques: np.ndarray) -> None:
         """Set precomputed J^T·F feedforward torques (N, 12)."""

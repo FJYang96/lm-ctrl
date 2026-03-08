@@ -58,6 +58,7 @@ def evaluate(args: argparse.Namespace) -> None:
     state_traj = np.load(args.state_traj)
     grf_traj = np.load(args.grf_traj)
     joint_vel_traj = np.load(args.joint_vel_traj)
+    contact_seq = np.load(args.contact_sequence) if args.contact_sequence else None
 
     kindyn = KinoDynamic_Model(config)
 
@@ -72,6 +73,7 @@ def evaluate(args: argparse.Namespace) -> None:
     diagnose_termination(
         state_traj, grf_traj, joint_vel_traj,
         kindyn, params, apply_fn, normalizer=normalizer,
+        contact_sequence=contact_seq,
     )
 
     # Full rollout
@@ -120,5 +122,6 @@ if __name__ == "__main__":
         "--joint-vel-traj", type=str, default="results/joint_vel_traj.npy"
     )
     parser.add_argument("--output-video", type=str, default="results/rl_tracking.mp4")
+    parser.add_argument("--contact-sequence", type=str, default=None)
     args = parser.parse_args()
     evaluate(args)

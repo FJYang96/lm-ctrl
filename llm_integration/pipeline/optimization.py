@@ -219,6 +219,13 @@ def solve_trajectory_optimization(
     np.save(run_dir / f"grf_traj_iter_{iteration}.npy", grf_traj)
     np.save(run_dir / f"joint_vel_traj_iter_{iteration}.npy", joint_vel_traj)
 
+    # Save contact sequence for RL termination condition 3 (foot contact mismatch)
+    if self.current_task_mpc is not None and self.current_task_mpc.contact_sequence is not None:
+        np.save(
+            run_dir / f"contact_sequence_iter_{iteration}.npy",
+            self.current_task_mpc.contact_sequence,
+        )
+
     result = {
         "success": status == 0,
         "status": status,

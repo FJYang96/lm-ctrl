@@ -169,6 +169,7 @@ def diagnose_termination(
     params: Any,
     apply_fn: Any,
     normalizer: Any = None,
+    contact_sequence: np.ndarray | None = None,
 ) -> None:
     """Run one episode in the CPU tracking env and write per-step diagnostics."""
     import config as cfg
@@ -187,6 +188,7 @@ def diagnose_termination(
         joint_vel_traj=joint_vel_traj,
         grf_traj=grf_traj,
         control_dt=control_dt,
+        contact_sequence=contact_sequence,
     )
     ff = FeedforwardComputer(kindyn)
     ref.set_feedforward(ff.precompute_trajectory(ref))
