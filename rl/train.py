@@ -355,7 +355,7 @@ def train(args: argparse.Namespace) -> None:
     best_ep_return = -float("inf")
     best_params_cpu = None
     best_norm_cpu = None
-    next_video_step = 100_000
+    next_video_step = 1_000_000
 
     log.info(f"\nStarting training ({n_updates} updates)...")
     log.info(f"  ent_coef: {ent_coef_start} -> {ent_coef_end} (annealed)")
@@ -458,7 +458,7 @@ def train(args: argparse.Namespace) -> None:
                     log.info(f"  No frames captured for video")
             except Exception as e:
                 log.info(f"  Video render failed: {e}")
-            next_video_step = (total_steps // 100_000 + 1) * 100_000
+            next_video_step = (total_steps // 1_000_000 + 1) * 1_000_000
 
         # Save checkpoint periodically
         if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:

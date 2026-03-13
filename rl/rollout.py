@@ -63,7 +63,7 @@ def execute_policy_rollout(
 
     KP = Go2TrackingEnv.KP
     KD = Go2TrackingEnv.KD
-    TORQUE_LIMIT = Go2TrackingEnv.TORQUE_LIMIT
+    TORQUE_LIMITS = Go2TrackingEnv.TORQUE_LIMITS
 
     num_policy_steps = ref.max_phase
     qpos_traj_out = []

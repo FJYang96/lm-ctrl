@@ -27,7 +27,13 @@ from .reference import ReferenceTrajectory
 # ---------------------------------------------------------------------------
 KP = 25.0
 KD = 1.5
-TORQUE_LIMIT = 55.0
+# Per-joint torque limits from Go2 actuator ctrlrange (hip/thigh=23.7, calf=45.43)
+TORQUE_LIMITS = np.array([
+    23.7, 23.7, 45.43,  # FL: hip, thigh, calf
+    23.7, 23.7, 45.43,  # FR
+    23.7, 23.7, 45.43,  # RL
+    23.7, 23.7, 45.43,  # RR
+], dtype=np.float32)
 ACTION_LIMIT = 0.2
 
 SIGMA_POS = 0.10
@@ -110,9 +116,9 @@ def load_mjx_model(sim_dt: float = 0.001) -> tuple[mujoco.MjModel, Any]:
 
     mj_model = mujoco.MjModel.from_xml_path(_XML_PATH)
     mj_model.opt.timestep = sim_dt
-    # MJX solver iterations: 20 to reduce NaN divergence on aggressive motions
-    mj_model.opt.iterations = 20
-    mj_model.opt.ls_iterations = 12
+    # MJX solver iterations: 6 is sufficient, higher values are catastrophically slow
+    mj_model.opt.iterations = 6
+    mj_model.opt.ls_iterations = 6
     # Increase contact damping to reduce landing bounce (o_solref = [timeconst, damping])
     mj_model.opt.o_solref[1] = 1.5
 
@@ -496,7 +502,7 @@ def step(
         + KD * (ref_joint_vel - actual_joint_vel)
         + ff_torque
     )
-    torque = jnp.clip(torque, -TORQUE_LIMIT, TORQUE_LIMIT)
+    torque = jnp.clip(torque, -jnp.array(TORQUE_LIMITS), jnp.array(TORQUE_LIMITS))
     torque = torque * state.torque_scale
 
     # Substep physics
@@ -573,7 +579,7 @@ class Go2TrackingEnv:
     """CPU-based tracking env for evaluation/rendering. Matches JAX env exactly."""
     KP = KP
     KD = KD
-    TORQUE_LIMIT = TORQUE_LIMIT
+    TORQUE_LIMITS = TORQUE_LIMITS
     ACTION_LIMIT = ACTION_LIMIT
     SIGMA_POS = SIGMA_POS
     SIGMA_ORI = SIGMA_ORI
@@ -655,7 +661,7 @@ class Go2TrackingEnv:
             + self.KD * (ref_joint_vel - actual_joint_vel)
             + ff_torque
         )
-        torque = np.clip(torque, -self.TORQUE_LIMIT, self.TORQUE_LIMIT)
+        torque = np.clip(torque, -self.TORQUE_LIMITS, self.TORQUE_LIMITS)
         torque = torque * self._torque_scale
         self._last_torque = torque.copy()
 
