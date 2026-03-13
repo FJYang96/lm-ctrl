@@ -10,6 +10,9 @@
 
 set -e
 
+# Reserve GPU 3 for other users
+export CUDA_VISIBLE_DEVICES=0,1,2
+
 TIMESTEPS=${1:-10000000}
 NUM_ENVS=${2:-1024}
 ITER_DIR="results/llm_iterations/jump_180_degrees_entirely_and_land_1772942532"
