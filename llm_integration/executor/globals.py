@@ -177,6 +177,7 @@ def create_restricted_globals(
         "__builtins__": {
             # Basic Python built-ins needed for constraint functions
             "abs": abs,
+            "round": round,
             "max": max,
             "min": min,
             "len": len,
