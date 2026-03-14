@@ -25,7 +25,6 @@ from ..feedback.llm_evaluation import (
     generate_iteration_summary,
 )
 from ..feedback.reference_feedback import (
-    _compute_reference_metrics,
     generate_reference_feedback,
 )
 from ..logging_config import logger
@@ -358,7 +357,6 @@ class FeedbackPipeline:
                         generate_constraint_feedback,
                         command=command,
                         constraint_code=constraint_code,
-                        images=self.current_images,
                         visual_summary=self.current_visual_summary,
                         hardness_report=hardness_text,
                         constraint_violations=constraint_violations,
@@ -371,7 +369,6 @@ class FeedbackPipeline:
                         generate_reference_feedback,
                         command=command,
                         constraint_code=constraint_code,
-                        images=self.current_images,
                         visual_summary=self.current_visual_summary,
                         ref_trajectory_data=ref_trajectory_data,
                         trajectory_analysis=trajectory_analysis,
@@ -389,9 +386,6 @@ class FeedbackPipeline:
                 )
 
                 # Step 11: Iteration summary LLM call
-                ref_metrics_text = _compute_reference_metrics(
-                    ref_trajectory_data, state_trajectory, mpc_dt
-                )
                 iter_summary = generate_iteration_summary(
                     command=command,
                     iteration=iteration,
@@ -402,11 +396,7 @@ class FeedbackPipeline:
                     trajectory_analysis=trajectory_analysis,
                     opt_success=opt_success,
                     simulation_result=simulation_result,
-                    images=self.current_images,
                     visual_summary=self.current_visual_summary,
-                    hardness_text=hardness_text,
-                    constraint_violations=constraint_violations,
-                    ref_metrics_text=ref_metrics_text,
                 )
                 self.iteration_summaries.append(iter_summary)
 
@@ -482,7 +472,6 @@ class FeedbackPipeline:
                             "success": False,
                             "error": str(e),
                         },
-                        images=self.current_images if self.current_images else None,
                         visual_summary=self.current_visual_summary,
                     )
                 except Exception as summary_err:

@@ -12,7 +12,6 @@ from .llm_evaluation import get_evaluator
 def generate_constraint_feedback(
     command: str,
     constraint_code: str,
-    images: list[str] | None,
     visual_summary: str,
     hardness_report: str,
     constraint_violations: dict[str, Any],
@@ -26,7 +25,6 @@ def generate_constraint_feedback(
     Args:
         command: The task command
         constraint_code: Full constraint code from the LLM
-        images: Video frames from the trajectory
         visual_summary: Text summary of the video frames
         hardness_report: Formatted constraint hardness analysis text
         constraint_violations: Dict of constraint violations
@@ -75,18 +73,24 @@ Do NOT return JSON. Return readable analysis text."""
 
     mode_text = ""
     if pivot_signal == "pivot":
-        mode_text = """MODE: MANDATORY PIVOT
-The current constraint approach has stagnated or is declining. Suggest FUNDAMENTALLY DIFFERENT
-constraint structures — different variables to constrain, different phase strategies, different
-mathematical formulations. Do not suggest incremental adjustments."""
+        mode_text = (
+            "MODE: MANDATORY PIVOT\n"
+            "The current constraint approach has stagnated or is declining. Suggest FUNDAMENTALLY DIFFERENT\n"
+            "constraint structures — different variables to constrain, different phase strategies, different\n"
+            "mathematical formulations. Do not suggest incremental adjustments."
+        )
     elif pivot_signal == "tweak":
-        mode_text = """MODE: ADJUSTMENT SUGGESTED
-The current approach shows some promise. Suggest incremental changes — bound adjustments,
-parameter tuning, timing shifts. Keep the overall constraint structure."""
+        mode_text = (
+            "MODE: ADJUSTMENT SUGGESTED\n"
+            "The current approach shows some promise. Suggest incremental changes — bound adjustments,\n"
+            "parameter tuning, timing shifts. Keep the overall constraint structure."
+        )
     else:
-        mode_text = """MODE: FIRST ITERATION
-This is the first attempt. Analyze the constraint design and suggest improvements based
-on the trajectory results."""
+        mode_text = (
+            "MODE: FIRST ITERATION\n"
+            "This is the first attempt. Analyze the constraint design and suggest improvements based\n"
+            "on the trajectory results."
+        )
 
     # Format constraint violations
     violations_text = ""
@@ -103,7 +107,7 @@ on the trajectory results."""
         violations_text = "None"
 
     # Format trajectory metrics (comprehensive shared formatter)
-    metrics_text = format_trajectory_metrics_text(trajectory_analysis)
+    metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
 
     error_text = ""
     if error_info:
@@ -114,35 +118,32 @@ on the trajectory results."""
             err_parts.append(f"Solver iterations: {error_info['solver_iterations']}")
         error_text = "\n".join(err_parts)
 
-    user_message = f"""COMMAND: {command}
+    solver_status = "converged" if opt_success else "failed"
 
-{mode_text}
-
-SOLVER STATUS: {"CONVERGED" if opt_success else "FAILED"}
-{error_text}
-
-CONSTRAINT CODE:
-```python
+    user_message = f"""<task>{command}</task>
+<mode>{mode_text}</mode>
+<solver status="{solver_status}">{error_text}</solver>
+<constraint_code>
 {constraint_code}
-```
-
-TRAJECTORY METRICS:
+</constraint_code>
+<metrics>
 {metrics_text}
-
-CONSTRAINT VIOLATIONS:
+</metrics>
+<violations>
 {violations_text}
-
-CONSTRAINT HARDNESS ANALYSIS:
+</violations>
+<hardness>
 {hardness_report if hardness_report else "Not available"}
-
-VISUAL SUMMARY:
+</hardness>
+<visual_summary>
 {visual_summary if visual_summary else "Not available"}
+</visual_summary>
 
 Provide targeted feedback on the constraint design."""
 
     try:
         evaluator = get_evaluator()
-        response = evaluator._call_llm(system_prompt, user_message, images)
+        response = evaluator._call_llm(system_prompt, user_message, None)
         return response.strip()
     except Exception as e:
         logger.error(f"Constraint feedback generation failed: {e}")

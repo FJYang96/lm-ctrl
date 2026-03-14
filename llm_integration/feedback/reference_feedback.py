@@ -100,7 +100,6 @@ def _compute_reference_metrics(
 def generate_reference_feedback(
     command: str,
     constraint_code: str,
-    images: list[str] | None,
     visual_summary: str,
     ref_trajectory_data: dict[str, Any] | None,
     trajectory_analysis: dict[str, Any],
@@ -114,7 +113,6 @@ def generate_reference_feedback(
     Args:
         command: The task command
         constraint_code: Full constraint code (for context)
-        images: Video frames from the trajectory
         visual_summary: Text summary of the video frames
         ref_trajectory_data: Dict with X_ref, U_ref arrays
         trajectory_analysis: Trajectory metrics dict
@@ -166,16 +164,22 @@ Do NOT return JSON. Return readable analysis text."""
 
     mode_text = ""
     if pivot_signal == "pivot":
-        mode_text = """MODE: MANDATORY PIVOT
-The current approach has stagnated. Suggest a fundamentally different reference trajectory
-shape — different peak values, different phase timing, different interpolation strategy."""
+        mode_text = (
+            "MODE: MANDATORY PIVOT\n"
+            "The current approach has stagnated. Suggest a fundamentally different reference trajectory\n"
+            "shape — different peak values, different phase timing, different interpolation strategy."
+        )
     elif pivot_signal == "tweak":
-        mode_text = """MODE: ADJUSTMENT SUGGESTED
-The current reference shows some promise. Suggest incremental changes — adjust peak values,
-shift timing, tune interpolation parameters."""
+        mode_text = (
+            "MODE: ADJUSTMENT SUGGESTED\n"
+            "The current reference shows some promise. Suggest incremental changes — adjust peak values,\n"
+            "shift timing, tune interpolation parameters."
+        )
     else:
-        mode_text = """MODE: FIRST ITERATION
-This is the first attempt. Analyze the reference trajectory design and suggest improvements."""
+        mode_text = (
+            "MODE: FIRST ITERATION\n"
+            "This is the first attempt. Analyze the reference trajectory design and suggest improvements."
+        )
 
     # Compute reference metrics
     ref_metrics = _compute_reference_metrics(
@@ -183,33 +187,31 @@ This is the first attempt. Analyze the reference trajectory design and suggest i
     )
 
     # Format trajectory metrics (comprehensive shared formatter)
-    metrics_text = format_trajectory_metrics_text(trajectory_analysis)
+    metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
 
-    user_message = f"""COMMAND: {command}
+    solver_status = "converged" if opt_success else "failed"
 
-{mode_text}
-
-SOLVER STATUS: {"CONVERGED" if opt_success else "FAILED"}
-
-CONSTRAINT CODE (for context):
-```python
+    user_message = f"""<task>{command}</task>
+<mode>{mode_text}</mode>
+<solver status="{solver_status}"/>
+<constraint_code>
 {constraint_code}
-```
-
-ACTUAL TRAJECTORY METRICS:
+</constraint_code>
+<metrics>
 {metrics_text}
-
-REFERENCE TRAJECTORY ANALYSIS:
+</metrics>
+<reference_analysis>
 {ref_metrics}
-
-VISUAL SUMMARY:
+</reference_analysis>
+<visual_summary>
 {visual_summary if visual_summary else "Not available"}
+</visual_summary>
 
 Provide targeted feedback on the reference trajectory design."""
 
     try:
         evaluator = get_evaluator()
-        response = evaluator._call_llm(system_prompt, user_message, images)
+        response = evaluator._call_llm(system_prompt, user_message, None)
         return response.strip()
     except Exception as e:
         logger.error(f"Reference feedback generation failed: {e}")

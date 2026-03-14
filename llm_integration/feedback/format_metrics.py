@@ -3,9 +3,22 @@
 from typing import Any
 
 
-def format_trajectory_metrics_section(trajectory_analysis: dict[str, Any]) -> list[str]:
+def format_trajectory_metrics_section(
+    trajectory_analysis: dict[str, Any], opt_success: bool = True
+) -> list[str]:
     """Format trajectory metrics section (comprehensive, used by feedback context)."""
     lines = []
+
+    if not opt_success:
+        lines.append("")
+        lines.append(
+            "!! SOLVER DID NOT CONVERGE — METRICS ARE FROM LAST (INFEASIBLE) ITERATE !!"
+        )
+        lines.append(
+            "These values may violate physics. Use only to diagnose failure, not as achieved results."
+        )
+        lines.append("")
+
     lines.append("\n" + "-" * 60)
     lines.append("TRAJECTORY METRICS")
     lines.append("-" * 60)
@@ -99,7 +112,9 @@ def format_trajectory_metrics_section(trajectory_analysis: dict[str, Any]) -> li
     return lines
 
 
-def format_trajectory_metrics_text(trajectory_analysis: dict[str, Any]) -> str:
+def format_trajectory_metrics_text(
+    trajectory_analysis: dict[str, Any], opt_success: bool = True
+) -> str:
     """Format trajectory metrics as a single text string.
 
     This is the shared comprehensive formatter used by all LLM calls
@@ -107,4 +122,6 @@ def format_trajectory_metrics_text(trajectory_analysis: dict[str, Any]) -> str:
     """
     if not trajectory_analysis:
         return "No trajectory data available"
-    return "\n".join(format_trajectory_metrics_section(trajectory_analysis))
+    return "\n".join(
+        format_trajectory_metrics_section(trajectory_analysis, opt_success)
+    )

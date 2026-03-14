@@ -149,7 +149,7 @@ If the solver FAILED, cap the score at 0.85 maximum.
 Return ONLY valid JSON, no markdown, no extra text."""
 
         metrics_text = (
-            self._format_metrics(trajectory_analysis)
+            self._format_metrics(trajectory_analysis, opt_success)
             if trajectory_analysis
             else "No trajectory data available"
         )
@@ -160,15 +160,11 @@ Return ONLY valid JSON, no markdown, no extra text."""
 
         error_text = ""
         if error_info:
-            error_text = f"\nERROR INFO:\n{self._format_error_info(error_info)}"
-
-        visual_text = ""
-        if visual_summary:
-            visual_text = f"\nVISUAL SUMMARY:\n{visual_summary}"
+            error_text = self._format_error_info(error_info)
 
         hardness_section = ""
         if hardness_text:
-            hardness_section = f"\nCONSTRAINT HARDNESS ANALYSIS:\n{hardness_text}"
+            hardness_section = hardness_text
 
         violations_section = ""
         if constraint_violations:
@@ -180,25 +176,25 @@ Return ONLY valid JSON, no markdown, no extra text."""
                 else:
                     violation_lines.append(f"  {key}: {val}")
             if violation_lines:
-                violations_section = "\nCONSTRAINT VIOLATIONS:\n" + "\n".join(
-                    violation_lines
-                )
+                violations_section = "\n".join(violation_lines)
 
-        user_message = f"""COMMAND: {command}
-
-SOLVER STATUS: {solver_status}
-{error_text}
-
-TRAJECTORY METRICS:
+        user_message = f"""<task>{command}</task>
+<solver status="{solver_status}">{error_text}</solver>
+<metrics>
 {metrics_text}
-{visual_text}
-
-CONSTRAINT CODE USED:
-```python
+</metrics>
+<visual_summary>
+{visual_summary if visual_summary else "Not available"}
+</visual_summary>
+<constraint_code>
 {constraint_code}
-```
-{hardness_section}
-{violations_section}
+</constraint_code>
+<hardness>
+{hardness_section if hardness_section else "Not available"}
+</hardness>
+<violations>
+{violations_section if violations_section else "None"}
+</violations>
 
 Evaluate how well this trajectory achieves the commanded task."""
 
@@ -231,11 +227,7 @@ Evaluate how well this trajectory achieves the commanded task."""
         trajectory_analysis: dict[str, Any],
         opt_success: bool,
         simulation_result: dict[str, Any] | None = None,
-        images: list[str] | None = None,
         visual_summary: str = "",
-        hardness_text: str = "",
-        constraint_violations: dict[str, Any] | None = None,
-        ref_metrics_text: str = "",
     ) -> dict[str, Any]:
         """
         Generate a structured iteration summary for the history log.
@@ -246,17 +238,16 @@ Evaluate how well this trajectory achieves the commanded task."""
 A code-generation LLM will read this summary to understand what was tried, what happened, and
 what to do differently next time. Be DETAILED and SPECIFIC — vague summaries are useless.
 
-You receive comprehensive raw data for this iteration:
+You receive:
 - Full constraint code (read it to describe the approach)
 - Trajectory metrics (position, velocity, orientation, timing, GRF, actuator)
-- Constraint hardness analysis (slack values per constraint, violation timesteps, worst offenders)
-- Constraint violations (system and LLM constraint violations)
-- Reference trajectory analysis (RMSE for height/pitch/vz, plausibility metrics, ref vs actual)
 - Constraint feedback and reference feedback from specialized LLM calls
-- Video frames and visual summary of the trajectory
+  (these already contain analysis of hardness data, violations, and reference RMSE)
+- Visual summary of the trajectory
 
-Use ALL of this data to produce precise, number-rich summaries. Do not paraphrase vaguely —
-include exact values from the raw data.
+The constraint and reference feedback texts already incorporate raw hardness data, violation
+analysis, and reference trajectory metrics. Use those analyses directly — do not expect
+separate raw data sections.
 
 Return a JSON object with this structure:
 {
@@ -286,14 +277,14 @@ reference_approach (DETAILED — 5+ lines):
   - How the reference was built (min_jerk, ballistic, manual interpolation)
 
 constraint_feedback_summary (4-6 sentences):
-  - Which constraints worked and which failed — cite exact slack values from the hardness data
+  - Which constraints worked and which failed — cite exact slack values
   - Specific bound values that need changing and why
-  - Root cause of any solver failure or constraint violation — reference exact violation timesteps
+  - Root cause of any solver failure or constraint violation
   - Exact recommendations from the constraint feedback
 
 reference_feedback_summary (4-6 sentences):
-  - Exact RMSE values from the reference analysis (height, pitch, vz)
-  - Physics plausibility issues found — cite specific metrics (velocity jumps, consistency errors)
+  - Exact RMSE values (height, pitch, vz)
+  - Physics plausibility issues found
   - Phase timing alignment problems
   - Specific parameter changes recommended with concrete numbers
 
@@ -308,13 +299,11 @@ metrics_summary (compact but COMPLETE):
   - Flight duration, total duration
   - Solver status (converged/failed, iteration count)
   - Rendering success/failure
-  - Key constraint slack values (worst offenders)
-  - Reference RMSE (height, pitch, vz)
 
 Return ONLY valid JSON, no markdown, no extra text."""
 
         metrics_text = (
-            self._format_metrics(trajectory_analysis)
+            self._format_metrics(trajectory_analysis, opt_success)
             if trajectory_analysis
             else "No trajectory data"
         )
@@ -326,57 +315,29 @@ Return ONLY valid JSON, no markdown, no extra text."""
             if simulation_result.get("error"):
                 sim_text += f"\nRendering error: {str(simulation_result['error'])}"
 
-        hardness_section = ""
-        if hardness_text:
-            hardness_section = f"\nCONSTRAINT HARDNESS ANALYSIS:\n{hardness_text}"
+        solver_status = "converged" if opt_success else "failed"
 
-        violations_section = ""
-        if constraint_violations:
-            violation_lines = []
-            for key, val in constraint_violations.items():
-                if isinstance(val, list):
-                    for item in val:
-                        violation_lines.append(f"  {key}: {item}")
-                else:
-                    violation_lines.append(f"  {key}: {val}")
-            if violation_lines:
-                violations_section = "\nCONSTRAINT VIOLATIONS:\n" + "\n".join(
-                    violation_lines
-                )
-
-        ref_section = ""
-        if ref_metrics_text:
-            ref_section = f"\nREFERENCE TRAJECTORY ANALYSIS:\n{ref_metrics_text}"
-
-        user_message = f"""COMMAND: {command}
-ITERATION: {iteration}
-SCORE: {score:.2f}
-SOLVER: {"converged" if opt_success else "failed"}
-
-TRAJECTORY METRICS:
+        user_message = f"""<task>{command}</task>
+<iteration number="{iteration}" score="{score:.2f}" solver="{solver_status}"/>
+<metrics>
 {metrics_text}
-
-{sim_text}
-
-FULL CONSTRAINT CODE:
-```python
+</metrics>
+<simulation>{sim_text}</simulation>
+<constraint_code>
 {constraint_code}
-```
-{hardness_section}
-{violations_section}
-{ref_section}
-
-CONSTRAINT FEEDBACK (full):
+</constraint_code>
+<constraint_feedback>
 {constraint_feedback if constraint_feedback else "None"}
-
-REFERENCE FEEDBACK (full):
+</constraint_feedback>
+<reference_feedback>
 {reference_feedback if reference_feedback else "None"}
-
-VISUAL SUMMARY:
-{visual_summary if visual_summary else "Not available"}"""
+</reference_feedback>
+<visual_summary>
+{visual_summary if visual_summary else "Not available"}
+</visual_summary>"""
 
         try:
-            response = self._call_llm(system_prompt, user_message, images)
+            response = self._call_llm(system_prompt, user_message, None)
             json_text = _extract_json_from_response(response)
             result: dict[str, Any] = json.loads(json_text)
             # Ensure required fields
@@ -398,9 +359,9 @@ VISUAL SUMMARY:
                 "metrics_summary": metrics_text,
             }
 
-    def _format_metrics(self, ta: dict[str, Any]) -> str:
+    def _format_metrics(self, ta: dict[str, Any], opt_success: bool = True) -> str:
         """Format trajectory metrics for the LLM (shared comprehensive formatter)."""
-        return format_trajectory_metrics_text(ta)
+        return format_trajectory_metrics_text(ta, opt_success)
 
     def _format_error_info(self, error_info: dict[str, Any]) -> str:
         """Format error information for the LLM."""
@@ -472,11 +433,7 @@ def generate_iteration_summary(
     trajectory_analysis: dict[str, Any],
     opt_success: bool,
     simulation_result: dict[str, Any] | None = None,
-    images: list[str] | None = None,
     visual_summary: str = "",
-    hardness_text: str = "",
-    constraint_violations: dict[str, Any] | None = None,
-    ref_metrics_text: str = "",
 ) -> dict[str, Any]:
     """Generate a structured iteration summary for history."""
     return get_evaluator().generate_iteration_summary(
@@ -489,9 +446,5 @@ def generate_iteration_summary(
         trajectory_analysis,
         opt_success,
         simulation_result,
-        images,
         visual_summary,
-        hardness_text,
-        constraint_violations,
-        ref_metrics_text,
     )
