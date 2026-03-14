@@ -30,20 +30,21 @@ class QuadrupedMPCOptiSlack:
     With penalty in cost: J += weight * (||s_lower||² + ||s_upper||²)
     """
 
-    # Default slack penalty weights for each constraint type
-    # Lower weights = faster convergence (solver uses slack more freely)
-    # Higher weights = harder constraints (solver avoids using slack)
-    # For trajectory EXPLORATION, use lower weights to find feasible regions quickly
+    # Physics constraints that must always be hard (no slack)
+    PHYSICS_CONSTRAINT_NAMES = {
+        "friction_cone_constraints",
+        "foot_height_constraints",
+        "foot_velocity_constraints",
+        "joint_limits_constraints",
+        "input_limits_constraints",
+        "body_clearance_constraints",
+        "complementarity_constraints",
+    }
+
+    # Default slack penalty weights for soft (LLM) constraints
     DEFAULT_SLACK_WEIGHTS = {
-        "friction_cone_constraints": 1e5,  # Reduced: allow quick convergence
-        "foot_height_constraints": 1e4,  # Reduced: allow exploration
-        "foot_velocity_constraints": 1e3,  # Reduced
-        "joint_limits_constraints": 1e5,  # Reduced: hardware can handle some overrun
-        "input_limits_constraints": 1e5,  # Reduced
-        "body_clearance_constraints": 1e4,  # Reduced: allow body tilt during flips
-        "complementarity_constraints": 1e2,  # Very low: non-convex constraint, hard to satisfy
         # LLM-generated constraints are wrapped and named "contact_aware_constraint"
-        "contact_aware_constraint": 1e5,  # LLM constraints (after wrapping)
+        "contact_aware_constraint": 1e5,
     }
 
     def __init__(
@@ -190,8 +191,8 @@ class QuadrupedMPCOptiSlack:
         Hard constraint: lb <= expr <= ub
         Slack formulation: lb - s_l <= expr <= ub + s_u, s_l >= 0, s_u >= 0
         """
-        if not self.use_slack:
-            # Original hard constraints
+        if not self.use_slack or constraint_name in self.PHYSICS_CONSTRAINT_NAMES:
+            # Hard constraints: physics constraints are always hard
             self.opti.subject_to(expr >= lb)
             self.opti.subject_to(expr <= ub)
             return
