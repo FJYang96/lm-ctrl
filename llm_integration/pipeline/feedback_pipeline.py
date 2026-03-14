@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -19,14 +18,11 @@ from ..feedback import (
     create_visual_feedback,
     format_hardness_report,
 )
-from ..feedback.constraint_feedback import generate_constraint_feedback
 from ..feedback.llm_evaluation import (
     evaluate_iteration_unified,
     generate_iteration_summary,
 )
-from ..feedback.reference_feedback import (
-    generate_reference_feedback,
-)
+from ..feedback.unified_feedback import generate_unified_feedback
 from ..logging_config import logger
 from ..mpc import LLMTaskMPC
 from .constraint_generation import generate_constraints_with_retry
@@ -56,7 +52,7 @@ class FeedbackPipeline:
     1. LLM constraint generation
     2. Trajectory optimization with generated constraints
     3. Simulation execution
-    4. Dual feedback (constraint + reference) and iteration
+    4. Unified feedback and iteration
     """
 
     # Assign imported functions as methods
@@ -347,43 +343,27 @@ class FeedbackPipeline:
                     f"pivot_signal={pivot_signal}"
                 )
 
-                # Step 10: Constraint feedback + Reference feedback in parallel
+                # Step 10: Unified feedback (single LLM call)
 
                 ref_trajectory_data = optimization_result.get("ref_trajectory_data")
                 state_trajectory = optimization_result.get("state_trajectory")
 
-                with ThreadPoolExecutor(max_workers=2) as executor:
-                    constraint_future = executor.submit(
-                        generate_constraint_feedback,
-                        command=command,
-                        constraint_code=constraint_code,
-                        visual_summary=self.current_visual_summary,
-                        hardness_report=hardness_text,
-                        constraint_violations=constraint_violations,
-                        trajectory_analysis=trajectory_analysis,
-                        opt_success=opt_success,
-                        error_info=error_info if not opt_success else None,
-                        pivot_signal=pivot_signal,
-                    )
-                    reference_future = executor.submit(
-                        generate_reference_feedback,
-                        command=command,
-                        constraint_code=constraint_code,
-                        visual_summary=self.current_visual_summary,
-                        ref_trajectory_data=ref_trajectory_data,
-                        trajectory_analysis=trajectory_analysis,
-                        state_trajectory=state_trajectory,
-                        opt_success=opt_success,
-                        pivot_signal=pivot_signal,
-                        mpc_dt=mpc_dt,
-                    )
-                    constraint_fb = constraint_future.result()
-                    ref_fb = reference_future.result()
-
-                logger.info(
-                    f"Dual feedback: constraint={len(constraint_fb)} chars, "
-                    f"reference={len(ref_fb)} chars"
+                unified_fb = generate_unified_feedback(
+                    command=command,
+                    constraint_code=constraint_code,
+                    visual_summary=self.current_visual_summary,
+                    hardness_report=hardness_text,
+                    constraint_violations=constraint_violations,
+                    trajectory_analysis=trajectory_analysis,
+                    opt_success=opt_success,
+                    error_info=error_info if not opt_success else None,
+                    pivot_signal=pivot_signal,
+                    ref_trajectory_data=ref_trajectory_data,
+                    state_trajectory=state_trajectory,
+                    mpc_dt=mpc_dt,
                 )
+
+                logger.info(f"Unified feedback: {len(unified_fb)} chars")
 
                 # Step 11: Iteration summary LLM call
                 iter_summary = generate_iteration_summary(
@@ -391,8 +371,7 @@ class FeedbackPipeline:
                     iteration=iteration,
                     score=score,
                     constraint_code=constraint_code,
-                    constraint_feedback=constraint_fb,
-                    reference_feedback=ref_fb,
+                    feedback=unified_fb,
                     trajectory_analysis=trajectory_analysis,
                     opt_success=opt_success,
                     simulation_result=simulation_result,
@@ -409,8 +388,7 @@ class FeedbackPipeline:
                     constraint_code,
                     run_dir,
                     pivot_signal=pivot_signal,
-                    constraint_feedback=constraint_fb,
-                    reference_feedback=ref_fb,
+                    feedback=unified_fb,
                     visual_summary=self.current_visual_summary,
                     score=score,
                 )
@@ -464,8 +442,7 @@ class FeedbackPipeline:
                         iteration=iteration,
                         score=0.0,
                         constraint_code=code,
-                        constraint_feedback="",
-                        reference_feedback="",
+                        feedback="",
                         trajectory_analysis={},
                         opt_success=False,
                         simulation_result={
@@ -480,10 +457,8 @@ class FeedbackPipeline:
                         "iteration": iteration,
                         "score": 0.0,
                         "success": False,
-                        "constraint_approach": "Summary generation failed",
-                        "reference_approach": "Summary generation failed",
-                        "constraint_feedback_summary": "",
-                        "reference_feedback_summary": "",
+                        "approach": "Summary generation failed",
+                        "feedback_summary": "",
                         "simulation_summary": "",
                         "metrics_summary": str(e),
                     }
@@ -512,8 +487,7 @@ class FeedbackPipeline:
                         code,
                         run_dir,
                         pivot_signal=pivot_signal,
-                        constraint_feedback="",
-                        reference_feedback="",
+                        feedback="",
                         visual_summary=self.current_visual_summary,
                         score=0.0,
                     )

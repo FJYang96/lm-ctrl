@@ -222,8 +222,7 @@ Evaluate how well this trajectory achieves the commanded task."""
         iteration: int,
         score: float,
         constraint_code: str,
-        constraint_feedback: str,
-        reference_feedback: str,
+        feedback: str,
         trajectory_analysis: dict[str, Any],
         opt_success: bool,
         simulation_result: dict[str, Any] | None = None,
@@ -232,7 +231,7 @@ Evaluate how well this trajectory achieves the commanded task."""
         """
         Generate a structured iteration summary for the history log.
 
-        Returns a structured dict with multi-line fields.
+        Returns a structured dict with multi-line fields (prose paragraphs).
         """
         system_prompt = """You are summarizing a trajectory optimization iteration for a history log.
 A code-generation LLM will read this summary to understand what was tried, what happened, and
@@ -241,64 +240,46 @@ what to do differently next time. Be DETAILED and SPECIFIC — vague summaries a
 You receive:
 - Full constraint code (read it to describe the approach)
 - Trajectory metrics (position, velocity, orientation, timing, GRF, actuator)
-- Constraint feedback and reference feedback from specialized LLM calls
-  (these already contain analysis of hardness data, violations, and reference RMSE)
+- Unified feedback from a specialized LLM call covering both constraints and reference trajectory
+  (already contains analysis of hardness data, violations, reference RMSE, and plausibility)
 - Visual summary of the trajectory
-
-The constraint and reference feedback texts already incorporate raw hardness data, violation
-analysis, and reference trajectory metrics. Use those analyses directly — do not expect
-separate raw data sections.
 
 Return a JSON object with this structure:
 {
     "iteration": <int>,
     "score": <float>,
     "success": <bool>,
-    "constraint_approach": "<DETAILED multi-line description>",
-    "reference_approach": "<DETAILED multi-line description>",
-    "constraint_feedback_summary": "<DETAILED 4-6 sentence summary>",
-    "reference_feedback_summary": "<DETAILED 4-6 sentence summary>",
-    "simulation_summary": "<DETAILED 3-5 sentence summary>",
-    "metrics_summary": "<all key metrics with exact numbers>"
+    "approach": "<DETAILED prose paragraph>",
+    "feedback_summary": "<DETAILED prose paragraph>",
+    "simulation_summary": "<DETAILED prose paragraph>",
+    "metrics_summary": "<prose paragraph with all key metrics>"
 }
 
-=== FIELD REQUIREMENTS ===
+=== FIELD REQUIREMENTS — ALL FIELDS MUST BE PROSE PARAGRAPHS ===
 
-constraint_approach (DETAILED — 5+ lines):
-  - Contact sequence: exact phase names, durations, and patterns
-  - Each constraint function: what variable is constrained, what bounds, what timing
-  - Specific numerical values for all bounds and parameters
-  - Phase-awareness: how constraints change across stance/flight/landing
+Write each field as a detailed paragraph of flowing sentences. No markdown headers, no bullet
+lists, no asterisks, no code blocks. Just sentences forming coherent paragraphs.
 
-reference_approach (DETAILED — 5+ lines):
-  - Target rotation (rad and degrees), height profile, velocity profile
-  - Phase breakdown: what happens in each phase (stance push, flight, landing)
-  - Specific numerical targets: peak height, takeoff velocity, angular velocity
-  - How the reference was built (min_jerk, ballistic, manual interpolation)
+approach (one detailed paragraph):
+  Describe the full constraint and reference strategy together. Include the contact sequence with
+  exact phase names and durations, each constraint with its variable, bounds, and timing, specific
+  numerical values, and the reference trajectory design (target rotation in rad and degrees, height
+  profile, velocity profile, how it was built). Explain how constraints and reference work together.
 
-constraint_feedback_summary (4-6 sentences):
-  - Which constraints worked and which failed — cite exact slack values
-  - Specific bound values that need changing and why
-  - Root cause of any solver failure or constraint violation
-  - Exact recommendations from the constraint feedback
+feedback_summary (one detailed paragraph):
+  Summarize the unified feedback. Which constraints worked and which failed (cite slack values),
+  specific bound values that need changing and why, root cause of any failure, RMSE values for
+  height/pitch/vz, physics plausibility issues, phase timing problems, and prioritized
+  recommendations with concrete numbers.
 
-reference_feedback_summary (4-6 sentences):
-  - Exact RMSE values (height, pitch, vz)
-  - Physics plausibility issues found
-  - Phase timing alignment problems
-  - Specific parameter changes recommended with concrete numbers
+simulation_summary (one detailed paragraph):
+  Whether rendering succeeded or failed, what the robot actually did (visible motion from video
+  frames), landing quality, and any ground penetration or instability.
 
-simulation_summary (3-5 sentences):
-  - Whether rendering of the planned trajectory succeeded or failed
-  - What the robot actually DID (visible motion from video frames)
-  - Landing quality and any ground penetration or instability
-
-metrics_summary (compact but COMPLETE):
-  - Pitch rotation (rad AND degrees), yaw drift, roll
-  - Height gain, max height, final height
-  - Flight duration, total duration
-  - Solver status (converged/failed, iteration count)
-  - Rendering success/failure
+metrics_summary (one detailed paragraph):
+  All key metrics as sentences: pitch rotation (rad AND degrees), yaw drift, roll, height gain,
+  max height, final height, flight duration, total duration, solver status (converged/failed,
+  iteration count), rendering success/failure.
 
 Return ONLY valid JSON, no markdown, no extra text."""
 
@@ -326,12 +307,9 @@ Return ONLY valid JSON, no markdown, no extra text."""
 <constraint_code>
 {constraint_code}
 </constraint_code>
-<constraint_feedback>
-{constraint_feedback if constraint_feedback else "None"}
-</constraint_feedback>
-<reference_feedback>
-{reference_feedback if reference_feedback else "None"}
-</reference_feedback>
+<feedback>
+{feedback if feedback else "None"}
+</feedback>
 <visual_summary>
 {visual_summary if visual_summary else "Not available"}
 </visual_summary>"""
@@ -351,10 +329,8 @@ Return ONLY valid JSON, no markdown, no extra text."""
                 "iteration": iteration,
                 "score": score,
                 "success": opt_success,
-                "constraint_approach": "Summary generation failed",
-                "reference_approach": "Summary generation failed",
-                "constraint_feedback_summary": "",
-                "reference_feedback_summary": "",
+                "approach": "Summary generation failed",
+                "feedback_summary": "",
                 "simulation_summary": "",
                 "metrics_summary": metrics_text,
             }
@@ -428,8 +404,7 @@ def generate_iteration_summary(
     iteration: int,
     score: float,
     constraint_code: str,
-    constraint_feedback: str,
-    reference_feedback: str,
+    feedback: str,
     trajectory_analysis: dict[str, Any],
     opt_success: bool,
     simulation_result: dict[str, Any] | None = None,
@@ -441,8 +416,7 @@ def generate_iteration_summary(
         iteration,
         score,
         constraint_code,
-        constraint_feedback,
-        reference_feedback,
+        feedback,
         trajectory_analysis,
         opt_success,
         simulation_result,

@@ -1,14 +1,10 @@
-"""Reference-trajectory-specific LLM feedback generation."""
+"""Reference trajectory metrics computation."""
 
 from __future__ import annotations
 
 from typing import Any
 
 import numpy as np
-
-from ..logging_config import logger
-from .format_metrics import format_trajectory_metrics_text
-from .llm_evaluation import get_evaluator
 
 
 def _compute_reference_metrics(
@@ -95,124 +91,3 @@ def _compute_reference_metrics(
         )
 
     return "\n".join(lines)
-
-
-def generate_reference_feedback(
-    command: str,
-    constraint_code: str,
-    visual_summary: str,
-    ref_trajectory_data: dict[str, Any] | None,
-    trajectory_analysis: dict[str, Any],
-    state_trajectory: np.ndarray | None,
-    opt_success: bool,
-    pivot_signal: str | None,
-    mpc_dt: float = 0.02,
-) -> str:
-    """Generate reference-trajectory-specific feedback via LLM.
-
-    Args:
-        command: The task command
-        constraint_code: Full constraint code (for context)
-        visual_summary: Text summary of the video frames
-        ref_trajectory_data: Dict with X_ref, U_ref arrays
-        trajectory_analysis: Trajectory metrics dict
-        state_trajectory: Actual state trajectory (horizon+1, states_dim)
-        opt_success: Whether the solver converged
-        pivot_signal: "pivot", "tweak", or None
-        mpc_dt: MPC time step in seconds
-
-    Returns:
-        Multi-paragraph analysis text for the code-gen LLM
-    """
-    system_prompt = """You are an expert analyzing reference trajectory design for quadruped MPC trajectory optimization.
-
-The reference trajectory is used ONLY as an initial guess (warmstart) for the solver.
-It does NOT change the cost function — the phase-aware cost and slack constraints remain unchanged.
-A good reference helps the solver converge faster and find better solutions.
-
-=== CONSTRAINT-REFERENCE INTERPLAY ===
-
-The reference trajectory should sit roughly in the CENTER of the constraint bounds.
-If constraints force a specific rotation, the reference must show that rotation.
-If constraints define a flight phase, the reference must have ballistic motion during that phase.
-Phase timing in the reference must match the contact sequence exactly.
-
-Key principles:
-- Reference should be physically plausible (respect gravity, momentum conservation)
-- Velocities must be consistent with positions (no teleportation)
-- GRF should be zero during flight phases, ~mg/n_feet during stance
-- Angular velocity during flight should be constant (momentum conservation)
-- Angles should integrate from angular velocities
-
-=== PLAUSIBILITY DATA ===
-
-You will receive raw plausibility metrics: velocity changes between timesteps, position-velocity
-consistency values, and RMSE comparisons. YOU must interpret these numbers to determine whether
-the reference trajectory is physically plausible. There are no pre-classified warnings or OK labels.
-For example, a large positive vertical velocity increase may indicate a gravity violation during flight.
-A high position-velocity inconsistency may indicate the reference has discontinuities.
-
-=== OUTPUT FORMAT ===
-
-Write multi-paragraph analysis. Be specific about:
-1. How well the reference matches the task requirements
-2. Physics plausibility assessment from the raw metrics (gravity, momentum, velocity-position consistency)
-3. Phase timing alignment with contact sequence
-4. Specific parameter changes (peak height, rotation rate, timing) with concrete numbers
-
-Do NOT return JSON. Return readable analysis text."""
-
-    mode_text = ""
-    if pivot_signal == "pivot":
-        mode_text = (
-            "MODE: MANDATORY PIVOT\n"
-            "The current approach has stagnated. Suggest a fundamentally different reference trajectory\n"
-            "shape — different peak values, different phase timing, different interpolation strategy."
-        )
-    elif pivot_signal == "tweak":
-        mode_text = (
-            "MODE: ADJUSTMENT SUGGESTED\n"
-            "The current reference shows some promise. Suggest incremental changes — adjust peak values,\n"
-            "shift timing, tune interpolation parameters."
-        )
-    else:
-        mode_text = (
-            "MODE: FIRST ITERATION\n"
-            "This is the first attempt. Analyze the reference trajectory design and suggest improvements."
-        )
-
-    # Compute reference metrics
-    ref_metrics = _compute_reference_metrics(
-        ref_trajectory_data, state_trajectory, mpc_dt
-    )
-
-    # Format trajectory metrics (comprehensive shared formatter)
-    metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
-
-    solver_status = "converged" if opt_success else "failed"
-
-    user_message = f"""<task>{command}</task>
-<mode>{mode_text}</mode>
-<solver status="{solver_status}"/>
-<constraint_code>
-{constraint_code}
-</constraint_code>
-<metrics>
-{metrics_text}
-</metrics>
-<reference_analysis>
-{ref_metrics}
-</reference_analysis>
-<visual_summary>
-{visual_summary if visual_summary else "Not available"}
-</visual_summary>
-
-Provide targeted feedback on the reference trajectory design."""
-
-    try:
-        evaluator = get_evaluator()
-        response = evaluator._call_llm(system_prompt, user_message, None)
-        return response.strip()
-    except Exception as e:
-        logger.error(f"Reference feedback generation failed: {e}")
-        return ""

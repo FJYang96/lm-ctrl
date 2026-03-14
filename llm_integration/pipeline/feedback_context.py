@@ -1,14 +1,12 @@
-"""Feedback context generation for the feedback pipeline — unified dual-feedback format."""
+"""Feedback context generation for the feedback pipeline — unified format with 4 big sections."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..feedback.code_utils import strip_ref_trajectory_code
 from ..feedback.format_hardness import format_hardness_report
 from ..feedback.format_metrics import format_trajectory_metrics_section
 from ..feedback.reference_feedback import _compute_reference_metrics
-from .utils import _extract_ref_trajectory_code
 
 if TYPE_CHECKING:
     from .feedback_pipeline import FeedbackPipeline
@@ -23,14 +21,14 @@ def create_feedback_context(
     constraint_code: str,
     run_dir: Any,
     pivot_signal: str | None = None,
-    constraint_feedback: str = "",
-    reference_feedback: str = "",
+    feedback: str = "",
     visual_summary: str = "",
     score: float = 0.0,
 ) -> str:
     """Create unified feedback context for the next LLM iteration.
 
     Single path for both success and failure — no branching.
+    Uses 4 big === sections: METRICS, ENTIRE CODE, ENTIRE FEEDBACK, VISUAL SUMMARY.
     """
     opt_success = optimization_result.get("success", False)
     trajectory_analysis = optimization_result.get("trajectory_analysis", {})
@@ -96,28 +94,16 @@ def create_feedback_context(
             lines.append("")
             lines.append(f"  Iter {iter_num} [{status_label}] Score: {iter_score:.2f}")
 
-            constraint_approach = entry.get("constraint_approach", "")
-            if constraint_approach:
-                lines.append("    Constraint approach:")
-                for line in constraint_approach.split("\n"):
+            approach = entry.get("approach", "")
+            if approach:
+                lines.append("    Approach:")
+                for line in approach.split("\n"):
                     lines.append(f"      {line}")
 
-            reference_approach = entry.get("reference_approach", "")
-            if reference_approach:
-                lines.append("    Reference approach:")
-                for line in reference_approach.split("\n"):
-                    lines.append(f"      {line}")
-
-            cfb_summary = entry.get("constraint_feedback_summary", "")
-            if cfb_summary:
-                lines.append("    Constraint feedback:")
-                for line in cfb_summary.split("\n"):
-                    lines.append(f"      {line}")
-
-            rfb_summary = entry.get("reference_feedback_summary", "")
-            if rfb_summary:
-                lines.append("    Reference feedback:")
-                for line in rfb_summary.split("\n"):
+            fb_summary = entry.get("feedback_summary", "")
+            if fb_summary:
+                lines.append("    Feedback:")
+                for line in fb_summary.split("\n"):
                     lines.append(f"      {line}")
 
             sim_summary = entry.get("simulation_summary", "")
@@ -135,15 +121,14 @@ def create_feedback_context(
         lines.append("  No previous iterations.")
 
     lines.append("")
-    lines.append("--- END OF ITERATION SUMMARIES ---")
+    lines.append("--- END OF ITERATION HISTORY ---")
 
-    # === Current Iteration Detailed Results (XML diagnostic report) ===
-    solver_status = "converged" if opt_success else "failed"
+    # === Current Iteration Detailed Analysis ===
     lines.append("")
     lines.append("")
-    lines.append(
-        f'<diagnostic_report iteration="{iteration}" score="{score:.2f}" solver="{solver_status}">'
-    )
+    lines.append("=" * 60)
+    lines.append("          CURRENT ITERATION DETAILED ANALYSIS")
+    lines.append("=" * 60)
 
     # Error info for failed iterations
     if not opt_success:
@@ -155,19 +140,26 @@ def create_feedback_context(
         if solver_iters:
             error_parts.append(f"Solver iterations: {solver_iters}")
         if error_parts:
-            lines.append(f"  <error>{chr(10).join(error_parts)}</error>")
+            lines.append("")
+            lines.append("SOLVER FAILURE: " + " | ".join(error_parts))
 
-    # Full trajectory metrics
+    # ============================================================
+    # METRICS
+    # ============================================================
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("                        METRICS")
+    lines.append("=" * 60)
+
+    # Trajectory metrics
     if trajectory_analysis:
         metrics_lines = format_trajectory_metrics_section(
             trajectory_analysis, opt_success
         )
-        lines.append("  <metrics>")
         for ml in metrics_lines:
-            lines.append(f"  {ml}")
-        lines.append("  </metrics>")
+            lines.append(ml)
 
-    # Full hardness report
+    # Hardness report
     hardness_report = optimization_metrics.get("hardness_report")
     mpc_dt = float(self.config.mpc_config.mpc_dt)
     current_slack_weights = getattr(self, "current_slack_weights", None)
@@ -175,9 +167,8 @@ def create_feedback_context(
         hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
     )
     if hardness_text:
-        lines.append("  <hardness>")
-        lines.append(f"  {hardness_text}")
-        lines.append("  </hardness>")
+        lines.append("")
+        lines.append(hardness_text)
 
     # Reference trajectory analysis (RMSE, plausibility)
     ref_trajectory_data = optimization_result.get("ref_trajectory_data")
@@ -185,50 +176,41 @@ def create_feedback_context(
     ref_analysis = _compute_reference_metrics(
         ref_trajectory_data, state_trajectory, mpc_dt
     )
-    lines.append("  <reference_analysis>")
-    lines.append(f"  {ref_analysis}")
-    lines.append("  </reference_analysis>")
+    lines.append("")
+    lines.append(ref_analysis)
 
-    # Constraint Code (ref stripped)
-    constraint_only = strip_ref_trajectory_code(constraint_code)
-    lines.append("  <constraint_code>")
-    lines.append(f"  {constraint_only}")
-    lines.append("  </constraint_code>")
+    # ============================================================
+    # ENTIRE CODE
+    # ============================================================
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("                      ENTIRE CODE")
+    lines.append("=" * 60)
+    lines.append(constraint_code)
 
-    # Reference Trajectory Code
-    ref_code = _extract_ref_trajectory_code(constraint_code)
-    lines.append("  <reference_code>")
-    if ref_code:
-        lines.append(f"  {ref_code}")
+    # ============================================================
+    # ENTIRE FEEDBACK
+    # ============================================================
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("                    ENTIRE FEEDBACK")
+    lines.append("=" * 60)
+    if feedback:
+        lines.append(feedback)
     else:
-        lines.append("  No reference trajectory function found in code.")
-    lines.append("  </reference_code>")
+        lines.append("No feedback available.")
 
-    # Constraint Feedback
-    lines.append("  <constraint_feedback>")
-    if constraint_feedback:
-        lines.append(f"  {constraint_feedback}")
-    else:
-        lines.append("  No constraint feedback available.")
-    lines.append("  </constraint_feedback>")
-
-    # Reference Trajectory Feedback
-    lines.append("  <reference_feedback>")
-    if reference_feedback:
-        lines.append(f"  {reference_feedback}")
-    else:
-        lines.append("  No reference trajectory feedback available.")
-    lines.append("  </reference_feedback>")
-
-    # Visual Summary
-    lines.append("  <visual_summary>")
+    # ============================================================
+    # VISUAL SUMMARY
+    # ============================================================
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("                    VISUAL SUMMARY")
+    lines.append("=" * 60)
     if visual_summary:
-        lines.append(f"  {visual_summary}")
+        lines.append(visual_summary)
     else:
-        lines.append("  No visual summary available.")
-    lines.append("  </visual_summary>")
-
-    lines.append("</diagnostic_report>")
+        lines.append("No visual summary available.")
 
     # === Footer ===
     lines.append("")
