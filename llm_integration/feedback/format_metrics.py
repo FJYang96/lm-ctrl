@@ -118,7 +118,7 @@ def format_trajectory_metrics_text(
     """Format trajectory metrics as a single text string.
 
     This is the shared comprehensive formatter used by all LLM calls
-    (scoring, constraint feedback, reference feedback, iteration summary).
+    (scoring, unified feedback, iteration summary).
     """
     if not trajectory_analysis:
         return "No trajectory data available"

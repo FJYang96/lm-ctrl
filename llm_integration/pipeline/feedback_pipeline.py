@@ -18,11 +18,12 @@ from ..feedback import (
     create_visual_feedback,
     format_hardness_report,
 )
-from ..feedback.llm_evaluation import (
+from ..feedback.llm_calls import (
     evaluate_iteration_unified,
     generate_iteration_summary,
+    generate_unified_feedback,
 )
-from ..feedback.unified_feedback import generate_unified_feedback
+from ..feedback.reference_feedback import _compute_reference_metrics
 from ..logging_config import logger
 from ..mpc import LLMTaskMPC
 from .constraint_generation import generate_constraints_with_retry
@@ -114,9 +115,6 @@ class FeedbackPipeline:
 
         # LLM-based iteration history (structured summaries)
         self.iteration_summaries: list[dict[str, Any]] = []
-
-        # Visual summary of current iteration's trajectory frames
-        self.current_visual_summary: str = ""
 
         # Slack weights tracking (for feedback display)
         self.current_slack_weights: dict[str, float] = {}
@@ -273,15 +271,10 @@ class FeedbackPipeline:
                     optimization_result, iteration, run_dir
                 )
 
-                # Step 4: Extract 20 video frames
+                # Step 4: Extract video frames
                 self.current_images = create_visual_feedback(run_dir, iteration)
 
-                # Step 5: LLM summarizes frames
-                self.current_visual_summary = self.llm_client.summarize_frames(
-                    self.current_images, command
-                )
-
-                # === Step 6: Extract constraint data (needed by scoring + feedback) ===
+                # === Step 5: Extract constraint data (needed by scoring + feedback) ===
                 trajectory_analysis = optimization_result.get("trajectory_analysis", {})
                 opt_success = optimization_result.get("success", False)
                 error_info = optimization_result.get("optimization_metrics", {})
@@ -301,7 +294,14 @@ class FeedbackPipeline:
                     current_slack_weights=current_slack_weights,
                 )
 
-                # === Step 7: Unified scoring ===
+                # Compute reference analysis (used by scoring, feedback, and summary)
+                ref_trajectory_data = optimization_result.get("ref_trajectory_data")
+                state_trajectory = optimization_result.get("state_trajectory")
+                ref_analysis = _compute_reference_metrics(
+                    ref_trajectory_data, state_trajectory, mpc_dt
+                )
+
+                # === Step 6: Unified scoring ===
                 llm_eval = evaluate_iteration_unified(
                     command=command,
                     trajectory_analysis=trajectory_analysis,
@@ -309,9 +309,9 @@ class FeedbackPipeline:
                     opt_success=opt_success,
                     error_info=error_info if not opt_success else None,
                     images=self.current_images,
-                    visual_summary=self.current_visual_summary,
                     hardness_text=hardness_text,
                     constraint_violations=constraint_violations,
+                    reference_analysis=ref_analysis,
                 )
                 score = llm_eval.get("score", 0.0 if not opt_success else 0.5)
 
@@ -343,29 +343,23 @@ class FeedbackPipeline:
                     f"pivot_signal={pivot_signal}"
                 )
 
-                # Step 10: Unified feedback (single LLM call)
-
-                ref_trajectory_data = optimization_result.get("ref_trajectory_data")
-                state_trajectory = optimization_result.get("state_trajectory")
-
+                # Step 9: Unified feedback (single LLM call — receives images directly)
                 unified_fb = generate_unified_feedback(
                     command=command,
                     constraint_code=constraint_code,
-                    visual_summary=self.current_visual_summary,
+                    images=self.current_images,
                     hardness_report=hardness_text,
                     constraint_violations=constraint_violations,
                     trajectory_analysis=trajectory_analysis,
                     opt_success=opt_success,
                     error_info=error_info if not opt_success else None,
                     pivot_signal=pivot_signal,
-                    ref_trajectory_data=ref_trajectory_data,
-                    state_trajectory=state_trajectory,
-                    mpc_dt=mpc_dt,
+                    reference_analysis=ref_analysis,
                 )
 
                 logger.info(f"Unified feedback: {len(unified_fb)} chars")
 
-                # Step 11: Iteration summary LLM call
+                # Step 10: Iteration summary LLM call
                 iter_summary = generate_iteration_summary(
                     command=command,
                     iteration=iteration,
@@ -374,12 +368,15 @@ class FeedbackPipeline:
                     feedback=unified_fb,
                     trajectory_analysis=trajectory_analysis,
                     opt_success=opt_success,
+                    error_info=error_info if not opt_success else None,
                     simulation_result=simulation_result,
-                    visual_summary=self.current_visual_summary,
+                    hardness_text=hardness_text,
+                    reference_analysis=ref_analysis,
+                    constraint_violations=constraint_violations,
                 )
-                self.iteration_summaries.append(iter_summary)
-
-                # Step 12: Assemble feedback context (new format)
+                # Step 11: Assemble feedback context (before appending summary,
+                # so the current iteration's summary doesn't appear in its own
+                # detailed feedback — it only shows in future iterations' history)
                 feedback_context = self._create_feedback_context(
                     iteration,
                     command,
@@ -389,9 +386,9 @@ class FeedbackPipeline:
                     run_dir,
                     pivot_signal=pivot_signal,
                     feedback=unified_fb,
-                    visual_summary=self.current_visual_summary,
                     score=score,
                 )
+                self.iteration_summaries.append(iter_summary)
 
                 # Step 13: Track best result
                 is_new_best = score > best_score
@@ -449,7 +446,8 @@ class FeedbackPipeline:
                             "success": False,
                             "error": str(e),
                         },
-                        visual_summary=self.current_visual_summary,
+                        hardness_text="",
+                        reference_analysis="",
                     )
                 except Exception as summary_err:
                     logger.error(f"Error summary generation failed: {summary_err}")
@@ -488,7 +486,6 @@ class FeedbackPipeline:
                         run_dir,
                         pivot_signal=pivot_signal,
                         feedback="",
-                        visual_summary=self.current_visual_summary,
                         score=0.0,
                     )
                 except Exception:

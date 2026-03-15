@@ -5,11 +5,8 @@ Returns the same (qpos_traj, qvel_traj, grf_traj, images) format.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import Any
 
-import jax
 import jax.numpy as jnp
 import mujoco
 import numpy as np
@@ -17,7 +14,7 @@ import numpy as np
 import config
 
 from .feedforward import FeedforwardComputer
-from .ppo import ActorCritic, NormalizerState, load_checkpoint, normalize_obs
+from .ppo import NormalizerState, normalize_obs
 from .reference import ReferenceTrajectory
 from .tracking_env import Go2TrackingEnv
 
@@ -39,8 +36,6 @@ def execute_policy_rollout(
     """
     sim_dt = 0.001
     control_dt = config.mpc_config.mpc_dt
-    substeps = int(control_dt / sim_dt)
-
     ref = ReferenceTrajectory(
         state_traj=state_traj,
         joint_vel_traj=joint_vel_traj,
@@ -61,17 +56,13 @@ def execute_policy_rollout(
         except Exception:
             print("Warning: Could not create renderer, skipping video capture")
 
-    KP = Go2TrackingEnv.KP
-    KD = Go2TrackingEnv.KD
-    TORQUE_LIMITS = Go2TrackingEnv.TORQUE_LIMITS
-
     num_policy_steps = ref.max_phase
     qpos_traj_out = []
     qvel_traj_out = []
     grf_traj_out = []
     images = []
 
-    for phase in range(num_policy_steps):
+    for _phase in range(num_policy_steps):
         obs_jnp = jnp.array(obs)
         if normalizer is not None:
             obs_jnp = normalize_obs(normalizer, obs_jnp)

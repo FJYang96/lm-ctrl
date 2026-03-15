@@ -69,6 +69,7 @@ def run_baseline(args: argparse.Namespace) -> None:
     obs = env.reset()
 
     import mujoco
+
     renderer = None
     try:
         renderer = mujoco.Renderer(env.mjModel, height=480, width=640)
@@ -83,12 +84,16 @@ def run_baseline(args: argparse.Namespace) -> None:
     images = []
     rewards = []
     reward_components = {
-        "rw_pos": [], "rw_ori": [], "rw_joint": [], "rw_smooth": [], "rw_torque": [],
+        "rw_pos": [],
+        "rw_ori": [],
+        "rw_joint": [],
+        "rw_smooth": [],
+        "rw_torque": [],
     }
 
     print(f"Running PD+feedforward baseline for {num_steps} steps (zero residuals)...")
 
-    for phase in range(num_steps):
+    for _phase in range(num_steps):
         obs, reward, terminated, truncated, info = env.step(zero_action)
 
         sim_obs = env._quad_env._get_obs()
@@ -119,9 +124,15 @@ def run_baseline(args: argparse.Namespace) -> None:
     qpos_arr = np.array(qpos_traj_out) if qpos_traj_out else np.zeros((0, 19))
     qvel_arr = np.array(qvel_traj_out) if qvel_traj_out else np.zeros((0, 18))
 
-    err = compute_tracking_error(state_traj, qpos_arr, qvel_arr) if n_tracked > 0 else {
-        "pos_rms": float("nan"), "ori_rms": float("nan"), "joint_rms": float("nan"),
-    }
+    err = (
+        compute_tracking_error(state_traj, qpos_arr, qvel_arr)
+        if n_tracked > 0
+        else {
+            "pos_rms": float("nan"),
+            "ori_rms": float("nan"),
+            "joint_rms": float("nan"),
+        }
+    )
 
     print()
     print("=" * 50)
@@ -153,10 +164,14 @@ def run_baseline(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate PD+feedforward baseline (no RL)")
+    parser = argparse.ArgumentParser(
+        description="Evaluate PD+feedforward baseline (no RL)"
+    )
     parser.add_argument("--state-traj", type=str, required=True)
     parser.add_argument("--grf-traj", type=str, required=True)
     parser.add_argument("--joint-vel-traj", type=str, required=True)
-    parser.add_argument("--output-video", type=str, default="results/baseline_tracking.mp4")
+    parser.add_argument(
+        "--output-video", type=str, default="results/baseline_tracking.mp4"
+    )
     args = parser.parse_args()
     run_baseline(args)

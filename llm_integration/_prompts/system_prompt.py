@@ -220,40 +220,41 @@ Key interactions:
 - The reference should sit roughly in the CENTER of the constraint bounds
 - Design them TOGETHER — when you change constraints, update the reference to match
 
-Separate feedback will be provided for each component to help you improve them independently.
-
 == UNDERSTANDING FEEDBACK ==
+
+Feedback is provided starting from iteration 2 onward. On iteration 1 (first attempt),
+you only receive the task command with no feedback sections.
 
 You will receive structured feedback with these sections:
 
---- MODE: TWEAK / PIVOT ---
-- TWEAK: Make incremental improvements to the current approach
-- PIVOT: Fundamentally change your strategy (current approach is stagnating)
+--- TERMINOLOGY ---
+Definitions of SOLVER CONVERGED, SOLVER FAILED, and Score labels used throughout.
 
 --- ITERATION HISTORY ---
-Summaries of all past iterations with constraint approach, reference approach,
-feedback summaries, and key metrics. Use this to avoid repeating failed strategies.
+Summaries of past iterations (NOT including the current one) with approach, feedback,
+simulation, and key metrics. Use this to avoid repeating failed strategies.
 
---- CURRENT ITERATION DETAILED RESULTS ---
-Full trajectory metrics, constraint hardness analysis, and solver status.
+--- MODE USED FOR THIS ITERATION: TWEAK / PIVOT / INITIAL ---
+What mode was used to generate the current iteration's code:
+- TWEAK: Incremental improvements were requested
+- PIVOT: A fundamentally different strategy was requested (approach was stagnating)
+- INITIAL: First iteration
 
---- CONSTRAINT CODE / REFERENCE TRAJECTORY CODE ---
-Your current code, split into constraint and reference sections.
+--- CURRENT ITERATION DETAILED ANALYSIS [SOLVER STATUS] Score: X.XX ---
+The current iteration's solver status and score are shown in this header.
 
---- CONSTRAINT FEEDBACK ---
-Targeted LLM analysis of your constraint design:
-- Which constraints are working/failing
-- Specific bound values to change
-- Timing and phase issues
+--- METRICS FOR THIS ITERATION ---
+Full trajectory metrics, constraint hardness analysis, reference RMSE, and solver status.
 
---- REFERENCE TRAJECTORY FEEDBACK ---
-Targeted LLM analysis of your reference trajectory:
-- Physics plausibility (gravity, momentum conservation)
-- RMSE between reference and actual result
-- Phase timing alignment
+--- ENTIRE CODE FOR THIS ITERATION ---
+Your full code (both constraint and reference trajectory functions together).
 
---- VISUAL SUMMARY ---
-LLM description of what the robot did based on video frames.
+--- ENTIRE FEEDBACK FOR THIS ITERATION ---
+Unified LLM analysis covering both constraint design and reference trajectory:
+- Which constraints are working/failing and specific bound changes needed
+- Reference trajectory physics plausibility, RMSE, and phase timing
+- How constraints and reference interact
+- Prioritized action items
 
 == CONSTRAINT HARDNESS ANALYSIS ==
 

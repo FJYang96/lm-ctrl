@@ -22,13 +22,12 @@ def create_feedback_context(
     run_dir: Any,
     pivot_signal: str | None = None,
     feedback: str = "",
-    visual_summary: str = "",
     score: float = 0.0,
 ) -> str:
     """Create unified feedback context for the next LLM iteration.
 
     Single path for both success and failure — no branching.
-    Uses 4 big === sections: METRICS, ENTIRE CODE, ENTIRE FEEDBACK, VISUAL SUMMARY.
+    Uses 3 big === sections: METRICS, ENTIRE CODE, ENTIRE FEEDBACK.
     """
     opt_success = optimization_result.get("success", False)
     trajectory_analysis = optimization_result.get("trajectory_analysis", {})
@@ -41,26 +40,19 @@ def create_feedback_context(
     lines.append(f"ITERATION {iteration} FEEDBACK")
     lines.append("=" * 60)
 
-    # === Mode ===
+    # === Terminology note (applies to both iteration history and detailed analysis) ===
     lines.append("")
-    if pivot_signal == "pivot":
-        lines.append("--- MODE: PIVOT ---")
-        lines.append(
-            "Your approach has stagnated or declined. You MUST try a fundamentally"
-        )
-        lines.append(
-            "different strategy — different constraint structures, different variables,"
-        )
-        lines.append("different phase strategies. Do NOT make incremental changes.")
-    elif pivot_signal == "tweak":
-        lines.append("--- MODE: TWEAK ---")
-        lines.append("Your approach shows progress. Make incremental improvements —")
-        lines.append(
-            "adjust bounds, tune parameters, refine timing. Keep the overall structure."
-        )
-    else:
-        lines.append("--- MODE: INITIAL ---")
-        lines.append("This is the first iteration. Review the results and improve.")
+    lines.append(
+        "--- TERMINOLOGY (how labels and scores are defined below for iteration history and current iteration summary) ---"
+    )
+    lines.append(
+        "SOLVER CONVERGED = the optimizer found a feasible solution that satisfies the constraints, "
+        "but this does NOT mean the motion matches the task goal — a converged solver can still produce "
+        "a trajectory that does nothing useful if the constraints have loopholes. "
+        "SOLVER FAILED = the optimizer could not find any feasible solution within the constraint bounds. "
+        "Score (0.0-1.0) is a separate LLM judgment of how well the actual trajectory matches the commanded task. "
+        "Scores for failed solves are capped at 0.40 — prioritize getting the solver to converge first."
+    )
 
     # === Iteration History (capped to last 3 full entries) ===
     lines.append("")
@@ -82,7 +74,7 @@ def create_feedback_context(
             iter_num = entry.get("iteration", "?")
             iter_score = entry.get("score", 0.0)
             iter_success = entry.get("success", False)
-            status_label = "SUCCESS" if iter_success else "FAILED"
+            status_label = "SOLVER CONVERGED" if iter_success else "SOLVER FAILED"
             lines.append(f"  Iter {iter_num} [{status_label}] Score: {iter_score:.2f}")
 
         # Recent iterations: full detail
@@ -90,7 +82,7 @@ def create_feedback_context(
             iter_num = entry.get("iteration", "?")
             iter_score = entry.get("score", 0.0)
             iter_success = entry.get("success", False)
-            status_label = "SUCCESS" if iter_success else "FAILED"
+            status_label = "SOLVER CONVERGED" if iter_success else "SOLVER FAILED"
             lines.append("")
             lines.append(f"  Iter {iter_num} [{status_label}] Score: {iter_score:.2f}")
 
@@ -123,11 +115,32 @@ def create_feedback_context(
     lines.append("")
     lines.append("--- END OF ITERATION HISTORY ---")
 
+    # === Mode (used for this iteration's code generation) ===
+    lines.append("")
+    if pivot_signal == "pivot":
+        lines.append("--- MODE USED FOR THIS ITERATION: PIVOT ---")
+        lines.append(
+            "This iteration's code was generated under PIVOT mode — the approach had "
+            "stagnated or declined, so a fundamentally different strategy was requested."
+        )
+    elif pivot_signal == "tweak":
+        lines.append("--- MODE USED FOR THIS ITERATION: TWEAK ---")
+        lines.append(
+            "This iteration's code was generated under TWEAK mode — the approach showed "
+            "progress, so incremental improvements were requested."
+        )
+    else:
+        lines.append("--- MODE USED FOR THIS ITERATION: INITIAL ---")
+        lines.append("This was the first iteration.")
+
     # === Current Iteration Detailed Analysis ===
+    solver_label = "SOLVER CONVERGED" if opt_success else "SOLVER FAILED"
     lines.append("")
     lines.append("")
     lines.append("=" * 60)
-    lines.append("          CURRENT ITERATION DETAILED ANALYSIS")
+    lines.append(
+        f"  CURRENT ITERATION DETAILED ANALYSIS  [{solver_label}]  Score: {score:.2f}"
+    )
     lines.append("=" * 60)
 
     # Error info for failed iterations
@@ -148,7 +161,7 @@ def create_feedback_context(
     # ============================================================
     lines.append("")
     lines.append("=" * 60)
-    lines.append("                        METRICS")
+    lines.append("              METRICS FOR THIS ITERATION")
     lines.append("=" * 60)
 
     # Trajectory metrics
@@ -184,7 +197,7 @@ def create_feedback_context(
     # ============================================================
     lines.append("")
     lines.append("=" * 60)
-    lines.append("                      ENTIRE CODE")
+    lines.append("            ENTIRE CODE FOR THIS ITERATION")
     lines.append("=" * 60)
     lines.append(constraint_code)
 
@@ -193,24 +206,12 @@ def create_feedback_context(
     # ============================================================
     lines.append("")
     lines.append("=" * 60)
-    lines.append("                    ENTIRE FEEDBACK")
+    lines.append("          ENTIRE FEEDBACK FOR THIS ITERATION")
     lines.append("=" * 60)
     if feedback:
         lines.append(feedback)
     else:
         lines.append("No feedback available.")
-
-    # ============================================================
-    # VISUAL SUMMARY
-    # ============================================================
-    lines.append("")
-    lines.append("=" * 60)
-    lines.append("                    VISUAL SUMMARY")
-    lines.append("=" * 60)
-    if visual_summary:
-        lines.append(visual_summary)
-    else:
-        lines.append("No visual summary available.")
 
     # === Footer ===
     lines.append("")
