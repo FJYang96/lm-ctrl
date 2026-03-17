@@ -199,30 +199,6 @@ def print_results_summary(results: dict[str, Any], elapsed_time: float) -> None:
     print(f"Pipeline success: {'YES' if pipeline_success else 'NO'}")
     print(f"Total time: {elapsed_time:.1f} seconds")
 
-    # Print best iteration details if available
-    best_iteration = results.get("best_iteration")
-    if best_iteration:
-        print()
-        print("BEST ITERATION DETAILS:")
-        print(f"- Iteration: {best_iteration['iteration']}")
-
-        opt_result = best_iteration.get("optimization", {})
-        print(f"- Optimization: {'SUCCESS' if opt_result.get('success') else 'FAILED'}")
-
-        sim_result = best_iteration.get("simulation", {})
-        print(f"- Simulation: {'SUCCESS' if sim_result.get('success') else 'FAILED'}")
-
-        if sim_result.get("tracking_error") is not None:
-            print(f"- Tracking error: {sim_result['tracking_error']:.3f}")
-
-        # Print trajectory metrics if available
-        traj_analysis = opt_result.get("trajectory_analysis", {})
-        if traj_analysis:
-            print(f"- Max height: {traj_analysis.get('max_com_height', 'N/A'):.3f}m")
-            if "total_pitch_rotation" in traj_analysis:
-                rotation_deg = traj_analysis["total_pitch_rotation"] * 180 / 3.14159
-                print(f"- Pitch rotation: {rotation_deg:.1f} degrees")
-
     print()
     print(f"Results saved to: {results['results_directory']}")
 

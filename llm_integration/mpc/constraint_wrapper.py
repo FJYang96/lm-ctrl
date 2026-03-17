@@ -23,11 +23,8 @@ def wrap_constraint_for_contact_phases(
     for the task's contact sequence.
     """
     # Detect the number of parameters in the constraint function
-    try:
-        sig = inspect.signature(constraint_func)
-        num_params = len(sig.parameters)
-    except (ValueError, TypeError):
-        num_params = 5  # Default to 5-arg signature
+    sig = inspect.signature(constraint_func)
+    num_params = len(sig.parameters)
 
     def contact_aware_constraint(
         x_k: Any,
@@ -55,7 +52,7 @@ def wrap_constraint_for_contact_phases(
 
 def evaluate_constraint_violations(
     constraint_functions: list[Any],
-    contact_sequence: np.ndarray | None,
+    contact_sequence: np.ndarray,
     kindyn_model: Any,
     base_config: Any,
     X_debug: np.ndarray,
@@ -88,10 +85,6 @@ def evaluate_constraint_violations(
         violations["summary"].append("No LLM constraints to evaluate")
         return violations
 
-    if contact_sequence is None:
-        violations["summary"].append("No contact sequence configured")
-        return violations
-
     horizon = contact_sequence.shape[1]
 
     # Track violations per constraint
@@ -99,86 +92,63 @@ def evaluate_constraint_violations(
         violations["by_constraint"][i] = []
 
     # Evaluate each constraint at each timestep (skip k=0 as MPC does)
-    for k in range(1, min(horizon, X_debug.shape[1])):
+    for k in range(1, horizon):
         x_k = X_debug[:, k]
-        u_k = U_debug[:, k] if k < U_debug.shape[1] else U_debug[:, -1]
+        u_k = U_debug[:, k]
         contact_k = contact_sequence[:, k]
 
         for i, constraint_func in enumerate(constraint_functions):
-            try:
-                # Call the constraint function
-                result = constraint_func(
-                    x_k,
-                    u_k,
-                    kindyn_model,
-                    base_config,
-                    contact_k,
-                    k,
-                    horizon,
+            # Call the constraint function
+            expr_value, lower, upper = constraint_func(
+                x_k,
+                u_k,
+                kindyn_model,
+                base_config,
+                contact_k,
+                k,
+                horizon,
+            )
+
+            # Convert CasADi types to float
+            if hasattr(expr_value, "full"):
+                expr_value = float(expr_value.full().flatten()[0])
+            elif hasattr(expr_value, "__float__"):
+                expr_value = float(expr_value)
+
+            if hasattr(lower, "__float__"):
+                lower = float(lower)
+            if hasattr(upper, "__float__"):
+                upper = float(upper)
+
+            # Check for violations
+            if expr_value < lower:
+                violation_msg = (
+                    f"Constraint {i} at k={k}: "
+                    f"value={expr_value:.6f} < lower={lower:.6f}"
+                )
+                violations["llm_constraints"].append(violation_msg)
+                violations["by_constraint"][i].append(
+                    {
+                        "k": k,
+                        "value": expr_value,
+                        "lower": lower,
+                        "type": "below_lower",
+                    }
                 )
 
-                # Extract value, lower, upper bounds
-                if isinstance(result, tuple) and len(result) == 3:
-                    expr_value, lower, upper = result
-
-                    # Convert CasADi types to float if needed
-                    try:
-                        if hasattr(expr_value, "full"):
-                            expr_value = float(expr_value.full().flatten()[0])
-                        elif hasattr(expr_value, "__float__"):
-                            expr_value = float(expr_value)
-                    except Exception:
-                        pass  # Keep as-is if conversion fails
-
-                    try:
-                        if hasattr(lower, "__float__"):
-                            lower = float(lower)
-                        if hasattr(upper, "__float__"):
-                            upper = float(upper)
-                    except Exception:
-                        pass
-
-                    # Check for violations
-                    if isinstance(expr_value, (int, float)) and isinstance(
-                        lower, (int, float)
-                    ):
-                        if expr_value < lower:
-                            violation_msg = (
-                                f"Constraint {i} at k={k}: "
-                                f"value={expr_value:.6f} < lower={lower:.6f}"
-                            )
-                            violations["llm_constraints"].append(violation_msg)
-                            violations["by_constraint"][i].append(
-                                {
-                                    "k": k,
-                                    "value": expr_value,
-                                    "lower": lower,
-                                    "type": "below_lower",
-                                }
-                            )
-
-                    if isinstance(expr_value, (int, float)) and isinstance(
-                        upper, (int, float)
-                    ):
-                        if expr_value > upper:
-                            violation_msg = (
-                                f"Constraint {i} at k={k}: "
-                                f"value={expr_value:.6f} > upper={upper:.6f}"
-                            )
-                            violations["llm_constraints"].append(violation_msg)
-                            violations["by_constraint"][i].append(
-                                {
-                                    "k": k,
-                                    "value": expr_value,
-                                    "upper": upper,
-                                    "type": "above_upper",
-                                }
-                            )
-
-            except Exception as e:
-                # Record evaluation error but continue
-                violations["llm_constraints"].append(
-                    f"Constraint {i} at k={k}: evaluation error - {str(e)[:50]}"
+            if expr_value > upper:
+                violation_msg = (
+                    f"Constraint {i} at k={k}: "
+                    f"value={expr_value:.6f} > upper={upper:.6f}"
+                )
+                violations["llm_constraints"].append(violation_msg)
+                violations["by_constraint"][i].append(
+                    {
+                        "k": k,
+                        "value": expr_value,
+                        "upper": upper,
+                        "type": "above_upper",
+                    }
                 )
 
     # Generate summary

@@ -6,8 +6,6 @@ import ast
 import logging
 from typing import Any
 
-import numpy as np
-
 # Use module-level logger
 logger = logging.getLogger("llm_integration.executor.globals")
 
@@ -33,61 +31,6 @@ IDX_U_GRF = slice(12, 24)  # Ground reaction forces (4 legs × 3)
 
 # GRF z-component indices (one per foot: FL, FR, RL, RR)
 IDX_GRF_Z = [14, 17, 20, 23]
-
-
-def _min_jerk_scalar(t: float) -> float:
-    """Min-jerk basis for a scalar t in [0,1]. Returns smooth s in [0,1]."""
-    return 10 * t**3 - 15 * t**4 + 6 * t**5
-
-
-def min_jerk_trajectory(
-    start: float | np.ndarray, end: float | np.ndarray, num_steps: int
-) -> np.ndarray:
-    """
-    Generate a minimum-jerk (5th-order polynomial) smooth interpolation.
-
-    Produces a trajectory from `start` to `end` over `num_steps` points
-    with zero velocity and acceleration at both endpoints.
-
-    Args:
-        start: Starting value (scalar or array)
-        end: Ending value (scalar or array)
-        num_steps: Number of points in the trajectory
-
-    Returns:
-        Array of shape (num_steps,) or (num_steps, dim) with smooth trajectory
-    """
-    t = np.linspace(0, 1, num_steps)
-    # 5th order polynomial: 10t^3 - 15t^4 + 6t^5
-    s = 10 * t**3 - 15 * t**4 + 6 * t**5
-    start_arr = np.asarray(start)
-    end_arr = np.asarray(end)
-    if start_arr.ndim == 0:
-        return np.asarray(start_arr + (end_arr - start_arr) * s)
-    else:
-        return np.asarray(start_arr[None, :] + np.outer(s, end_arr - start_arr))
-
-
-def ballistic_trajectory(
-    z0: float, vz0: float, g: float, dt: float, num_steps: int
-) -> np.ndarray:
-    """
-    Generate a ballistic (projectile) height trajectory under gravity.
-
-    z(t) = z0 + vz0*t - 0.5*g*t^2
-
-    Args:
-        z0: Initial height (m)
-        vz0: Initial vertical velocity (m/s, positive = upward)
-        g: Gravitational acceleration (m/s^2, positive value e.g. 9.81)
-        dt: Time step (s)
-        num_steps: Number of points in the trajectory
-
-    Returns:
-        Array of shape (num_steps,) with height values
-    """
-    t = np.arange(num_steps) * dt
-    return z0 + vz0 * t - 0.5 * g * t**2
 
 
 # Allowed imports for constraint generation
@@ -263,11 +206,6 @@ def create_restricted_globals(
         restricted_globals["eye"] = cs.MX.eye
         restricted_globals["zeros"] = cs.MX.zeros
         restricted_globals["ones"] = cs.MX.ones
-
-        # Helper functions for reference trajectory generation
-        restricted_globals["min_jerk_trajectory"] = min_jerk_trajectory
-        restricted_globals["ballistic_trajectory"] = ballistic_trajectory
-        restricted_globals["_min_jerk_scalar"] = _min_jerk_scalar
 
         # State/input index constants
         restricted_globals["STATES_DIM"] = STATES_DIM

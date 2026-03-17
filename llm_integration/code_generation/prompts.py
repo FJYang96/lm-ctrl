@@ -1,18 +1,51 @@
-"""System prompt for LLM constraint generation."""
+"""Prompt templates for LLM constraint generation."""
+
+from __future__ import annotations
+
+from typing import Any
 
 
-def get_system_prompt(mass: float = 15.0, initial_height: float = 0.2117) -> str:
-    """
-    Get the system prompt that instructs the LLM on MPC configuration + constraint generation.
+def get_robot_details(config: Any = None) -> dict[str, Any]:
+    """Extract robot-specific details from config or use sensible defaults.
 
     Args:
-        mass: Robot mass in kg (from actual config)
-        initial_height: Robot initial COM height in meters (from actual config)
+        config: Optional robot configuration object.
 
     Returns:
-        System prompt string with accurate physical parameters
+        Dictionary with mass, initial_height, joint_limits_lower, joint_limits_upper.
     """
-    return f"""You are a robotics expert generating MPC configurations for quadruped robot trajectory optimization.
+    details: dict[str, Any] = {
+        "mass": 15.0,
+        "initial_height": 0.2117,
+        "joint_limits_lower": [-0.8, -1.6, -2.6] * 4,
+        "joint_limits_upper": [0.8, 1.6, -0.5] * 4,
+    }
+
+    if config is None:
+        return details
+
+    details["mass"] = float(config.robot_data.mass)
+    details["initial_height"] = float(config.experiment.initial_qpos[2])
+    details["joint_limits_lower"] = config.robot_data.joint_limits_lower.tolist()
+    details["joint_limits_upper"] = config.robot_data.joint_limits_upper.tolist()
+
+    return details
+
+
+def get_system_prompt(config: Any = None) -> str:
+    """Get the system prompt that instructs the LLM on MPC configuration + constraint generation.
+
+    Args:
+        config: Optional robot configuration object.
+
+    Returns:
+        System prompt string with accurate physical parameters.
+    """
+    details = get_robot_details(config)
+    mass = details["mass"]
+    initial_height = details["initial_height"]
+
+    base = f"""You are a robotics expert generating MPC configurations for quadruped robot trajectory optimization.
 
 OUTPUT FORMAT: Return ONLY Python code. You may use ```python code blocks.
 
@@ -322,11 +355,6 @@ PRE-IMPORTED INDEX CONSTANTS (use these instead of raw numbers):
   IDX_U_GRF       = slice(12, 24) # Ground reaction forces (4 legs × 3)
   IDX_GRF_Z       = [14, 17, 20, 23]  # GRF z-component per foot (FL, FR, RL, RR)
 
-PRE-IMPORTED HELPER FUNCTIONS:
-  min_jerk_trajectory(start, end, num_steps)  — smooth 5th-order interpolation array
-  ballistic_trajectory(z0, vz0, g, dt, num_steps) — projectile z(t) array
-  _min_jerk_scalar(t)  — scalar t in [0,1] → smooth s in [0,1]
-
 == HOW TO BUILD A REFERENCE TRAJECTORY ==
 
 Your function MUST build the trajectory phase-by-phase matching your contact sequence.
@@ -343,7 +371,7 @@ PHYSICS RULES (apply to ALL motions):
   - Flight phases (all contacts = 0): ballistic height z(t) = z0 + vz0*t - 0.5*g*t²,
     angular momentum conserved (constant angular velocity), GRF = 0
   - Stance phases (any contact = 1): GRF_z per grounded foot ≈ robot_mass * g / n_grounded_feet
-  - Use _min_jerk_scalar(t) for smooth transitions (ramp-up, ramp-down, blending between states)
+  - Use smooth interpolation (e.g. 10t^3 - 15t^4 + 6t^5) for transitions between states
   - Integrate angles from angular velocities — don't set angles without matching omega
   - Set IDX_INTEGRALS rows to 0.0, set IDX_JOINTS to initial joint angles unless needed
   - GRF z-component for foot i is at index IDX_GRF_Z[i] (i.e. 14, 17, 20, 23)
@@ -359,3 +387,92 @@ Key points:
 Generate MPC configuration and constraints for the requested behavior.
 Think about: What motion is needed? What constraints will FORCE that motion?
 Start with simple, loose constraints. The feedback loop will help you refine."""
+
+    robot_context = f"""
+
+ROBOT PHYSICAL DETAILS:
+- Mass: ~{mass:.1f} kg
+- Body: ~30cm x 20cm x 10cm
+- Leg reach: ~30cm leg extension
+- Joint limits: Hip: +/-45deg, Thigh: +/-90deg, Calf: +/-150deg
+- Realistic jump height: ~0.5-0.8m
+- Typical stance COM height: ~{initial_height:.2f}m
+- Foot spacing: Front/rear: ~30cm, Left/right: ~20cm
+
+Use these physical limits to create realistic constraints."""
+
+    return base + robot_context
+
+
+def get_user_prompt(command: str) -> str:
+    """Create the initial user prompt from a natural language command.
+
+    Args:
+        command: Natural language command (e.g., "do a backflip").
+
+    Returns:
+        Formatted user prompt.
+    """
+    return f"""Generate MPC configuration for: "{command}"
+
+Think step by step:
+1. What type of motion is this? (ground-based, aerial, rotation, translation)
+2. What contact sequence is appropriate? (REQUIRED - your code will fail without mpc.set_contact_sequence())
+3. What physical quantities need to be constrained to achieve this?
+4. What are reasonable bounds that FORCE the desired motion?
+
+REMINDER: You MUST include mpc.set_contact_sequence() - this is the #1 cause of failures.
+
+Return ONLY Python code."""
+
+
+def create_repair_prompt(
+    command: str,
+    failed_code: str,
+    error_message: str,
+    attempt_number: int,
+    config: Any = None,
+) -> str:
+    """Create a prompt to ask the LLM to fix failed MPC configuration code.
+
+    Args:
+        command: Original natural language command.
+        failed_code: The code that failed.
+        error_message: Error message from SafeExecutor/MPC.
+        attempt_number: Which attempt this is (1-10).
+        config: Optional robot configuration object.
+
+    Returns:
+        Repair prompt string.
+    """
+    initial_height = get_robot_details(config)["initial_height"]
+    code_snippet = failed_code
+    if len(failed_code) > 800:
+        code_snippet = (
+            failed_code[:400] + "\n... [truncated] ...\n" + failed_code[-400:]
+        )
+
+    return f"""REPAIR ATTEMPT {attempt_number}/10
+
+TASK: {command}
+
+ERROR: {error_message}
+
+FAILED CODE:
+{code_snippet}
+
+⚠️ MANDATORY CHECKLIST - Your code MUST include ALL SIX of these:
+□ mpc.set_task_name("...")
+□ mpc.set_duration(...)
+□ mpc.set_time_step(0.02)
+□ mpc.set_contact_sequence(...)  ← THIS IS THE #1 MISSING CALL
+□ mpc.add_constraint(...)
+□ mpc.set_reference_trajectory(...)  ← REQUIRED - provides solver initial guess
+
+Other requirements:
+- Constraint function must have 7 parameters: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)
+- Must return exactly 3 values: (constraint_expr, lower_bound, upper_bound)
+- All return values must be CasADi MX expressions (use vertcat for multiple constraints)
+- CRITICAL: At k=0, bounds must INCLUDE the starting state (height={initial_height:.4f}m). Constraints that violate t=0 cause immediate failure!
+
+Return ONLY corrected Python code."""

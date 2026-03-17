@@ -291,18 +291,17 @@ class LLMTaskMPC:
             raise ValueError("Contact sequence not set. Configure MPC first.")
 
         # Auto-fix contact_sequence column count to match MPC horizon
-        if hasattr(self.mpc, "horizon"):
-            expected_cols = self.mpc.horizon
-            if self.contact_sequence.shape[1] != expected_cols:
-                old_seq = self.contact_sequence
-                new_seq = np.zeros((4, expected_cols))
-                copy_len = min(old_seq.shape[1], expected_cols)
-                new_seq[:, :copy_len] = old_seq[:, :copy_len]
-                if copy_len < expected_cols:
-                    new_seq[:, copy_len:] = old_seq[:, -1:].repeat(
-                        expected_cols - copy_len, axis=1
-                    )
-                self.contact_sequence = new_seq
+        expected_cols = self.mpc.horizon
+        if self.contact_sequence.shape[1] != expected_cols:
+            old_seq = self.contact_sequence
+            new_seq = np.zeros((4, expected_cols))
+            copy_len = min(old_seq.shape[1], expected_cols)
+            new_seq[:, :copy_len] = old_seq[:, :copy_len]
+            if copy_len < expected_cols:
+                new_seq[:, copy_len:] = old_seq[:, -1:].repeat(
+                    expected_cols - copy_len, axis=1
+                )
+            self.contact_sequence = new_seq
 
         # Reset solver info before solving
         self.solver_iterations = None
@@ -311,47 +310,41 @@ class LLMTaskMPC:
         self.last_hardness_report = None
         self.ref_trajectory_data = None
 
-        # Execute reference trajectory function if set
-        ref_traj_dict = None
-        if self.ref_trajectory_func is not None:
-            try:
-                horizon = self.mpc.horizon
-                mpc_dt = self.mpc_dt
-                robot_mass = self.base_config.robot_data.mass
+        # Execute reference trajectory function (required — validated in configure_from_llm)
+        assert self.ref_trajectory_func is not None
+        horizon = self.mpc.horizon
+        robot_mass = self.base_config.robot_data.mass
 
-                X_ref, U_ref = self.ref_trajectory_func(
-                    initial_state, horizon, self.contact_sequence, mpc_dt, robot_mass
-                )
+        X_ref, U_ref = self.ref_trajectory_func(
+            initial_state, horizon, self.contact_sequence, self.mpc_dt, robot_mass
+        )
 
-                # Validate shapes
-                expected_x_shape = (self.mpc.states_dim, horizon + 1)
-                expected_u_shape = (self.mpc.inputs_dim, horizon)
-                if X_ref.shape != expected_x_shape:
-                    raise ValueError(
-                        f"X_ref shape {X_ref.shape} != expected {expected_x_shape}"
-                    )
-                if U_ref.shape != expected_u_shape:
-                    raise ValueError(
-                        f"U_ref shape {U_ref.shape} != expected {expected_u_shape}"
-                    )
+        # Validate shapes
+        expected_x_shape = (self.mpc.states_dim, horizon + 1)
+        expected_u_shape = (self.mpc.inputs_dim, horizon)
+        if X_ref.shape != expected_x_shape:
+            raise ValueError(
+                f"X_ref shape {X_ref.shape} != expected {expected_x_shape}"
+            )
+        if U_ref.shape != expected_u_shape:
+            raise ValueError(
+                f"U_ref shape {U_ref.shape} != expected {expected_u_shape}"
+            )
 
-                # Check for NaN/Inf
-                if np.any(np.isnan(X_ref)) or np.any(np.isinf(X_ref)):
-                    raise ValueError("X_ref contains NaN or Inf values")
-                if np.any(np.isnan(U_ref)) or np.any(np.isinf(U_ref)):
-                    raise ValueError("U_ref contains NaN or Inf values")
+        # Check for NaN/Inf
+        if np.any(np.isnan(X_ref)) or np.any(np.isinf(X_ref)):
+            raise ValueError("X_ref contains NaN or Inf values")
+        if np.any(np.isnan(U_ref)) or np.any(np.isinf(U_ref)):
+            raise ValueError("U_ref contains NaN or Inf values")
 
-                ref_traj_dict = {"X_ref": X_ref, "U_ref": U_ref}
-                self.ref_trajectory_data = ref_traj_dict
+        ref_traj_dict = {"X_ref": X_ref, "U_ref": U_ref}
+        self.ref_trajectory_data = ref_traj_dict
 
-                logger.info(
-                    f"Reference trajectory generated: "
-                    f"height range [{X_ref[2, :].min():.3f}, {X_ref[2, :].max():.3f}]m, "
-                    f"pitch range [{X_ref[7, :].min():.2f}, {X_ref[7, :].max():.2f}]rad"
-                )
-            except Exception as e:
-                logger.warning(f"Reference trajectory generation failed: {e}")
-                # Fall back to no trajectory reference — solver will use heuristic guess
+        logger.info(
+            f"Reference trajectory generated: "
+            f"height range [{X_ref[2, :].min():.3f}, {X_ref[2, :].max():.3f}]m, "
+            f"pitch range [{X_ref[7, :].min():.2f}, {X_ref[7, :].max():.2f}]rad"
+        )
 
         try:
             result = self.mpc.solve_trajectory(
@@ -361,22 +354,15 @@ class LLMTaskMPC:
                 ref_trajectory=ref_traj_dict,
             )
 
-            # Try to extract solver stats from the MPC/opti instance
-            if hasattr(self.mpc, "opti") and self.mpc.opti is not None:
-                try:
-                    stats = self.mpc.opti.stats()
-                    self.solver_iterations = stats.get("iter_count", None)
-                    if result[3] != 0:  # Non-zero status means failure
-                        self.last_error = stats.get("return_status", "Unknown error")
-                except Exception:
-                    pass  # Stats not available
+            # Extract solver stats
+            stats = self.mpc.opti.stats()
+            self.solver_iterations = stats["iter_count"]
+            if result[3] != 0:  # Non-zero status means failure
+                self.last_error = stats["return_status"]
 
             # Analyze constraint hardness if using slack formulation
             if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
-                try:
-                    self.last_hardness_report = self.mpc.analyze_constraint_hardness()
-                except Exception:
-                    self.last_hardness_report = None
+                self.last_hardness_report = self.mpc.analyze_constraint_hardness()
 
             return result
 
@@ -384,20 +370,14 @@ class LLMTaskMPC:
             self.last_error = str(e)
             # Still try to get hardness report on failure
             if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
-                try:
-                    self.last_hardness_report = self.mpc.analyze_constraint_hardness()
-                except Exception:
-                    self.last_hardness_report = None
+                self.last_hardness_report = self.mpc.analyze_constraint_hardness()
             raise
 
     def get_configuration_summary(self) -> dict[str, Any]:
         """Get a summary of the current LLM configuration."""
-        if self.contact_sequence is not None:
-            horizon = self.contact_sequence.shape[1]
-            contact_phases = self._analyze_contact_phases()
-        else:
-            horizon = 0
-            contact_phases = []
+        assert self.contact_sequence is not None
+        horizon = self.contact_sequence.shape[1]
+        contact_phases = self._analyze_contact_phases()
 
         return {
             "task_name": self.task_name,

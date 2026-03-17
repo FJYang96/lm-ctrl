@@ -25,12 +25,12 @@ _claude_model: str = ""
 
 
 def _get_claude_client() -> anthropic.Anthropic:
-    """Get or create the global Anthropic client for eval calls."""
+    """Get or create the global Anthropic client."""
     global _claude_client, _claude_model
     if _claude_client is None:
         load_dotenv()
         api_key = os.getenv("ANTHROPIC_API_KEY")
-        _claude_model = os.getenv("LLM_EVAL_MODEL", "claude-sonnet-4-5-20250929")
+        _claude_model = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-6")
         if not api_key or api_key == "your_api_key_here":
             raise ValueError("ANTHROPIC_API_KEY not found in environment variables.")
         _claude_client = anthropic.Anthropic(api_key=api_key)
@@ -38,13 +38,14 @@ def _get_claude_client() -> anthropic.Anthropic:
 
 
 def call_llm(system_prompt: str, user_message: str) -> str:
-    """Make a text-only Claude call for scoring/feedback/summary."""
+    """Make a text-only Claude call."""
     client = _get_claude_client()
 
     collected: list[str] = []
     with client.messages.stream(
         model=_claude_model,
-        max_tokens=16384,
+        max_tokens=40000,
+        temperature=0.0,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
     ) as stream:

@@ -267,7 +267,6 @@ def run_pipeline_thread(
             "pipeline_success": results.get("pipeline_success", False),
             "elapsed_time": round(elapsed_time, 1),
             "results_directory": results.get("results_directory", results_dir),
-            "best_iteration": results.get("best_iteration"),
         }
 
         if results.get("pipeline_success"):

@@ -23,9 +23,7 @@ def create_task_config(mpc: "LLMTaskMPC") -> Any:
     # Store original values to restore after MPC build
     mpc._original_duration = task_config.mpc_config.duration
     mpc._original_dt = task_config.mpc_config.mpc_dt
-    mpc._original_contact_sequence = getattr(
-        task_config.mpc_config, "_contact_sequence", None
-    )
+    mpc._original_contact_sequence = task_config.mpc_config._contact_sequence
     # Make a copy of the original constraints list to prevent accumulation
     mpc._original_constraints = list(task_config.mpc_config.path_constraints)
 
@@ -39,16 +37,6 @@ def create_task_config(mpc: "LLMTaskMPC") -> Any:
         list(mpc._original_constraints) + mpc.constraint_functions
     )
 
-    # Ensure path constraint parameters exist (critical for optimization feasibility)
-    if not hasattr(task_config.mpc_config, "path_constraint_params"):
-        task_config.mpc_config.path_constraint_params = {
-            "COMPLEMENTARITY_EPS": 1e-3,
-            "SWING_GRF_EPS": 0.0,
-            "STANCE_HEIGHT_EPS": 0.04,
-            "NO_SLIP_EPS": 0.01,
-            "BODY_CLEARANCE_MIN": 0.02,
-        }
-
     return task_config
 
 
@@ -58,11 +46,7 @@ def restore_base_config(mpc: "LLMTaskMPC") -> None:
     Args:
         mpc: The LLMTaskMPC instance
     """
-    if hasattr(mpc, "_original_constraints"):
-        mpc.base_config.mpc_config.path_constraints = mpc._original_constraints
-    if hasattr(mpc, "_original_duration"):
-        mpc.base_config.mpc_config.duration = mpc._original_duration
-    if hasattr(mpc, "_original_dt"):
-        mpc.base_config.mpc_config.mpc_dt = mpc._original_dt
-    if hasattr(mpc, "_original_contact_sequence"):
-        mpc.base_config.mpc_config._contact_sequence = mpc._original_contact_sequence
+    mpc.base_config.mpc_config.path_constraints = mpc._original_constraints
+    mpc.base_config.mpc_config.duration = mpc._original_duration
+    mpc.base_config.mpc_config.mpc_dt = mpc._original_dt
+    mpc.base_config.mpc_config._contact_sequence = mpc._original_contact_sequence

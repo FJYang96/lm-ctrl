@@ -8,10 +8,8 @@ from .llm_calls import (
     generate_iteration_summary,
     generate_unified_feedback,
 )
-from .video_extraction import create_visual_feedback
 
 __all__ = [
-    "create_visual_feedback",
     "format_hardness_report",
     "evaluate_iteration_unified",
     "generate_iteration_summary",

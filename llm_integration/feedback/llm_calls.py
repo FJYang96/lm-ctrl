@@ -115,11 +115,7 @@ Return a JSON object:
 
 Return ONLY valid JSON, no markdown, no extra text."""
 
-    metrics_text = (
-        format_trajectory_metrics_text(trajectory_analysis, opt_success)
-        if trajectory_analysis
-        else "No trajectory data available"
-    )
+    metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
 
     solver_status = (
         "CONVERGED (success)" if opt_success else "FAILED (did not converge)"
@@ -351,11 +347,7 @@ metrics_summary: Key numbers from trajectory metrics, hardness data, and referen
 
 Return ONLY valid JSON, no extra text."""
 
-    metrics_text = (
-        format_trajectory_metrics_text(trajectory_analysis, opt_success)
-        if trajectory_analysis
-        else "No trajectory data"
-    )
+    metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
 
     sim_text = ""
     if simulation_result:

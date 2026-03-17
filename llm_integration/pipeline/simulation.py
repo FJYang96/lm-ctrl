@@ -94,9 +94,8 @@ def render_failed_trajectory(
             "debug_video_saved": False,
         }
 
-    # Check if we have a debug trajectory
-    state_traj = optimization_result.get("state_trajectory")
-    if state_traj is None or (hasattr(state_traj, "size") and state_traj.size == 0):
+    state_traj = optimization_result["state_trajectory"]
+    if state_traj.size == 0:
         return {
             "success": False,
             "error": "Optimization failed - no debug trajectory available",
@@ -112,10 +111,7 @@ def render_failed_trajectory(
         }
 
     try:
-        # Get whatever trajectory data we have
-        joint_vel_traj = optimization_result.get(
-            "joint_vel_trajectory", np.zeros((max(1, state_traj.shape[0] - 1), 12))
-        )
+        joint_vel_traj = optimization_result["joint_vel_trajectory"]
 
         # Render the debug trajectory (what solver was attempting)
         logger.info("Rendering debug trajectory from failed optimization...")
@@ -135,10 +131,9 @@ def render_failed_trajectory(
             imageio.mimsave(str(video_path), debug_traj_images, fps=fps)
             logger.info(f"Saved debug trajectory video: {video_path}")
 
-        # Extract trajectory metrics for the feedback
-        trajectory_analysis = optimization_result.get("trajectory_analysis", {})
-        pitch_achieved = abs(trajectory_analysis.get("total_pitch_rotation", 0))
-        height_gain = trajectory_analysis.get("height_gain", 0)
+        trajectory_analysis = optimization_result["trajectory_analysis"]
+        pitch_achieved = abs(trajectory_analysis["total_pitch_rotation"])
+        height_gain = trajectory_analysis["height_gain"]
 
         return {
             "success": False,  # Still marked as failed (optimization didn't converge)

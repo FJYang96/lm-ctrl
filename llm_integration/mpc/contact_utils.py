@@ -93,12 +93,9 @@ def classify_contact_pattern(pattern: tuple[float, ...]) -> str:
 
 
 def analyze_contact_phases(
-    contact_sequence: np.ndarray | None, mpc_dt: float
+    contact_sequence: np.ndarray, mpc_dt: float
 ) -> list[dict[str, Any]]:
     """Analyze the contact sequence to identify distinct phases."""
-    if contact_sequence is None:
-        return []
-
     phases = []
     current_pattern = None
     phase_start = 0

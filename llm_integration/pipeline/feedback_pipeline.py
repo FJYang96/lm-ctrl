@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from pathlib import Path
@@ -11,8 +10,11 @@ from typing import Any
 from mpc.dynamics.model import KinoDynamic_Model
 from mpc.mpc_opti import QuadrupedMPCOpti
 
-from ..client import LLMClient
-from ..constraint import ConstraintGenerator
+from ..code_generation.prompts import (
+    get_robot_details,
+    get_system_prompt,
+    get_user_prompt,
+)
 from ..executor import SafeConstraintExecutor
 from ..feedback import (
     format_hardness_report,
@@ -22,19 +24,14 @@ from ..feedback.llm_calls import (
     generate_iteration_summary,
     generate_unified_feedback,
 )
-from ..feedback.motion_quality import compute_motion_quality_report
+from ..feedback.motion_analysis import compute_motion_quality_report
 from ..feedback.reference_feedback import _compute_reference_metrics
 from ..logging_config import logger
 from ..mpc import LLMTaskMPC
 from .constraint_generation import generate_constraints_with_retry
-from .feedback_context import create_feedback_context
 from .optimization import solve_trajectory_optimization
 from .simulation import (
     execute_simulation,
-)
-from .utils import (
-    make_json_safe,
-    save_iteration_results,
 )
 
 try:
@@ -56,14 +53,6 @@ class FeedbackPipeline:
     4. Unified feedback and iteration
     """
 
-    # Assign imported functions as methods
-    _solve_trajectory_optimization = solve_trajectory_optimization
-    _execute_simulation = execute_simulation
-    _create_feedback_context = create_feedback_context
-    _save_iteration_results = save_iteration_results
-    _make_json_safe = make_json_safe
-    _generate_constraints_with_retry = generate_constraints_with_retry
-
     def __init__(self, config_obj: Any = None, use_slack: bool = True):
         """
         Initialize the feedback pipeline.
@@ -76,8 +65,7 @@ class FeedbackPipeline:
         self.use_slack = use_slack
 
         # Initialize components
-        self.llm_client = LLMClient()
-        self.constraint_generator = ConstraintGenerator(config=self.config)
+        self.robot_details = get_robot_details(self.config)
         self.safe_executor = SafeConstraintExecutor()
 
         # Initialize kinodynamic model
@@ -105,7 +93,6 @@ class FeedbackPipeline:
             self.env = None
 
         # Pipeline state
-        self.iteration_results: list[dict[str, Any]] = []
         self.max_iterations = int(os.getenv("MAX_LLM_ITERATIONS", "5"))
         self.results_dir = Path(os.getenv("RESULTS_DIR", "results/llm_iterations"))
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -165,48 +152,27 @@ class FeedbackPipeline:
 
         Works for both successful and failed solves.
         """
-        constraint_violations: dict[str, Any] = {}
-        opt_success = optimization_result.get("success", False)
+        opt_success = optimization_result["success"]
+        assert self.current_task_mpc is not None
+        mpc = self.current_task_mpc.mpc
+        assert mpc is not None
 
-        if not self.current_task_mpc or not self.current_task_mpc.mpc:
-            return constraint_violations
+        # Get system constraint violations
+        constraint_violations = mpc.get_constraint_violations()
 
-        try:
-            # Get system constraint violations
-            constraint_violations = (
-                self.current_task_mpc.mpc.get_constraint_violations()
-            )
+        # Get LLM constraint violations
+        if opt_success:
+            X_val = mpc.opti.value(mpc.X)
+            U_val = mpc.opti.value(mpc.U)
+        else:
+            X_val = mpc.opti.debug.value(mpc.X)
+            U_val = mpc.opti.debug.value(mpc.U)
 
-            # Get LLM constraint violations
-            try:
-                if opt_success:
-                    X_val = self.current_task_mpc.mpc.opti.value(
-                        self.current_task_mpc.mpc.X
-                    )
-                    U_val = self.current_task_mpc.mpc.opti.value(
-                        self.current_task_mpc.mpc.U
-                    )
-                else:
-                    X_val = self.current_task_mpc.mpc.opti.debug.value(
-                        self.current_task_mpc.mpc.X
-                    )
-                    U_val = self.current_task_mpc.mpc.opti.debug.value(
-                        self.current_task_mpc.mpc.U
-                    )
-                llm_violations = self.current_task_mpc.evaluate_constraint_violations(
-                    X_val, U_val
-                )
-                constraint_violations["llm_constraints"] = llm_violations.get(
-                    "llm_constraints", []
-                )
-                constraint_violations["llm_summary"] = llm_violations.get("summary", [])
-            except Exception as llm_e:
-                constraint_violations["llm_constraints"] = [
-                    f"Could not evaluate LLM constraints: {llm_e}"
-                ]
-
-        except Exception as e:
-            constraint_violations = {"summary": [f"Could not analyze violations: {e}"]}
+        llm_violations = self.current_task_mpc.evaluate_constraint_violations(
+            X_val, U_val
+        )
+        constraint_violations["llm_constraints"] = llm_violations["llm_constraints"]
+        constraint_violations["llm_summary"] = llm_violations["summary"]
 
         return constraint_violations
 
@@ -228,37 +194,42 @@ class FeedbackPipeline:
         run_dir.mkdir(exist_ok=True)
 
         # Initialize pipeline state
-        self.iteration_results = []
         self.iteration_summaries = []
         self.current_motion_quality_report = ""
-        context = None
-        best_result = None
-        best_score = -float("inf")
+        feedback_data: dict[str, Any] | None = None
 
         # Reset score tracking
         self.previous_score = -float("inf")
         self.recent_scores = []
 
         # Algorithm 1: Iterative Refinement Pipeline
-        system_prompt = self.constraint_generator.get_system_prompt()
-        initial_user_message = self.constraint_generator.get_user_prompt(command)
+        system_prompt = get_system_prompt(self.config)
+        initial_user_message = get_user_prompt(command)
 
         for iteration in range(1, self.max_iterations + 1):
             logger.info(f"--- Iteration {iteration} ---")
 
             try:
                 # Step 1: Generate constraints via LLM with auto-retry
-                constraint_code, function_name, attempt_log = (
-                    self._generate_constraints_with_retry(
+                (constraint_code, function_name, attempt_log, feedback_context) = (
+                    generate_constraints_with_retry(
+                        self,
                         system_prompt,
                         initial_user_message,
-                        context,
+                        feedback_data,
                         command,
                     )
                 )
 
+                # Save feedback context to disk (describes previous iteration)
+                if feedback_context is not None:
+                    ctx_file = run_dir / f"feedback_iter_{iteration - 1}.txt"
+                    with open(ctx_file, "w") as f:
+                        f.write(feedback_context)
+
                 # Step 2: Solve optimization (no warmstart from previous solution)
-                optimization_result = self._solve_trajectory_optimization(
+                optimization_result = solve_trajectory_optimization(
+                    self,
                     constraint_code,
                     function_name,
                     iteration,
@@ -266,61 +237,53 @@ class FeedbackPipeline:
                 )
 
                 # Step 3: Execute simulation
-                simulation_result = self._execute_simulation(
-                    optimization_result, iteration, run_dir
+                simulation_result = execute_simulation(
+                    self, optimization_result, iteration, run_dir
                 )
 
                 # === Step 5: Extract constraint data (needed by scoring + feedback) ===
-                trajectory_analysis = optimization_result.get("trajectory_analysis", {})
-                opt_success = optimization_result.get("success", False)
-                error_info = optimization_result.get("optimization_metrics", {})
+                trajectory_analysis = optimization_result["trajectory_analysis"]
+                opt_success = optimization_result["success"]
+                error_info = optimization_result["optimization_metrics"]
 
                 constraint_violations = self._extract_constraint_violations(
                     optimization_result
                 )
 
-                hardness_report = optimization_result.get(
-                    "optimization_metrics", {}
-                ).get("hardness_report")
+                hardness_report = optimization_result["optimization_metrics"][
+                    "hardness_report"
+                ]
                 mpc_dt = float(self.config.mpc_config.mpc_dt)
-                current_slack_weights = getattr(self, "current_slack_weights", None)
                 hardness_text = format_hardness_report(
                     hardness_report,
                     dt=mpc_dt,
-                    current_slack_weights=current_slack_weights,
+                    current_slack_weights=self.current_slack_weights,
                 )
 
                 # Compute reference analysis (used by scoring, feedback, and summary)
-                ref_trajectory_data = optimization_result.get("ref_trajectory_data")
-                state_trajectory = optimization_result.get("state_trajectory")
                 ref_analysis = _compute_reference_metrics(
-                    ref_trajectory_data, state_trajectory, mpc_dt
+                    optimization_result["ref_trajectory_data"],
+                    optimization_result["state_trajectory"],
+                    mpc_dt,
                 )
 
                 # Step 5b: Compute motion quality report (pure computation, no LLM)
                 import numpy as np
-
-                contact_seq = None
-                if (
-                    self.current_task_mpc
-                    and self.current_task_mpc.contact_sequence is not None
-                ):
-                    contact_seq = self.current_task_mpc.contact_sequence
 
                 self.current_motion_quality_report = compute_motion_quality_report(
                     state_traj=optimization_result["state_trajectory"],
                     grf_traj=optimization_result["grf_trajectory"],
                     joint_vel_traj=optimization_result["joint_vel_trajectory"],
                     mpc_dt=mpc_dt,
-                    contact_sequence=contact_seq,
+                    contact_sequence=self.current_task_mpc.contact_sequence,  # type: ignore[union-attr]
                     kindyn_model=self.kindyn_model,
                     joint_limits_lower=np.array(
-                        self.constraint_generator.robot_details["joint_limits_lower"]
+                        self.robot_details["joint_limits_lower"]
                     ),
                     joint_limits_upper=np.array(
-                        self.constraint_generator.robot_details["joint_limits_upper"]
+                        self.robot_details["joint_limits_upper"]
                     ),
-                    robot_mass=self.constraint_generator.robot_details["mass"],
+                    robot_mass=self.robot_details["mass"],
                     mu_friction=float(self.config.experiment.mu_ground),
                 )
 
@@ -397,55 +360,28 @@ class FeedbackPipeline:
                     reference_analysis=ref_analysis,
                     constraint_violations=constraint_violations,
                 )
-                # Step 11: Assemble feedback context (before appending summary,
-                # so the current iteration's summary doesn't appear in its own
-                # detailed feedback — it only shows in future iterations' history)
-                feedback_context = self._create_feedback_context(
-                    iteration,
-                    command,
-                    optimization_result,
-                    simulation_result,
-                    constraint_code,
-                    run_dir,
-                    pivot_signal=pivot_signal,
-                    feedback=unified_fb,
-                    score=score,
-                    motion_quality_report=self.current_motion_quality_report,
-                )
-                self.iteration_summaries.append(iter_summary)
-
-                # Step 13: Track best result
-                is_new_best = score > best_score
-                if is_new_best:
-                    best_score = score
-
-                # Step 14: Save iteration results
-                iteration_result = {
+                # Step 11: Collect feedback data for next iteration
+                # (snapshot iteration_summaries BEFORE appending current summary,
+                # so current iteration's summary only shows in future history)
+                feedback_data = {
                     "iteration": iteration,
                     "command": command,
+                    "optimization_result": optimization_result,
+                    "simulation_result": simulation_result,
                     "constraint_code": constraint_code,
-                    "function_name": function_name,
-                    "attempt_log": attempt_log,
-                    "optimization": optimization_result,
-                    "simulation": simulation_result,
-                    "feedback_context": feedback_context,
-                    "llm_evaluation": llm_eval,
-                    "summary": summary,
+                    "run_dir": run_dir,
+                    "iteration_summaries": list(self.iteration_summaries),
+                    "mpc_dt": float(self.config.mpc_config.mpc_dt),
+                    "current_slack_weights": self.current_slack_weights,
                     "pivot_signal": pivot_signal,
-                    "timestamp": time.time(),
+                    "feedback": unified_fb,
+                    "score": score,
+                    "motion_quality_report": self.current_motion_quality_report,
                 }
+                self.iteration_summaries.append(iter_summary)
 
-                self.iteration_results.append(iteration_result)
-
-                if is_new_best:
-                    best_result = iteration_result
-
-                self._save_iteration_results(iteration_result, run_dir)
-
-                # Step 15: Set context for next iteration
+                # Update score tracking
                 self.previous_score = score
-                if iteration < self.max_iterations:
-                    context = feedback_context
 
                 # Step 16: Early stop if score > 0.95
                 if score > 0.95:
@@ -455,99 +391,55 @@ class FeedbackPipeline:
             except Exception as e:
                 logger.error(f"Iteration {iteration} error: {e}")
 
-                # Generate LLM-driven summary for failed iteration
-                code = constraint_code if "constraint_code" in locals() else ""
-                try:
-                    error_summary = generate_iteration_summary(
-                        command=command,
-                        iteration=iteration,
-                        score=0.0,
-                        constraint_code=code,
-                        feedback="",
-                        trajectory_analysis={},
-                        opt_success=False,
-                        simulation_result={
-                            "success": False,
-                            "error": str(e),
-                        },
-                        hardness_text="",
-                        reference_analysis="",
-                    )
-                except Exception as summary_err:
-                    logger.error(f"Error summary generation failed: {summary_err}")
-                    error_summary = {
-                        "iteration": iteration,
-                        "score": 0.0,
-                        "success": False,
-                        "approach": "Summary generation failed",
-                        "feedback_summary": "",
-                        "simulation_summary": "",
-                        "metrics_summary": str(e),
-                    }
+                error_summary = {
+                    "iteration": iteration,
+                    "score": 0.0,
+                    "success": False,
+                    "approach": f"Iteration failed: {e}",
+                    "feedback_summary": "",
+                    "simulation_summary": "",
+                    "metrics_summary": str(e),
+                }
                 self.iteration_summaries.append(error_summary)
-                summary = error_summary.get("simulation_summary", str(e))
                 self.recent_scores.append(0.0)
 
-                # Build error-path feedback context so the next iteration
+                # Build error-path feedback data so the next iteration
                 # sees this failure in the iteration history.
-                error_opt_result = {
-                    "success": False,
-                    "trajectory_analysis": {},
-                    "optimization_metrics": {},
-                }
-                error_sim_result = {
-                    "success": False,
-                    "error": str(e),
-                }
+                code = constraint_code if "constraint_code" in locals() else ""
                 pivot_signal = self._compute_pivot_signal(iteration)
-                try:
-                    context = self._create_feedback_context(
-                        iteration,
-                        command,
-                        error_opt_result,
-                        error_sim_result,
-                        code,
-                        run_dir,
-                        pivot_signal=pivot_signal,
-                        feedback="",
-                        score=0.0,
-                    )
-                except Exception:
-                    pass  # keep previous context if this also fails
-
-                error_result = {
+                feedback_data = {
                     "iteration": iteration,
                     "command": command,
-                    "error": str(e),
-                    "summary": summary,
-                    "constraint_code": constraint_code
-                    if "constraint_code" in locals()
-                    else None,
-                    "function_name": function_name
-                    if "function_name" in locals()
-                    else None,
-                    "attempt_log": attempt_log if "attempt_log" in locals() else [],
-                    "timestamp": time.time(),
+                    "optimization_result": {
+                        "success": False,
+                        "trajectory_analysis": {},
+                        "optimization_metrics": {},
+                    },
+                    "simulation_result": {
+                        "success": False,
+                        "error": str(e),
+                    },
+                    "constraint_code": code,
+                    "run_dir": run_dir,
+                    "iteration_summaries": list(self.iteration_summaries),
+                    "mpc_dt": float(self.config.mpc_config.mpc_dt),
+                    "current_slack_weights": self.current_slack_weights,
+                    "pivot_signal": pivot_signal,
+                    "feedback": "",
+                    "score": 0.0,
                 }
-                self.iteration_results.append(error_result)
+
                 continue
 
         # Compile final results
+        best_score = max(self.recent_scores) if self.recent_scores else 0.0
         final_results = {
             "command": command,
-            "total_iterations": len(self.iteration_results),
-            "best_iteration": best_result,
+            "total_iterations": len(self.recent_scores),
             "best_score": best_score,
-            "all_iterations": self.iteration_results,
             "results_directory": str(run_dir),
             "pipeline_success": best_score > 0.5,
         }
-
-        # Save final summary
-        with open(run_dir / "pipeline_summary.json", "w") as f:
-            # Convert numpy arrays to lists for JSON serialization
-            json_safe_results = self._make_json_safe(final_results)
-            json.dump(json_safe_results, f, indent=2)
 
         logger.info(f"Pipeline complete: best_score={best_score:.2f}")
 
