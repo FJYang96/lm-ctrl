@@ -16,6 +16,7 @@ import json
 from typing import Any
 
 from ..logging_config import logger
+from .format_hardness import format_hardness_report
 from .format_metrics import format_trajectory_metrics_text
 from .llm_evaluation import (
     call_llm,
@@ -58,11 +59,17 @@ def evaluate_iteration_unified(
     opt_success: bool,
     error_info: dict[str, Any] | None = None,
     motion_quality_report: str = "",
-    hardness_text: str = "",
+    hardness_report: dict[str, Any] | None = None,
+    mpc_dt: float = 0.02,
+    current_slack_weights: dict[str, float] | None = None,
     constraint_violations: dict[str, Any] | None = None,
     reference_analysis: str = "",
 ) -> dict[str, Any]:
     """Score a trajectory. Returns dict with: score, criteria, warnings, summary."""
+
+    hardness_text = format_hardness_report(
+        hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
+    )
 
     system_prompt = f"""You are an expert robotics engineer scoring a quadruped robot trajectory. Your job is ONLY to score — do not suggest fixes.
 
@@ -182,12 +189,14 @@ def generate_unified_feedback(
     command: str,
     constraint_code: str,
     motion_quality_report: str,
-    hardness_report: str,
+    hardness_report: dict[str, Any] | None,
     constraint_violations: dict[str, Any],
     trajectory_analysis: dict[str, Any],
     opt_success: bool,
     error_info: dict[str, Any] | None,
     pivot_signal: str | None,
+    mpc_dt: float = 0.02,
+    current_slack_weights: dict[str, float] | None = None,
     reference_analysis: str = "",
 ) -> str:
     """Generate unified constraint + reference feedback via a single LLM call.
@@ -255,6 +264,10 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
             "based on the trajectory results."
         )
 
+    hardness_text = format_hardness_report(
+        hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
+    )
+
     metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
     solver_status = "converged" if opt_success else "failed"
 
@@ -274,7 +287,7 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
 {format_violations(constraint_violations)}
 </violations>
 <hardness>
-{hardness_report if hardness_report else "Not available"}
+{hardness_text if hardness_text else "Not available"}
 </hardness>
 <reference_analysis>
 {reference_analysis if reference_analysis else "Not available"}
@@ -305,7 +318,9 @@ def generate_iteration_summary(
     opt_success: bool,
     error_info: dict[str, Any] | None = None,
     simulation_result: dict[str, Any] | None = None,
-    hardness_text: str = "",
+    hardness_report: dict[str, Any] | None = None,
+    mpc_dt: float = 0.02,
+    current_slack_weights: dict[str, float] | None = None,
     reference_analysis: str = "",
     constraint_violations: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -313,6 +328,10 @@ def generate_iteration_summary(
 
     Returns a structured dict with multi-line fields (prose paragraphs).
     """
+    hardness_text = format_hardness_report(
+        hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
+    )
+
     system_prompt = f"""You are summarizing a trajectory optimization iteration for a history log. A code-generation LLM will read this summary to understand what was tried, what happened, and what to do differently next time. Be DETAILED and SPECIFIC — vague summaries are useless.
 
 == DATA YOU RECEIVE ==

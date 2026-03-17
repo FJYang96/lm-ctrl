@@ -16,9 +16,6 @@ from ..code_generation.prompts import (
     get_user_prompt,
 )
 from ..executor import SafeConstraintExecutor
-from ..feedback import (
-    format_hardness_report,
-)
 from ..feedback.llm_calls import (
     evaluate_iteration_unified,
     generate_iteration_summary,
@@ -254,11 +251,6 @@ class FeedbackPipeline:
                     "hardness_report"
                 ]
                 mpc_dt = float(self.config.mpc_config.mpc_dt)
-                hardness_text = format_hardness_report(
-                    hardness_report,
-                    dt=mpc_dt,
-                    current_slack_weights=self.current_slack_weights,
-                )
 
                 # Compute reference analysis (used by scoring, feedback, and summary)
                 ref_analysis = _compute_reference_metrics(
@@ -295,7 +287,9 @@ class FeedbackPipeline:
                     opt_success=opt_success,
                     error_info=error_info if not opt_success else None,
                     motion_quality_report=self.current_motion_quality_report,
-                    hardness_text=hardness_text,
+                    hardness_report=hardness_report,
+                    mpc_dt=mpc_dt,
+                    current_slack_weights=self.current_slack_weights,
                     constraint_violations=constraint_violations,
                     reference_analysis=ref_analysis,
                 )
@@ -334,7 +328,9 @@ class FeedbackPipeline:
                     command=command,
                     constraint_code=constraint_code,
                     motion_quality_report=self.current_motion_quality_report,
-                    hardness_report=hardness_text,
+                    hardness_report=hardness_report,
+                    mpc_dt=mpc_dt,
+                    current_slack_weights=self.current_slack_weights,
                     constraint_violations=constraint_violations,
                     trajectory_analysis=trajectory_analysis,
                     opt_success=opt_success,
@@ -356,7 +352,9 @@ class FeedbackPipeline:
                     opt_success=opt_success,
                     error_info=error_info if not opt_success else None,
                     simulation_result=simulation_result,
-                    hardness_text=hardness_text,
+                    hardness_report=hardness_report,
+                    mpc_dt=mpc_dt,
+                    current_slack_weights=self.current_slack_weights,
                     reference_analysis=ref_analysis,
                     constraint_violations=constraint_violations,
                 )
