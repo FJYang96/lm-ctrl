@@ -1,7 +1,7 @@
-"""LLM client and shared helpers for evaluation calls.
+"""LLM clients and shared helpers for evaluation calls.
 
 Provides:
-- call_llm(): Lazily-initialized Anthropic client for making LLM calls
+- call_llm(): Claude-based text evaluation for scoring/feedback/summary
 - format_violations(), format_error_info(): Shared formatting helpers
 - extract_json_from_response(): JSON extraction from LLM responses
 """
@@ -11,70 +11,47 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from anthropic import Anthropic
+import anthropic
 from dotenv import load_dotenv
 
 from .format_metrics import format_trajectory_metrics_text  # noqa: F401 (re-export)
 
 # ---------------------------------------------------------------------------
-# Shared LLM client (lazily initialized, no class)
+# Claude client (scoring, feedback, summary)
 # ---------------------------------------------------------------------------
 
-_client: Anthropic | None = None
-_model: str = ""
-_max_tokens: int = 40000
+_claude_client: anthropic.Anthropic | None = None
+_claude_model: str = ""
 
 
-def _get_client() -> Anthropic:
-    """Get or create the global Anthropic client."""
-    global _client, _model
-    if _client is None:
+def _get_claude_client() -> anthropic.Anthropic:
+    """Get or create the global Anthropic client for eval calls."""
+    global _claude_client, _claude_model
+    if _claude_client is None:
         load_dotenv()
         api_key = os.getenv("ANTHROPIC_API_KEY")
-        _model = os.getenv("LLM_EVAL_MODEL", "claude-opus-4-5-20251101")
+        _claude_model = os.getenv("LLM_EVAL_MODEL", "claude-sonnet-4-5-20250929")
         if not api_key or api_key == "your_api_key_here":
             raise ValueError("ANTHROPIC_API_KEY not found in environment variables.")
-        _client = Anthropic(api_key=api_key)
-    return _client
+        _claude_client = anthropic.Anthropic(api_key=api_key)
+    return _claude_client
 
 
-def call_llm(
-    system_prompt: str,
-    user_message: str,
-    images: list[str] | None = None,
-) -> str:
-    """Make an LLM call with optional images."""
-    client = _get_client()
-    content: list[dict[str, Any]] = []
+def call_llm(system_prompt: str, user_message: str) -> str:
+    """Make a text-only Claude call for scoring/feedback/summary."""
+    client = _get_claude_client()
 
-    if images:
-        content.append({"type": "text", "text": "TRAJECTORY FRAMES:"})
-        for img_base64 in images:
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/png",
-                        "data": img_base64,
-                    },
-                }
-            )
-
-    content.append({"type": "text", "text": user_message})
-
-    response_text = ""
+    collected: list[str] = []
     with client.messages.stream(
-        model=_model,
-        max_tokens=_max_tokens,
-        temperature=0.0,
+        model=_claude_model,
+        max_tokens=16384,
         system=system_prompt,
-        messages=[{"role": "user", "content": content}],
+        messages=[{"role": "user", "content": user_message}],
     ) as stream:
         for text in stream.text_stream:
-            response_text += text
+            collected.append(text)
 
-    return response_text
+    return "".join(collected)
 
 
 # ---------------------------------------------------------------------------

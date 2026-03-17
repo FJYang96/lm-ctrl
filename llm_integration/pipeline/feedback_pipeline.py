@@ -15,7 +15,6 @@ from ..client import LLMClient
 from ..constraint import ConstraintGenerator
 from ..executor import SafeConstraintExecutor
 from ..feedback import (
-    create_visual_feedback,
     format_hardness_report,
 )
 from ..feedback.llm_calls import (
@@ -23,6 +22,7 @@ from ..feedback.llm_calls import (
     generate_iteration_summary,
     generate_unified_feedback,
 )
+from ..feedback.motion_quality import compute_motion_quality_report
 from ..feedback.reference_feedback import _compute_reference_metrics
 from ..logging_config import logger
 from ..mpc import LLMTaskMPC
@@ -111,7 +111,7 @@ class FeedbackPipeline:
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
         # Enhanced feedback tracking
-        self.current_images: list[str] = []
+        self.current_motion_quality_report: str = ""
 
         # LLM-based iteration history (structured summaries)
         self.iteration_summaries: list[dict[str, Any]] = []
@@ -230,7 +230,7 @@ class FeedbackPipeline:
         # Initialize pipeline state
         self.iteration_results = []
         self.iteration_summaries = []
-        self.current_images = []
+        self.current_motion_quality_report = ""
         context = None
         best_result = None
         best_score = -float("inf")
@@ -254,7 +254,6 @@ class FeedbackPipeline:
                         initial_user_message,
                         context,
                         command,
-                        images=self.current_images,
                     )
                 )
 
@@ -270,9 +269,6 @@ class FeedbackPipeline:
                 simulation_result = self._execute_simulation(
                     optimization_result, iteration, run_dir
                 )
-
-                # Step 4: Extract video frames
-                self.current_images = create_visual_feedback(run_dir, iteration)
 
                 # === Step 5: Extract constraint data (needed by scoring + feedback) ===
                 trajectory_analysis = optimization_result.get("trajectory_analysis", {})
@@ -301,6 +297,33 @@ class FeedbackPipeline:
                     ref_trajectory_data, state_trajectory, mpc_dt
                 )
 
+                # Step 5b: Compute motion quality report (pure computation, no LLM)
+                import numpy as np
+
+                contact_seq = None
+                if (
+                    self.current_task_mpc
+                    and self.current_task_mpc.contact_sequence is not None
+                ):
+                    contact_seq = self.current_task_mpc.contact_sequence
+
+                self.current_motion_quality_report = compute_motion_quality_report(
+                    state_traj=optimization_result["state_trajectory"],
+                    grf_traj=optimization_result["grf_trajectory"],
+                    joint_vel_traj=optimization_result["joint_vel_trajectory"],
+                    mpc_dt=mpc_dt,
+                    contact_sequence=contact_seq,
+                    kindyn_model=self.kindyn_model,
+                    joint_limits_lower=np.array(
+                        self.constraint_generator.robot_details["joint_limits_lower"]
+                    ),
+                    joint_limits_upper=np.array(
+                        self.constraint_generator.robot_details["joint_limits_upper"]
+                    ),
+                    robot_mass=self.constraint_generator.robot_details["mass"],
+                    mu_friction=float(self.config.experiment.mu_ground),
+                )
+
                 # === Step 6: Unified scoring ===
                 llm_eval = evaluate_iteration_unified(
                     command=command,
@@ -308,7 +331,7 @@ class FeedbackPipeline:
                     constraint_code=constraint_code,
                     opt_success=opt_success,
                     error_info=error_info if not opt_success else None,
-                    images=self.current_images,
+                    motion_quality_report=self.current_motion_quality_report,
                     hardness_text=hardness_text,
                     constraint_violations=constraint_violations,
                     reference_analysis=ref_analysis,
@@ -343,11 +366,11 @@ class FeedbackPipeline:
                     f"pivot_signal={pivot_signal}"
                 )
 
-                # Step 9: Unified feedback (single LLM call — receives images directly)
+                # Step 9: Unified feedback (single Claude call — receives motion quality report)
                 unified_fb = generate_unified_feedback(
                     command=command,
                     constraint_code=constraint_code,
-                    images=self.current_images,
+                    motion_quality_report=self.current_motion_quality_report,
                     hardness_report=hardness_text,
                     constraint_violations=constraint_violations,
                     trajectory_analysis=trajectory_analysis,
@@ -387,6 +410,7 @@ class FeedbackPipeline:
                     pivot_signal=pivot_signal,
                     feedback=unified_fb,
                     score=score,
+                    motion_quality_report=self.current_motion_quality_report,
                 )
                 self.iteration_summaries.append(iter_summary)
 

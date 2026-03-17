@@ -23,11 +23,12 @@ def create_feedback_context(
     pivot_signal: str | None = None,
     feedback: str = "",
     score: float = 0.0,
+    motion_quality_report: str = "",
 ) -> str:
     """Create unified feedback context for the next LLM iteration.
 
     Single path for both success and failure — no branching.
-    Uses 3 big === sections: METRICS, ENTIRE CODE, ENTIRE FEEDBACK.
+    Uses 4 big === sections: METRICS, MOTION QUALITY, ENTIRE CODE, ENTIRE FEEDBACK.
     """
     opt_success = optimization_result.get("success", False)
     trajectory_analysis = optimization_result.get("trajectory_analysis", {})
@@ -193,6 +194,18 @@ def create_feedback_context(
     lines.append(ref_analysis)
 
     # ============================================================
+    # MOTION QUALITY ANALYSIS
+    # ============================================================
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("        MOTION QUALITY ANALYSIS FOR THIS ITERATION")
+    lines.append("=" * 60)
+    if motion_quality_report:
+        lines.append(motion_quality_report)
+    else:
+        lines.append("No motion quality report available.")
+
+    # ============================================================
     # ENTIRE CODE
     # ============================================================
     lines.append("")
@@ -211,12 +224,21 @@ def create_feedback_context(
     if feedback:
         lines.append(feedback)
     else:
-        lines.append("No feedback available.")
+        lines.append(
+            "No feedback available. Analyze the raw metrics, hardness data, "
+            "and reference analysis above to diagnose issues yourself."
+        )
 
     # === Footer ===
     lines.append("")
     lines.append("=" * 60)
     lines.append("Generate improved constraints and reference trajectory.")
+    lines.append(
+        "Use ALL of the above — iteration history, previous summaries, current feedback, "
+        "raw metrics, hardness data, violations, and reference analysis — as POWERFUL/IMPORTANT/GUIDING guidance. "
+        "However, feel free to use your own independent decisions about what to change and why. "
+        "If any of these are unavailable, use the rest to diagnose issues yourself."
+    )
     lines.append("Return ONLY Python code.")
     lines.append("=" * 60)
 

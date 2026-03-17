@@ -1,12 +1,13 @@
-"""Three LLM calls per iteration (in pipeline execution order):
+"""Three Claude LLM calls per iteration (in pipeline execution order):
 
-1. Scoring — scores the trajectory (receives images)
-2. Feedback — actionable feedback on constraints + reference (receives images)
-3. Summary — summarizes the iteration for history (receives feedback text + simulation result, no images)
+1. Scoring — scores the trajectory (receives motion quality report)
+2. Feedback — actionable feedback on constraints + reference (receives motion quality report)
+3. Summary — summarizes the iteration for history (receives feedback text + simulation result)
 
 All three share the same metrics data. Summary additionally receives
 the feedback output and simulation result from earlier pipeline steps.
-All share the same client and helpers from llm_evaluation.py.
+All share the same Claude client and helpers from llm_evaluation.py.
+Motion quality is computed from trajectory data BEFORE these calls — the report is passed in.
 """
 
 from __future__ import annotations
@@ -36,8 +37,13 @@ _DATA_DESCRIPTION = """- TASK COMMAND: The user's task description specifying wh
 - CONSTRAINT CODE: The full constraint and reference trajectory code that produced this result.
 - SOLVER STATUS: Whether the optimizer converged or failed. Includes error details if failed."""
 
-# Prepended by scoring and feedback (which receive images)
-_FRAMES_LINE = "- TRAJECTORY FRAMES: Images of the actual robot trajectory — judge what ACTUALLY happened (pose, rotation, height, landing)."
+# Prepended by scoring and feedback (which receive the motion quality report)
+_MOTION_QUALITY_LINE = """- MOTION QUALITY REPORT: Computed metrics analyzing the physical quality of the trajectory — \
+smoothness (jerk), ground penetration, GRF-contact consistency, friction cone compliance, \
+angular momentum conservation, energy continuity, terminal stability, contact quality, and \
+joint feasibility. Each section is rated OK/WARNING/CRITICAL. This is your primary source \
+for motion quality assessment — it is computed directly from the trajectory data, not from \
+visual inspection."""
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +57,7 @@ def evaluate_iteration_unified(
     constraint_code: str,
     opt_success: bool,
     error_info: dict[str, Any] | None = None,
-    images: list[str] | None = None,
+    motion_quality_report: str = "",
     hardness_text: str = "",
     constraint_violations: dict[str, Any] | None = None,
     reference_analysis: str = "",
@@ -60,35 +66,37 @@ def evaluate_iteration_unified(
 
     system_prompt = f"""You are an expert robotics engineer scoring a quadruped robot trajectory. Your job is ONLY to score — do not suggest fixes.
 
-Read the task command to understand what was asked. Look at the trajectory frames, metrics, and solver status to determine what actually happened. Score how well the result matches the goal.
+Read the task command to understand what was asked. Use ALL available data — the motion quality report, metrics, hardness data, violations, reference analysis, constraint code, and solver status — to determine what actually happened. Do not rely on any single source; cross-reference the motion quality report with the numerical metrics to build a complete picture. Score how well the result matches the goal.
 
 == DATA YOU RECEIVE ==
 
-{_FRAMES_LINE}
+{_MOTION_QUALITY_LINE}
 {_DATA_DESCRIPTION}
 
 == SCORING CRITERIA ==
 
-The score must reflect BOTH task completion AND motion quality. These are equally important — a trajectory that hits the target numbers but looks broken is NOT a good trajectory.
+The score must reflect BOTH task completion AND motion quality. These are equally important — a trajectory that hits the target numbers but is physically implausible is NOT a good trajectory.
 
 TASK COMPLETION (does the trajectory achieve what was commanded?):
 - The score should be roughly proportional to how close the trajectory gets to the commanded goal.
 - Lower if the motion quality is poor.
 - Partial completion should be scored proportionally, not rounded up to a "good enough" baseline.
 
-MOTION QUALITY (does it look like a real robot?):
-- Landing: Legs must be underneath the body in a natural stance. Penalize HEAVILY: legs splayed outward, asymmetric leg positions, legs locked straight, robot landing on its side or belly, collapsed posture, bouncing or sliding after landing.
-- Mid-flight: Limbs should move smoothly and symmetrically. Penalize: limbs flailing, sudden joint snapping, unnatural joint angles (hyperextension, impossible configurations), limbs clipping through the body.
-- Overall: Motion should be continuous and smooth. Penalize: jerky transitions between phases, frozen/locked poses, ground penetration, physics-exploit trajectories that look nothing like real robot motion.
+MOTION QUALITY (is the trajectory physically plausible?):
+- Check the motion quality report for CRITICAL or WARNING sections. CRITICAL issues in ground penetration, friction cone, or terminal stability indicate severe physical implausibility.
+- Smoothness: high jerk values indicate discontinuous, non-smooth motion.
+- GRF-contact consistency: phantom forces or missing forces indicate the optimizer is exploiting physics.
+- Joint quality: joints near limits or torque infeasibility indicate an unrealizable trajectory.
+- Manipulability: near-singularity configurations mean the robot cannot control its feet.
 
 SCORING GUIDE:
-- 0.9-1.0: Task fully achieved with natural, smooth motion and stable landing
-- 0.7-0.9: Task mostly achieved with minor visual issues
-- 0.5-0.7: Task partially achieved OR achieved but with significant visual problems (bad landing, weird legs)
+- 0.9-1.0: Task fully achieved with physically plausible, smooth motion and stable landing
+- 0.7-0.9: Task mostly achieved with minor quality issues
+- 0.5-0.7: Task partially achieved OR achieved but with significant quality problems
 - 0.3-0.5: Major shortfall in task completion or severely broken motion
 - 0.0-0.3: Task barely attempted or catastrophic failure
 
-If the solver FAILED, cap the score at 0.40 maximum. If the solver CONVERGED but the landing is visually broken (splayed legs, collapsed posture, robot on its side), cap the score at 0.30 maximum regardless of how close the numbers are to the target.
+If the solver FAILED, cap the score at 0.40 maximum. If the solver CONVERGED but the motion quality report shows CRITICAL issues (ground penetration, friction violations, terminal instability), cap the score at 0.30 maximum regardless of how close the numbers are to the target.
 
 Return a JSON object:
 {{
@@ -118,6 +126,9 @@ Return ONLY valid JSON, no markdown, no extra text."""
     )
 
     user_message = f"""<task>{command}</task>
+<motion_quality>
+{motion_quality_report if motion_quality_report else "No motion quality report available."}
+</motion_quality>
 <solver status="{solver_status}">{format_error_info(error_info)}</solver>
 <metrics>
 {metrics_text}
@@ -138,7 +149,7 @@ Return ONLY valid JSON, no markdown, no extra text."""
 Evaluate how well this trajectory achieves the commanded task."""
 
     try:
-        response = call_llm(system_prompt, user_message, images)
+        response = call_llm(system_prompt, user_message)
         json_text = extract_json_from_response(response)
         result: dict[str, Any] = json.loads(json_text)
         # Cap failed iteration scores at 0.4
@@ -174,7 +185,7 @@ def _default_evaluation() -> dict[str, Any]:
 def generate_unified_feedback(
     command: str,
     constraint_code: str,
-    images: list[str] | None,
+    motion_quality_report: str,
     hardness_report: str,
     constraint_violations: dict[str, Any],
     trajectory_analysis: dict[str, Any],
@@ -214,17 +225,19 @@ The reference must be physically plausible or the solver starts from an unrealis
 
 == DATA YOU RECEIVE ==
 
-{_FRAMES_LINE}
+{_MOTION_QUALITY_LINE}
 {_DATA_DESCRIPTION}
 - MODE: Whether this is the first iteration, an incremental tweak, or a mandatory pivot (fundamentally different approach). Guides how aggressive your suggestions should be.
 
-SOLVER FAILURE: If the solver status is "failed", this is the most critical issue. The trajectory frames show a debug trajectory — the solver's best attempt before giving up, NOT a valid solution. Focus on WHY the solver failed and how to make the problem feasible: loosen bounds, fix phase timing, fix reference trajectory. A failed solver means the feasible region is too small or the initial guess is too far from it.
+Use ALL available data — the motion quality report, metrics, hardness data, violations, reference analysis, constraint code, and solver status — to form your feedback. Do not rely on any single source; cross-reference the motion quality report with the numerical metrics to identify root causes accurately.
+
+SOLVER FAILURE: If the solver status is "failed", this is the most critical issue. The motion quality report describes the debug trajectory — the solver's best attempt before giving up, NOT a valid solution. The metrics may look completely wrong or unrelated to the goal. Focus on WHY the solver failed and how to make the problem feasible: loosen bounds, fix phase timing, fix reference trajectory. A failed solver means the feasible region is too small or the initial guess is too far from it.
 
 == OUTPUT REQUIREMENTS ==
 
 Your output must be ACTIONABLE FEEDBACK, not a summary. For every problem you identify, state what specific code is causing it, what concrete change to make (exact bound values, timing, parameters), and why that change will fix the problem.
 
-Write detailed prose paragraphs. No markdown headers, no bullet lists, no asterisks, no code blocks. Start with a short paragraph on what the frames show vs what the task requires. Then give focused paragraphs on the highest-impact constraint and reference fixes, always explaining how they interact. End with a final paragraph of numbered priority actions (most impactful first), each stating the exact change to make."""
+Write detailed prose paragraphs. No markdown headers, no bullet lists, no asterisks, no code blocks. Start by describing what the motion quality report shows vs what the task requires — highlight any CRITICAL or WARNING sections and what they imply about the trajectory's physical plausibility. Then give focused paragraphs on the highest-impact constraint and reference fixes, always explaining how they interact. End with a final paragraph of numbered priority actions (most impactful first), each stating the exact change to make."""
 
     mode_text = ""
     if pivot_signal == "pivot":
@@ -250,6 +263,9 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
     solver_status = "converged" if opt_success else "failed"
 
     user_message = f"""<task>{command}</task>
+<motion_quality>
+{motion_quality_report if motion_quality_report else "No motion quality report available."}
+</motion_quality>
 <mode>{mode_text}</mode>
 <solver status="{solver_status}">{format_error_info(error_info)}</solver>
 <constraint_code>
@@ -268,10 +284,10 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
 {reference_analysis if reference_analysis else "Not available"}
 </reference_analysis>
 
-Provide unified feedback on both constraint design and reference trajectory. Start by describing what you observe in the trajectory frames."""
+Provide unified feedback on both constraint design and reference trajectory. Start by describing what the motion quality report shows."""
 
     try:
-        response = call_llm(system_prompt, user_message, images)
+        response = call_llm(system_prompt, user_message)
         return response.strip()
     except Exception as e:
         logger.error(f"Unified feedback generation failed: {e}")
@@ -310,6 +326,8 @@ def generate_iteration_summary(
 - SCORE: The LLM-assigned score (0.0-1.0) for how well the trajectory matches the task goal. This is set automatically — do not include it in your output.
 - SIMULATION RESULT: Whether MuJoCo rendering succeeded or failed, and what the robot actually did.
 - FEEDBACK: The full unified feedback output from this iteration — actionable analysis covering constraint design, reference trajectory issues, and prioritized fixes. Summarize its key points, do not repeat it verbatim.
+
+Use ALL available data — metrics, hardness data, violations, reference analysis, constraint code, solver status, simulation result, and feedback — to build a comprehensive summary. Cross-reference multiple sources to ensure accuracy.
 
 Return a JSON object with ONLY these 4 string fields:
 {{
@@ -373,7 +391,7 @@ Return ONLY valid JSON, no extra text."""
 </feedback>"""
 
     try:
-        response = call_llm(system_prompt, user_message, None)
+        response = call_llm(system_prompt, user_message)
         json_text = extract_json_from_response(response)
         result: dict[str, Any] = json.loads(json_text)
         # Force ground-truth fields — LLM must not override these
