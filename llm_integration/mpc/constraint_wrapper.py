@@ -50,6 +50,13 @@ def wrap_constraint_for_contact_phases(
     return contact_aware_constraint
 
 
+def _to_float_array(val: Any) -> np.ndarray:
+    """Convert a scalar, CasADi DM, or numpy value to a flat float array."""
+    if hasattr(val, "full"):
+        return np.asarray(val.full(), dtype=float).flatten()
+    return np.atleast_1d(np.asarray(val, dtype=float)).flatten()
+
+
 def evaluate_constraint_violations(
     constraint_functions: list[Any],
     contact_sequence: np.ndarray,
@@ -109,47 +116,50 @@ def evaluate_constraint_violations(
                 horizon,
             )
 
-            # Convert CasADi types to float
-            if hasattr(expr_value, "full"):
-                expr_value = float(expr_value.full().flatten()[0])
-            elif hasattr(expr_value, "__float__"):
-                expr_value = float(expr_value)
+            # Convert to numpy arrays to handle both scalar and vector constraints
+            expr_arr = _to_float_array(expr_value)
+            lower_arr = _to_float_array(lower)
+            upper_arr = _to_float_array(upper)
 
-            if hasattr(lower, "__float__"):
-                lower = float(lower)
-            if hasattr(upper, "__float__"):
-                upper = float(upper)
+            # Check element-wise violations
+            for j in range(len(expr_arr)):
+                v = expr_arr[j]
+                lb = lower_arr[j] if j < len(lower_arr) else lower_arr[0]
+                ub = upper_arr[j] if j < len(upper_arr) else upper_arr[0]
 
-            # Check for violations
-            if expr_value < lower:
-                violation_msg = (
-                    f"Constraint {i} at k={k}: "
-                    f"value={expr_value:.6f} < lower={lower:.6f}"
-                )
-                violations["llm_constraints"].append(violation_msg)
-                violations["by_constraint"][i].append(
-                    {
-                        "k": k,
-                        "value": expr_value,
-                        "lower": lower,
-                        "type": "below_lower",
-                    }
-                )
+                suffix = f"[{j}]" if len(expr_arr) > 1 else ""
 
-            if expr_value > upper:
-                violation_msg = (
-                    f"Constraint {i} at k={k}: "
-                    f"value={expr_value:.6f} > upper={upper:.6f}"
-                )
-                violations["llm_constraints"].append(violation_msg)
-                violations["by_constraint"][i].append(
-                    {
-                        "k": k,
-                        "value": expr_value,
-                        "upper": upper,
-                        "type": "above_upper",
-                    }
-                )
+                if v < lb:
+                    violation_msg = (
+                        f"Constraint {i}{suffix} at k={k}: "
+                        f"value={v:.6f} < lower={lb:.6f}"
+                    )
+                    violations["llm_constraints"].append(violation_msg)
+                    violations["by_constraint"][i].append(
+                        {
+                            "k": k,
+                            "element": j,
+                            "value": v,
+                            "lower": lb,
+                            "type": "below_lower",
+                        }
+                    )
+
+                if v > ub:
+                    violation_msg = (
+                        f"Constraint {i}{suffix} at k={k}: "
+                        f"value={v:.6f} > upper={ub:.6f}"
+                    )
+                    violations["llm_constraints"].append(violation_msg)
+                    violations["by_constraint"][i].append(
+                        {
+                            "k": k,
+                            "element": j,
+                            "value": v,
+                            "upper": ub,
+                            "type": "above_upper",
+                        }
+                    )
 
     # Generate summary
     for i, constraint_violations in violations["by_constraint"].items():
