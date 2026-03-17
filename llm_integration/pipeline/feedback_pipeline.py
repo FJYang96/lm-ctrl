@@ -411,7 +411,9 @@ class FeedbackPipeline:
                     "optimization_result": {
                         "success": False,
                         "trajectory_analysis": {},
-                        "optimization_metrics": {},
+                        "optimization_metrics": {"hardness_report": None},
+                        "ref_trajectory_data": None,
+                        "state_trajectory": None,
                     },
                     "simulation_result": {
                         "success": False,
