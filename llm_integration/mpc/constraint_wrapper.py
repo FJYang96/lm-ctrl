@@ -51,7 +51,15 @@ def wrap_constraint_for_contact_phases(
 
 
 def _to_float_array(val: Any) -> np.ndarray:
-    """Convert a scalar, CasADi DM, or numpy value to a flat float array."""
+    """Convert a scalar, CasADi DM/MX, or numpy value to a flat float array."""
+    # CasADi MX (symbolic) — evaluate constant expressions to DM first
+    try:
+        import casadi as cs
+
+        if isinstance(val, cs.MX):
+            val = cs.evalf(val)
+    except ImportError:
+        pass
     if hasattr(val, "full"):
         return np.asarray(val.full(), dtype=float).flatten()
     return np.atleast_1d(np.asarray(val, dtype=float)).flatten()
