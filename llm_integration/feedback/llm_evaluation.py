@@ -77,18 +77,109 @@ def extract_json_from_response(response: str) -> str:
     return text.strip()
 
 
+def _compress_timesteps(ks: list[int]) -> str:
+    """Turn a sorted list of timestep indices into compressed ranges.
+
+    Example: [15, 16, 17, 48, 49, 50] -> "k=15-17, 48-50"
+    """
+    if not ks:
+        return ""
+    sorted_ks = sorted(ks)
+    ranges: list[str] = []
+    start = prev = sorted_ks[0]
+    for k in sorted_ks[1:]:
+        if k == prev + 1:
+            prev = k
+        else:
+            ranges.append(f"{start}-{prev}" if prev > start else str(start))
+            start = prev = k
+    ranges.append(f"{start}-{prev}" if prev > start else str(start))
+    return "k=" + ", ".join(ranges)
+
+
 def format_violations(constraint_violations: dict[str, Any] | None) -> str:
-    """Format constraint violations dict into text for LLM prompts."""
+    """Format constraint violations dict into condensed per-element summaries for LLM prompts."""
     if not constraint_violations:
         return "None"
-    violation_lines = []
+
+    lines: list[str] = []
+
+    # System constraint info (non-LLM keys)
     for key, val in constraint_violations.items():
+        if key in ("llm_constraints", "by_constraint", "constraint_meta", "summary",
+                    "llm_summary"):
+            continue
         if isinstance(val, list):
             for item in val:
-                violation_lines.append(f"  {key}: {item}")
+                lines.append(f"  {key}: {item}")
         else:
-            violation_lines.append(f"  {key}: {val}")
-    return "\n".join(violation_lines) if violation_lines else "None"
+            lines.append(f"  {key}: {val}")
+
+    # LLM constraint per-element summaries
+    by_constraint = constraint_violations.get("by_constraint", {})
+    meta = constraint_violations.get("constraint_meta", {})
+
+    if by_constraint:
+        if lines:
+            lines.append("")
+        lines.append("LLM Constraints:")
+
+    for i, violations_list in sorted(by_constraint.items(), key=lambda x: int(x[0])):
+        info = meta.get(i) or meta.get(int(i)) or meta.get(str(i))
+        if info:
+            name = info["name"]
+            n_out = info["n_outputs"]
+            lines.append(f"  {name} [{n_out} outputs]:")
+        else:
+            lines.append(f"  constraint_{i}:")
+            n_out = 0
+
+        # Group violations by element j
+        by_element: dict[int, list[dict]] = {}
+        for v in violations_list:
+            j = v.get("element", 0)
+            by_element.setdefault(j, []).append(v)
+
+        # Determine all element indices (use n_out if known, else only violated ones)
+        all_elements = set(range(n_out)) if n_out else set(by_element.keys())
+        all_elements |= set(by_element.keys())
+
+        for j in sorted(all_elements):
+            elem_violations = by_element.get(j, [])
+            if not elem_violations:
+                lines.append(f"    [{j}]: 0 violations")
+                continue
+
+            count = len(elem_violations)
+            # Find worst violation (max |value - bound|)
+            worst = max(
+                elem_violations,
+                key=lambda v: abs(v["value"] - v.get("lower", v.get("upper", v["value"]))),
+            )
+            worst_k = worst["k"]
+            worst_val = worst["value"]
+            if worst.get("type") == "below_lower":
+                deviation = abs(worst_val - worst["lower"])
+                bound_str = f"lower={worst['lower']:.3f}"
+            else:
+                deviation = abs(worst_val - worst["upper"])
+                bound_str = f"upper={worst['upper']:.3f}"
+
+            timesteps = _compress_timesteps([v["k"] for v in elem_violations])
+            lines.append(
+                f"    [{j}]: {count} violations, max deviation {deviation:.3f} "
+                f"at k={worst_k} (value={worst_val:.3f}, {bound_str}), {timesteps}"
+            )
+
+    # LLM summary (aggregate)
+    llm_summary = constraint_violations.get("llm_summary") or constraint_violations.get("summary")
+    if llm_summary and isinstance(llm_summary, list):
+        if lines:
+            lines.append("")
+        for item in llm_summary:
+            lines.append(f"  {item}")
+
+    return "\n".join(lines) if lines else "None"
 
 
 def format_error_info(error_info: dict[str, Any] | None) -> str:

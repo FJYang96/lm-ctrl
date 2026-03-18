@@ -220,7 +220,7 @@ class FeedbackPipeline:
 
                 # Save feedback context to disk (describes previous iteration)
                 if feedback_context is not None:
-                    ctx_file = run_dir / f"feedback_iter_{iteration - 1}.txt"
+                    ctx_file = run_dir / f"codegen_prompt_iter_{iteration}.txt"
                     with open(ctx_file, "w") as f:
                         f.write(feedback_context)
 
@@ -292,6 +292,8 @@ class FeedbackPipeline:
                     current_slack_weights=self.current_slack_weights,
                     constraint_violations=constraint_violations,
                     reference_analysis=ref_analysis,
+                    run_dir=run_dir,
+                    iteration=iteration,
                 )
                 score = llm_eval.get("score", 0.0 if not opt_success else 0.5)
 
@@ -337,6 +339,9 @@ class FeedbackPipeline:
                     error_info=error_info if not opt_success else None,
                     pivot_signal=pivot_signal,
                     reference_analysis=ref_analysis,
+                    run_dir=run_dir,
+                    iteration=iteration,
+                    iteration_summaries=list(self.iteration_summaries),
                 )
 
                 logger.info(f"Unified feedback: {len(unified_fb)} chars")
@@ -357,6 +362,7 @@ class FeedbackPipeline:
                     current_slack_weights=self.current_slack_weights,
                     reference_analysis=ref_analysis,
                     constraint_violations=constraint_violations,
+                    run_dir=run_dir,
                 )
                 # Step 11: Collect feedback data for next iteration
                 # (snapshot iteration_summaries BEFORE appending current summary,
@@ -375,6 +381,7 @@ class FeedbackPipeline:
                     "feedback": unified_fb,
                     "score": score,
                     "motion_quality_report": self.current_motion_quality_report,
+                    "constraint_violations": constraint_violations,
                 }
                 self.iteration_summaries.append(iter_summary)
 

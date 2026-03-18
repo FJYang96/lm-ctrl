@@ -15,7 +15,7 @@ from typing import Any
 
 from ..feedback.format_hardness import format_hardness_report
 from ..feedback.format_metrics import format_trajectory_metrics_section
-from ..feedback.llm_evaluation import call_llm
+from ..feedback.llm_evaluation import call_llm, format_violations
 from ..feedback.reference_feedback import _compute_reference_metrics
 from .code_extraction import extract_raw_code  # noqa: F401 (re-export)
 from .prompts import (  # noqa: F401 (re-export)
@@ -43,6 +43,7 @@ def generate_constraints(
     feedback: str = "",
     score: float = 0.0,
     motion_quality_report: str = "",
+    constraint_violations: dict[str, Any] | None = None,
 ) -> tuple[str, str | None]:
     """Generate optimization constraints using Claude.
 
@@ -216,6 +217,11 @@ def generate_constraints(
         lines.append("")
         lines.append(hardness_text)
 
+    violations_text = format_violations(constraint_violations)
+    lines.append("")
+    lines.append("CONSTRAINT VIOLATIONS:")
+    lines.append(violations_text)
+
     ref_trajectory_data = opt_result["ref_trajectory_data"]
     state_trajectory = opt_result["state_trajectory"]
     ref_analysis = _compute_reference_metrics(ref_trajectory_data, state_trajectory, dt)
@@ -257,12 +263,14 @@ def generate_constraints(
     lines.append("=" * 60)
     lines.append("Generate improved constraints and reference trajectory.")
     lines.append(
-        "Use ALL of the above — iteration history, previous summaries, current "
-        "feedback, raw metrics, hardness data, violations, and reference analysis "
-        "— as POWERFUL/IMPORTANT/GUIDING guidance. "
-        "However, feel free to use your own independent decisions about what to "
-        "change and why. "
-        "If any of these are unavailable, use the rest to diagnose issues yourself."
+        "You MUST follow the feedback's numbered priority actions. "
+        "Implement each one unless you have a specific, stated reason not to. "
+        "In particular: if the feedback says to change the flight duration, "
+        "constraint structure, or reference trajectory design, you must make "
+        "those exact changes — do not substitute a different change instead. "
+        "Use the raw metrics, hardness data, violations, and reference analysis "
+        "to verify the feedback's reasoning, but the priority actions are your "
+        "primary instructions."
     )
     lines.append("Return ONLY Python code.")
     lines.append("=" * 60)

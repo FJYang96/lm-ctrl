@@ -13,6 +13,7 @@ Motion quality is computed from trajectory data BEFORE these calls — the repor
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from ..logging_config import logger
@@ -52,6 +53,19 @@ visual inspection."""
 # ---------------------------------------------------------------------------
 
 
+def _save_prompt(run_dir: Path | None, label: str, iteration: int,
+                  system_prompt: str, user_message: str) -> None:
+    """Save a prompt to disk for debugging."""
+    if run_dir is None:
+        return
+    path = run_dir / f"{label}_prompt_iter_{iteration}.txt"
+    with open(path, "w") as f:
+        f.write("=== SYSTEM PROMPT ===\n")
+        f.write(system_prompt)
+        f.write("\n\n=== USER MESSAGE ===\n")
+        f.write(user_message)
+
+
 def evaluate_iteration_unified(
     command: str,
     trajectory_analysis: dict[str, Any],
@@ -64,6 +78,8 @@ def evaluate_iteration_unified(
     current_slack_weights: dict[str, float] | None = None,
     constraint_violations: dict[str, Any] | None = None,
     reference_analysis: str = "",
+    run_dir: Path | None = None,
+    iteration: int = 0,
 ) -> dict[str, Any]:
     """Score a trajectory. Returns dict with: score, criteria, warnings, summary."""
 
@@ -151,6 +167,8 @@ Return ONLY valid JSON, no markdown, no extra text."""
 
 Evaluate how well this trajectory achieves the commanded task."""
 
+    _save_prompt(run_dir, "scoring", iteration, system_prompt, user_message)
+
     try:
         response = call_llm(system_prompt, user_message)
         json_text = extract_json_from_response(response)
@@ -198,6 +216,9 @@ def generate_unified_feedback(
     mpc_dt: float = 0.02,
     current_slack_weights: dict[str, float] | None = None,
     reference_analysis: str = "",
+    run_dir: Path | None = None,
+    iteration: int = 0,
+    iteration_summaries: list[dict[str, Any]] | None = None,
 ) -> str:
     """Generate unified constraint + reference feedback via a single LLM call.
 
@@ -233,8 +254,9 @@ The reference must be physically plausible or the solver starts from an unrealis
 {_MOTION_QUALITY_LINE}
 {_DATA_DESCRIPTION}
 - MODE: Whether this is the first iteration, an incremental tweak, or a mandatory pivot (fundamentally different approach). Guides how aggressive your suggestions should be.
+- ITERATION HISTORY: Summaries of previous iterations — what was tried, scores, and what happened. Use this to avoid suggesting approaches that already failed and to build on what worked.
 
-Use ALL available data — the motion quality report, metrics, hardness data, violations, reference analysis, constraint code, and solver status — to form your feedback. Do not rely on any single source; cross-reference the motion quality report with the numerical metrics to identify root causes accurately.
+Use ALL available data — the motion quality report, metrics, hardness data, violations, reference analysis, constraint code, solver status, and iteration history — to form your feedback. Do not rely on any single source; cross-reference the motion quality report with the numerical metrics to identify root causes accurately. Check the iteration history to ensure you do not suggest approaches that were already tried and failed.
 
 SOLVER FAILURE: If the solver status is "failed", this is the most critical issue. The motion quality report describes the debug trajectory — the solver's best attempt before giving up, NOT a valid solution. The metrics may look completely wrong or unrelated to the goal. Focus on WHY the solver failed and how to make the problem feasible: loosen bounds, fix phase timing, fix reference trajectory. A failed solver means the feasible region is too small or the initial guess is too far from it.
 
@@ -271,6 +293,59 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
     metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
     solver_status = "converged" if opt_success else "failed"
 
+    # Format iteration history (same full-detail format as code-gen)
+    history_lines: list[str] = []
+    if iteration_summaries:
+        total = len(iteration_summaries)
+        history_lines.append(
+            f"Total iterations so far: {total}. "
+            f"Detailed analysis of iteration {iteration} follows below."
+        )
+
+        full_detail_start = max(0, total - 3)
+
+        for i, entry in enumerate(iteration_summaries):
+            if i >= full_detail_start:
+                break
+            status_label = "SOLVER CONVERGED" if entry.get("success") else "SOLVER FAILED"
+            history_lines.append(
+                f"  Iter {entry.get('iteration', '?')} [{status_label}] "
+                f"Score: {entry.get('score', 0):.2f}"
+            )
+
+        for entry in iteration_summaries[full_detail_start:]:
+            status_label = "SOLVER CONVERGED" if entry.get("success") else "SOLVER FAILED"
+            history_lines.append("")
+            history_lines.append(
+                f"  Iter {entry.get('iteration', '?')} [{status_label}] "
+                f"Score: {entry.get('score', 0):.2f}"
+            )
+
+            approach = entry.get("approach", "")
+            if approach:
+                history_lines.append("    Approach:")
+                for line in approach.split("\n"):
+                    history_lines.append(f"      {line}")
+
+            fb_summary = entry.get("feedback_summary", "")
+            if fb_summary:
+                history_lines.append("    Feedback:")
+                for line in fb_summary.split("\n"):
+                    history_lines.append(f"      {line}")
+
+            sim_summary = entry.get("simulation_summary", "")
+            if sim_summary:
+                history_lines.append("    Simulation:")
+                for line in sim_summary.split("\n"):
+                    history_lines.append(f"      {line}")
+
+            metrics_summary = entry.get("metrics_summary", "")
+            if metrics_summary:
+                history_lines.append("    Metrics:")
+                for line in metrics_summary.split("\n"):
+                    history_lines.append(f"      {line}")
+    history_text = "\n".join(history_lines) if history_lines else "First iteration — no history."
+
     user_message = f"""<task>{command}</task>
 <motion_quality>
 {motion_quality_report if motion_quality_report else "No motion quality report available."}
@@ -292,8 +367,13 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
 <reference_analysis>
 {reference_analysis if reference_analysis else "Not available"}
 </reference_analysis>
+<iteration_history>
+{history_text}
+</iteration_history>
 
 Provide unified feedback on both constraint design and reference trajectory. Start by describing what the motion quality report shows."""
+
+    _save_prompt(run_dir, "feedback", iteration, system_prompt, user_message)
 
     try:
         response = call_llm(system_prompt, user_message)
@@ -323,6 +403,7 @@ def generate_iteration_summary(
     current_slack_weights: dict[str, float] | None = None,
     reference_analysis: str = "",
     constraint_violations: dict[str, Any] | None = None,
+    run_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Generate a structured iteration summary for the history log.
 
@@ -400,6 +481,8 @@ Return ONLY valid JSON, no extra text."""
 <feedback>
 {feedback if feedback else "None"}
 </feedback>"""
+
+    _save_prompt(run_dir, "summary", iteration, system_prompt, user_message)
 
     try:
         response = call_llm(system_prompt, user_message)

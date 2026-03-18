@@ -47,18 +47,20 @@ def wrap_constraint_for_contact_phases(
                 constraint_func(x_k, u_k, kindyn_model, config, contact_k),
             )
 
+    contact_aware_constraint.__name__ = constraint_func.__name__
     return contact_aware_constraint
 
 
 def _to_float_array(val: Any) -> np.ndarray:
-    """Convert a scalar, CasADi DM/MX, or numpy value to a flat float array."""
-    # CasADi MX (symbolic) — evaluate constant expressions to DM first
+    """Convert a scalar, CasADi DM/MX/SX, or numpy value to a flat float array."""
     try:
         import casadi as cs
 
         if isinstance(val, cs.MX):
             val = cs.evalf(val)
-    except ImportError:
+        elif isinstance(val, cs.SX):
+            val = cs.DM(val)
+    except (ImportError, RuntimeError):
         pass
     if hasattr(val, "full"):
         return np.asarray(val.full(), dtype=float).flatten()
@@ -93,6 +95,7 @@ def evaluate_constraint_violations(
     violations: dict[str, Any] = {
         "llm_constraints": [],
         "by_constraint": {},
+        "constraint_meta": {},
         "summary": [],
     }
 
@@ -113,21 +116,35 @@ def evaluate_constraint_violations(
         contact_k = contact_sequence[:, k]
 
         for i, constraint_func in enumerate(constraint_functions):
-            # Call the constraint function
-            expr_value, lower, upper = constraint_func(
-                x_k,
-                u_k,
-                kindyn_model,
-                base_config,
-                contact_k,
-                k,
-                horizon,
-            )
+            try:
+                # Call the constraint function
+                expr_value, lower, upper = constraint_func(
+                    x_k,
+                    u_k,
+                    kindyn_model,
+                    base_config,
+                    contact_k,
+                    k,
+                    horizon,
+                )
 
-            # Convert to numpy arrays to handle both scalar and vector constraints
-            expr_arr = _to_float_array(expr_value)
-            lower_arr = _to_float_array(lower)
-            upper_arr = _to_float_array(upper)
+                # Convert to numpy arrays to handle both scalar and vector constraints
+                expr_arr = _to_float_array(expr_value)
+                lower_arr = _to_float_array(lower)
+                upper_arr = _to_float_array(upper)
+            except Exception as e:
+                if k == 1:  # Log once per constraint, not per timestep
+                    violations["llm_constraints"].append(
+                        f"Constraint {i}: evaluation error at k={k} - {str(e)[:80]}"
+                    )
+                continue
+
+            # Record metadata on first successful evaluation
+            if i not in violations["constraint_meta"]:
+                violations["constraint_meta"][i] = {
+                    "name": getattr(constraint_func, "__name__", f"constraint_{i}"),
+                    "n_outputs": len(expr_arr),
+                }
 
             # Check element-wise violations
             for j in range(len(expr_arr)):
