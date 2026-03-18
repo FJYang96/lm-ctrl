@@ -29,6 +29,15 @@ def get_robot_details(config: Any = None) -> dict[str, Any]:
     details["joint_limits_lower"] = config.robot_data.joint_limits_lower.tolist()
     details["joint_limits_upper"] = config.robot_data.joint_limits_upper.tolist()
 
+    if hasattr(config.robot_data, "grf_limits"):
+        val = config.robot_data.grf_limits
+        details["grf_limits"] = val.tolist() if hasattr(val, "tolist") else float(val)
+    if hasattr(config.robot_data, "joint_velocity_limits"):
+        val = config.robot_data.joint_velocity_limits
+        details["joint_velocity_limits"] = val.tolist() if hasattr(val, "tolist") else float(val)
+    if hasattr(config.experiment, "mu_ground"):
+        details["mu_ground"] = float(config.experiment.mu_ground)
+
     return details
 
 
@@ -207,7 +216,10 @@ Angular motion:
 - Full rotation = 2π radians ≈ 6.28 rad
 - rotation_angle = angular_velocity × time
 - Angular momentum is conserved during flight (no external torques)
-- All rotation must happen during flight phase ([0,0,0,0] contact)
+- IMPORTANT: For aerial rotations, the orientation change must occur during flight.
+  The launch phase generates angular impulse, but the actual angle change occurs
+  in the air. Orientation constraints that are wide during ground phases allow
+  the solver to rotate on the ground instead of in the air.
 
 Achievable ranges for this robot:
 - Peak angular velocity: 8-15 rad/s (physically realistic)
@@ -266,12 +278,6 @@ Definitions of SOLVER CONVERGED, SOLVER FAILED, and Score labels used throughout
 --- ITERATION HISTORY ---
 Summaries of past iterations (NOT including the current one) with approach, feedback,
 simulation, and key metrics. Use this to avoid repeating failed strategies.
-
---- MODE USED FOR THIS ITERATION: TWEAK / PIVOT / INITIAL ---
-What mode was used to generate the current iteration's code:
-- TWEAK: Incremental improvements were requested
-- PIVOT: A fundamentally different strategy was requested (approach was stagnating)
-- INITIAL: First iteration
 
 --- CURRENT ITERATION DETAILED ANALYSIS [SOLVER STATUS] Score: X.XX ---
 The current iteration's solver status and score are shown in this header.

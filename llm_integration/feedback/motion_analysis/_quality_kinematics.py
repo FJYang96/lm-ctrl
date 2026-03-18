@@ -17,7 +17,7 @@ def _section_contact_quality(
     contact_sequence: np.ndarray | None,
     kindyn_model: Any,
     mpc_dt: float,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """H. Contact Quality."""
     lines: list[str] = []
 
@@ -25,7 +25,7 @@ def _section_contact_quality(
         lines.append(
             "  Contact sequence not available — skipping contact quality check."
         )
-        return "OK", lines
+        return lines
 
     N = contact_sequence.shape[1]
 
@@ -69,13 +69,7 @@ def _section_contact_quality(
     else:
         lines.append("  No individual foot landings detected")
 
-    severity = "OK"
-    if impact_velocities and any(vz < -2.0 for _, vz in impact_velocities):
-        severity = "CRITICAL"
-    elif impact_velocities and any(vz < -1.0 for _, vz in impact_velocities):
-        severity = "WARNING"
-
-    return severity, lines
+    return lines
 
 
 def _section_joint_quality(
@@ -85,7 +79,7 @@ def _section_joint_quality(
     joint_limits_upper: np.ndarray,
     kindyn_model: Any,
     torque_limits: np.ndarray | None,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """I. Joint Quality."""
     lines: list[str] = []
 
@@ -158,19 +152,13 @@ def _section_joint_quality(
     else:
         lines.append("  Torque limits not provided — skipping torque feasibility check")
 
-    severity = "OK"
-    if worst_proximity < 0.02:
-        severity = "CRITICAL"
-    elif worst_proximity < 0.1:
-        severity = "WARNING"
-
-    return severity, lines
+    return lines
 
 
 def _section_manipulability(
     state_traj: np.ndarray,
     kindyn_model: Any,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """J. Manipulability."""
     lines: list[str] = []
 
@@ -231,10 +219,4 @@ def _section_manipulability(
         lines.append("  No manipulability data (empty trajectory)")
         frac_below = 0.0
 
-    severity = "OK"
-    if min_manip < 1e-6 or frac_below > 0.3:
-        severity = "CRITICAL"
-    elif min_manip < warning_threshold or frac_below > 0.1:
-        severity = "WARNING"
-
-    return severity, lines
+    return lines

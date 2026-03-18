@@ -16,7 +16,7 @@ def _section_smoothness(
     state_traj: np.ndarray,
     mpc_dt: float,
     contact_sequence: np.ndarray | None,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """A. Smoothness (jerk-based)."""
     lines: list[str] = []
 
@@ -110,21 +110,14 @@ def _section_smoothness(
     )
     lines.append(f"  Angular jerk RMS: {euler_jerk_rms:.1f} rad/s3")
 
-    # Severity
-    severity = "OK"
-    if com_jerk_rms > 500 or joint_jerk_max_val > 5000:
-        severity = "CRITICAL"
-    elif com_jerk_rms > 200 or joint_jerk_max_val > 2000:
-        severity = "WARNING"
-
-    return severity, lines
+    return lines
 
 
 def _section_ground_penetration(
     state_traj: np.ndarray,
     contact_sequence: np.ndarray | None,
     kindyn_model: Any,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """B. Ground Penetration & Swing Clearance (FK-based)."""
     lines: list[str] = []
     N = state_traj.shape[0] - 1
@@ -199,19 +192,13 @@ def _section_ground_penetration(
         else:
             lines.append("  Swing clearance: OK (all feet > 5mm during swing phases)")
 
-    severity = "OK"
-    if worst_pen_depth < -0.02:
-        severity = "CRITICAL"
-    elif worst_pen_depth < -0.005 or swing_warnings:
-        severity = "WARNING"
-
-    return severity, lines
+    return lines
 
 
 def _section_grf_contact(
     grf_traj: np.ndarray,
     contact_sequence: np.ndarray | None,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """C. GRF-Contact Consistency."""
     lines: list[str] = []
 
@@ -219,7 +206,7 @@ def _section_grf_contact(
         lines.append(
             "  Contact sequence not available — skipping GRF consistency check."
         )
-        return "OK", lines
+        return lines
 
     N = min(grf_traj.shape[0], contact_sequence.shape[1])
     phantom_count = 0
@@ -271,10 +258,4 @@ def _section_grf_contact(
     else:
         lines.append("  Contact chattering: none (clean phase transitions)")
 
-    severity = "OK"
-    if phantom_count > N * 0.1 or missing_count > N * 0.2:
-        severity = "CRITICAL"
-    elif phantom_count > 0 or missing_count > 0 or chattering_feet:
-        severity = "WARNING"
-
-    return severity, lines
+    return lines

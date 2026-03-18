@@ -1,7 +1,7 @@
 """Motion analysis: motion quality report.
 
 Public API:
-    compute_motion_quality_report() — formatted text report with severity per section
+    compute_motion_quality_report() — formatted text report with raw metrics per section
 """
 
 from __future__ import annotations
@@ -63,76 +63,76 @@ def compute_motion_quality_report(
         torque_limits: (12,) per-joint torque limits, or None.
 
     Returns:
-        Formatted text report with OK/WARNING/CRITICAL per section.
+        Formatted text report with raw metrics per section.
     """
-    sections: list[tuple[str, str, list[str]]] = []
+    sections: list[tuple[str, list[str]]] = []
 
     try:
-        sev, lns = _section_smoothness(state_traj, mpc_dt, contact_sequence)
-        sections.append(("SMOOTHNESS", sev, lns))
+        lns = _section_smoothness(state_traj, mpc_dt, contact_sequence)
+        sections.append(("SMOOTHNESS", lns))
     except Exception as e:
         logger.warning(f"Motion quality: smoothness computation failed: {e}")
-        sections.append(("SMOOTHNESS", "ERROR", [f"  Computation failed: {e}"]))
+        sections.append(("SMOOTHNESS", [f"  Computation failed: {e}"]))
 
     try:
-        sev, lns = _section_ground_penetration(
+        lns = _section_ground_penetration(
             state_traj, contact_sequence, kindyn_model
         )
-        sections.append(("GROUND PENETRATION", sev, lns))
+        sections.append(("GROUND PENETRATION", lns))
     except Exception as e:
         logger.warning(f"Motion quality: ground penetration computation failed: {e}")
-        sections.append(("GROUND PENETRATION", "ERROR", [f"  Computation failed: {e}"]))
+        sections.append(("GROUND PENETRATION", [f"  Computation failed: {e}"]))
 
     try:
-        sev, lns = _section_grf_contact(grf_traj, contact_sequence)
-        sections.append(("GRF-CONTACT CONSISTENCY", sev, lns))
+        lns = _section_grf_contact(grf_traj, contact_sequence)
+        sections.append(("GRF-CONTACT CONSISTENCY", lns))
     except Exception as e:
         logger.warning(f"Motion quality: GRF-contact computation failed: {e}")
         sections.append(
-            ("GRF-CONTACT CONSISTENCY", "ERROR", [f"  Computation failed: {e}"])
+            ("GRF-CONTACT CONSISTENCY", [f"  Computation failed: {e}"])
         )
 
     try:
-        sev, lns = _section_friction_cone(grf_traj, contact_sequence, mu_friction)
-        sections.append(("FRICTION CONE", sev, lns))
+        lns = _section_friction_cone(grf_traj, contact_sequence, mu_friction)
+        sections.append(("FRICTION CONE", lns))
     except Exception as e:
         logger.warning(f"Motion quality: friction cone computation failed: {e}")
-        sections.append(("FRICTION CONE", "ERROR", [f"  Computation failed: {e}"]))
+        sections.append(("FRICTION CONE", [f"  Computation failed: {e}"]))
 
     try:
-        sev, lns = _section_angular_momentum(state_traj, contact_sequence, mpc_dt)
-        sections.append(("ANGULAR MOMENTUM (FLIGHT)", sev, lns))
+        lns = _section_angular_momentum(state_traj, contact_sequence, mpc_dt)
+        sections.append(("ANGULAR MOMENTUM (FLIGHT)", lns))
     except Exception as e:
         logger.warning(f"Motion quality: angular momentum computation failed: {e}")
         sections.append(
-            ("ANGULAR MOMENTUM (FLIGHT)", "ERROR", [f"  Computation failed: {e}"])
+            ("ANGULAR MOMENTUM (FLIGHT)", [f"  Computation failed: {e}"])
         )
 
     try:
-        sev, lns = _section_energy_continuity(state_traj, robot_mass, mpc_dt)
-        sections.append(("ENERGY CONTINUITY", sev, lns))
+        lns = _section_energy_continuity(state_traj, robot_mass, mpc_dt)
+        sections.append(("ENERGY CONTINUITY", lns))
     except Exception as e:
         logger.warning(f"Motion quality: energy continuity computation failed: {e}")
-        sections.append(("ENERGY CONTINUITY", "ERROR", [f"  Computation failed: {e}"]))
+        sections.append(("ENERGY CONTINUITY", [f"  Computation failed: {e}"]))
 
     try:
-        sev, lns = _section_terminal_stability(state_traj)
-        sections.append(("TERMINAL STABILITY", sev, lns))
+        lns = _section_terminal_stability(state_traj)
+        sections.append(("TERMINAL STABILITY", lns))
     except Exception as e:
         logger.warning(f"Motion quality: terminal stability computation failed: {e}")
-        sections.append(("TERMINAL STABILITY", "ERROR", [f"  Computation failed: {e}"]))
+        sections.append(("TERMINAL STABILITY", [f"  Computation failed: {e}"]))
 
     try:
-        sev, lns = _section_contact_quality(
+        lns = _section_contact_quality(
             state_traj, contact_sequence, kindyn_model, mpc_dt
         )
-        sections.append(("CONTACT QUALITY", sev, lns))
+        sections.append(("CONTACT QUALITY", lns))
     except Exception as e:
         logger.warning(f"Motion quality: contact quality computation failed: {e}")
-        sections.append(("CONTACT QUALITY", "ERROR", [f"  Computation failed: {e}"]))
+        sections.append(("CONTACT QUALITY", [f"  Computation failed: {e}"]))
 
     try:
-        sev, lns = _section_joint_quality(
+        lns = _section_joint_quality(
             state_traj,
             grf_traj,
             joint_limits_lower,
@@ -140,22 +140,22 @@ def compute_motion_quality_report(
             kindyn_model,
             torque_limits,
         )
-        sections.append(("JOINT QUALITY", sev, lns))
+        sections.append(("JOINT QUALITY", lns))
     except Exception as e:
         logger.warning(f"Motion quality: joint quality computation failed: {e}")
-        sections.append(("JOINT QUALITY", "ERROR", [f"  Computation failed: {e}"]))
+        sections.append(("JOINT QUALITY", [f"  Computation failed: {e}"]))
 
     try:
-        sev, lns = _section_manipulability(state_traj, kindyn_model)
-        sections.append(("MANIPULABILITY", sev, lns))
+        lns = _section_manipulability(state_traj, kindyn_model)
+        sections.append(("MANIPULABILITY", lns))
     except Exception as e:
         logger.warning(f"Motion quality: manipulability computation failed: {e}")
-        sections.append(("MANIPULABILITY", "ERROR", [f"  Computation failed: {e}"]))
+        sections.append(("MANIPULABILITY", [f"  Computation failed: {e}"]))
 
     # Assemble report
     report_lines: list[str] = []
-    for name, sev, lns in sections:
-        report_lines.append(f"{name}: {sev}")
+    for name, lns in sections:
+        report_lines.append(f"{name}:")
         report_lines.extend(lns)
         report_lines.append("")
 

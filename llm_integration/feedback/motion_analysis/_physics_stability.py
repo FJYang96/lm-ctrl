@@ -12,7 +12,7 @@ def _section_friction_cone(
     grf_traj: np.ndarray,
     contact_sequence: np.ndarray | None,
     mu_friction: float,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """D. Friction Cone."""
     lines: list[str] = []
     N = grf_traj.shape[0]
@@ -50,20 +50,14 @@ def _section_friction_cone(
 
     lines.append(f"  Worst tangential/normal ratio: {worst_ratio:.3f} ({worst_foot})")
 
-    severity = "OK"
-    if violations > N * 0.1:
-        severity = "CRITICAL"
-    elif violations > 0:
-        severity = "WARNING"
-
-    return severity, lines
+    return lines
 
 
 def _section_angular_momentum(
     state_traj: np.ndarray,
     contact_sequence: np.ndarray | None,
     mpc_dt: float,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """E. Angular Momentum During Flight."""
     lines: list[str] = []
 
@@ -71,7 +65,7 @@ def _section_angular_momentum(
         lines.append(
             "  Contact sequence not available — skipping angular momentum check."
         )
-        return "OK", lines
+        return lines
 
     omega = state_traj[:, 9:12]  # angular velocity
     N = contact_sequence.shape[1]
@@ -96,7 +90,7 @@ def _section_angular_momentum(
         lines.append(
             "  No full-flight phases detected (at least one foot always in contact)"
         )
-        return "OK", lines
+        return lines
 
     max_deviation = 0.0
     for i, seg in enumerate(flight_segments):
@@ -114,20 +108,14 @@ def _section_angular_momentum(
             f"omega deviation max={seg_max_dev:.4f} rad/s"
         )
 
-    severity = "OK"
-    if max_deviation > 1.0:
-        severity = "CRITICAL"
-    elif max_deviation > 0.3:
-        severity = "WARNING"
-
-    return severity, lines
+    return lines
 
 
 def _section_energy_continuity(
     state_traj: np.ndarray,
     robot_mass: float,
     mpc_dt: float,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """F. Energy Continuity."""
     lines: list[str] = []
     g = 9.81
@@ -160,18 +148,12 @@ def _section_energy_continuity(
     )
     lines.append(f"  Mean energy change rate: {mean_change_rate:.1f} J/s")
 
-    severity = "OK"
-    if max_discontinuity > 50:
-        severity = "CRITICAL"
-    elif max_discontinuity > 20:
-        severity = "WARNING"
-
-    return severity, lines
+    return lines
 
 
 def _section_terminal_stability(
     state_traj: np.ndarray,
-) -> tuple[str, list[str]]:
+) -> list[str]:
     """G. Terminal Stability."""
     lines: list[str] = []
 
@@ -192,20 +174,4 @@ def _section_terminal_stability(
         f"pitch={np.degrees(final_pitch):.1f}deg"
     )
 
-    severity = "OK"
-    if (
-        final_com_vel > 2.0
-        or final_omega > 3.0
-        or final_roll > 0.5
-        or final_pitch > 0.5
-    ):
-        severity = "CRITICAL"
-    elif (
-        final_com_vel > 0.5
-        or final_omega > 1.0
-        or final_roll > 0.2
-        or final_pitch > 0.2
-    ):
-        severity = "WARNING"
-
-    return severity, lines
+    return lines

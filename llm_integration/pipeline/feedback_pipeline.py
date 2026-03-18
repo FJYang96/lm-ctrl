@@ -105,42 +105,7 @@ class FeedbackPipeline:
 
         # Score tracking
         self.previous_score: float = -float("inf")
-        self.recent_scores: list[float] = []  # rolling window for pivot detection
-
-    def _compute_pivot_signal(self, iteration: int) -> str | None:
-        """Compute the pivot/tweak signal based on score history.
-
-        Returns:
-            "pivot" — fundamentally change approach
-            "tweak" — make incremental improvements
-            None — first iteration, no signal
-        """
-        scores = self.recent_scores
-
-        if len(scores) < 2:
-            # First iteration or not enough history
-            return None
-
-        # Monotonic decline for 2 consecutive iterations (3+ scores needed)
-        if len(scores) >= 3:
-            if scores[-1] < scores[-2] < scores[-3]:
-                logger.info(
-                    "Pivot trigger: monotonic decline for 2 consecutive iterations"
-                )
-                return "pivot"
-
-        # Stagnation: best score in last 5 hasn't improved by 0.05 over first
-        if len(scores) >= 5:
-            window = scores[-5:]
-            improvement = max(window) - window[0]
-            if improvement < 0.05:
-                logger.info(
-                    f"Pivot trigger: stagnation (best improvement {improvement:.3f} over 5 iterations)"
-                )
-                return "pivot"
-
-        # Default: tweak
-        return "tweak"
+        self.all_scores: list[float] = []
 
     def _extract_constraint_violations(
         self, optimization_result: dict[str, Any]
@@ -197,7 +162,7 @@ class FeedbackPipeline:
 
         # Reset score tracking
         self.previous_score = -float("inf")
-        self.recent_scores = []
+        self.all_scores = []
 
         # Algorithm 1: Iterative Refinement Pipeline
         system_prompt = get_system_prompt(self.config)
@@ -294,6 +259,7 @@ class FeedbackPipeline:
                     reference_analysis=ref_analysis,
                     run_dir=run_dir,
                     iteration=iteration,
+                    robot_details=self.robot_details,
                 )
                 score = llm_eval.get("score", 0.0 if not opt_success else 0.5)
 
@@ -315,15 +281,8 @@ class FeedbackPipeline:
                 summary = llm_eval.get("summary", f"Iteration {iteration} completed")
                 logger.info(f"  Summary: {summary}")
 
-                # Step 8: Append score to recent_scores
-                self.recent_scores.append(score)
-
-                # Step 9: Compute pivot/tweak signal
-                pivot_signal = self._compute_pivot_signal(iteration)
-                logger.info(
-                    f"Pivot logic: scores={[f'{s:.2f}' for s in self.recent_scores[-5:]]}, "
-                    f"pivot_signal={pivot_signal}"
-                )
+                # Step 8: Append score
+                self.all_scores.append(score)
 
                 # Step 9: Unified feedback (single Claude call — receives motion quality report)
                 unified_fb = generate_unified_feedback(
@@ -337,11 +296,11 @@ class FeedbackPipeline:
                     trajectory_analysis=trajectory_analysis,
                     opt_success=opt_success,
                     error_info=error_info if not opt_success else None,
-                    pivot_signal=pivot_signal,
                     reference_analysis=ref_analysis,
                     run_dir=run_dir,
                     iteration=iteration,
                     iteration_summaries=list(self.iteration_summaries),
+                    robot_details=self.robot_details,
                 )
 
                 logger.info(f"Unified feedback: {len(unified_fb)} chars")
@@ -377,7 +336,6 @@ class FeedbackPipeline:
                     "iteration_summaries": list(self.iteration_summaries),
                     "mpc_dt": float(self.config.mpc_config.mpc_dt),
                     "current_slack_weights": self.current_slack_weights,
-                    "pivot_signal": pivot_signal,
                     "feedback": unified_fb,
                     "score": score,
                     "motion_quality_report": self.current_motion_quality_report,
@@ -406,12 +364,11 @@ class FeedbackPipeline:
                     "metrics_summary": str(e),
                 }
                 self.iteration_summaries.append(error_summary)
-                self.recent_scores.append(0.0)
+                self.all_scores.append(0.0)
 
                 # Build error-path feedback data so the next iteration
                 # sees this failure in the iteration history.
                 code = constraint_code if "constraint_code" in locals() else ""
-                pivot_signal = self._compute_pivot_signal(iteration)
                 feedback_data = {
                     "iteration": iteration,
                     "command": command,
@@ -431,7 +388,6 @@ class FeedbackPipeline:
                     "iteration_summaries": list(self.iteration_summaries),
                     "mpc_dt": float(self.config.mpc_config.mpc_dt),
                     "current_slack_weights": self.current_slack_weights,
-                    "pivot_signal": pivot_signal,
                     "feedback": "",
                     "score": 0.0,
                 }
@@ -439,10 +395,10 @@ class FeedbackPipeline:
                 continue
 
         # Compile final results
-        best_score = max(self.recent_scores) if self.recent_scores else 0.0
+        best_score = max(self.all_scores) if self.all_scores else 0.0
         final_results = {
             "command": command,
-            "total_iterations": len(self.recent_scores),
+            "total_iterations": len(self.all_scores),
             "best_score": best_score,
             "results_directory": str(run_dir),
             "pipeline_success": best_score > 0.5,

@@ -39,7 +39,6 @@ def generate_constraints(
     iteration_summaries: list[dict[str, Any]] | None = None,
     mpc_dt: float | None = None,
     current_slack_weights: dict[str, float] | None = None,
-    pivot_signal: str | None = None,
     feedback: str = "",
     score: float = 0.0,
     motion_quality_report: str = "",
@@ -99,7 +98,7 @@ def generate_constraints(
         "to converge first."
     )
 
-    # === Iteration History (last 3 full, older one-line) ===
+    # === Iteration History (all iterations, full detail) ===
     summaries = iteration_summaries
     lines.append("")
     lines.append("--- ITERATION HISTORY ---")
@@ -110,17 +109,7 @@ def generate_constraints(
             f"Detailed analysis of iteration {iteration} follows below."
         )
 
-        full_detail_start = max(0, total - 3)
-
-        for i, entry in enumerate(summaries):
-            if i >= full_detail_start:
-                break
-            status_label = "SOLVER CONVERGED" if entry["success"] else "SOLVER FAILED"
-            lines.append(
-                f"  Iter {entry['iteration']} [{status_label}] Score: {entry['score']:.2f}"
-            )
-
-        for entry in summaries[full_detail_start:]:
+        for entry in summaries:
             status_label = "SOLVER CONVERGED" if entry["success"] else "SOLVER FAILED"
             lines.append("")
             lines.append(
@@ -155,24 +144,6 @@ def generate_constraints(
 
     lines.append("")
     lines.append("--- END OF ITERATION HISTORY ---")
-
-    # === Mode ===
-    lines.append("")
-    if pivot_signal == "pivot":
-        lines.append("--- MODE USED FOR THIS ITERATION: PIVOT ---")
-        lines.append(
-            "This iteration's code was generated under PIVOT mode — the approach had "
-            "stagnated or declined, so a fundamentally different strategy was requested."
-        )
-    elif pivot_signal == "tweak":
-        lines.append("--- MODE USED FOR THIS ITERATION: TWEAK ---")
-        lines.append(
-            "This iteration's code was generated under TWEAK mode — the approach showed "
-            "progress, so incremental improvements were requested."
-        )
-    else:
-        lines.append("--- MODE USED FOR THIS ITERATION: INITIAL ---")
-        lines.append("This was the first iteration.")
 
     # === Current Iteration Detailed Analysis ===
     solver_label = "SOLVER CONVERGED" if opt_success else "SOLVER FAILED"

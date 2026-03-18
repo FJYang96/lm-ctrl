@@ -43,9 +43,8 @@ _DATA_DESCRIPTION = """- TASK COMMAND: The user's task description specifying wh
 _MOTION_QUALITY_LINE = """- MOTION QUALITY REPORT: Computed metrics analyzing the physical quality of the trajectory — \
 smoothness (jerk), ground penetration, GRF-contact consistency, friction cone compliance, \
 angular momentum conservation, energy continuity, terminal stability, contact quality, and \
-joint feasibility. Each section is rated OK/WARNING/CRITICAL. This is your primary source \
-for motion quality assessment — it is computed directly from the trajectory data, not from \
-visual inspection."""
+joint feasibility. Each section provides raw numerical metrics. Use these to assess physical \
+plausibility in context of the task."""
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +65,37 @@ def _save_prompt(run_dir: Path | None, label: str, iteration: int,
         f.write(user_message)
 
 
+def _format_robot_context(robot_details: dict[str, Any]) -> str:
+    """Format robot details into a context block for LLM prompts."""
+    mass = robot_details.get("mass", 15.0)
+    height = robot_details.get("initial_height", 0.2117)
+    lower = robot_details.get("joint_limits_lower", [-0.8, -1.6, -2.6] * 4)
+    upper = robot_details.get("joint_limits_upper", [0.8, 1.6, -0.5] * 4)
+    grf_limits = robot_details.get("grf_limits")
+    jvel_limits = robot_details.get("joint_velocity_limits")
+    mu = robot_details.get("mu_ground")
+
+    lines = [
+        f"Unitree Go2 quadruped, mass {mass:.1f} kg, nominal standing height {height:.4f} m.",
+    ]
+    if grf_limits is not None:
+        if isinstance(grf_limits, (int, float)):
+            grf_limit = grf_limits
+        else:
+            grf_limit = grf_limits[2] if len(grf_limits) > 2 else max(grf_limits)
+        lines.append(f"Per-foot GRF limit: {grf_limit:.0f} N.")
+    if jvel_limits is not None:
+        if isinstance(jvel_limits, (int, float)):
+            jvel_limit = abs(jvel_limits)
+        else:
+            jvel_limit = max(abs(v) for v in jvel_limits) if jvel_limits else 0
+        lines.append(f"Joint velocity limit: {jvel_limit:.1f} rad/s.")
+    if mu is not None:
+        lines.append(f"Ground friction coefficient: {mu}.")
+    lines.append(f"Joint limits: {lower[:3]} to {upper[:3]} (per leg, repeated x4).")
+    return " ".join(lines)
+
+
 def evaluate_iteration_unified(
     command: str,
     trajectory_analysis: dict[str, Any],
@@ -80,6 +110,7 @@ def evaluate_iteration_unified(
     reference_analysis: str = "",
     run_dir: Path | None = None,
     iteration: int = 0,
+    robot_details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a trajectory. Returns dict with: score, criteria, warnings, summary."""
 
@@ -87,7 +118,11 @@ def evaluate_iteration_unified(
         hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
     )
 
-    system_prompt = f"""You are an expert robotics engineer scoring a quadruped robot trajectory. Your job is ONLY to score — do not suggest fixes.
+    robot_context = ""
+    if robot_details:
+        robot_context = f"\n\n== ROBOT ==\n{_format_robot_context(robot_details)}\n"
+
+    system_prompt = f"""You are an expert robotics engineer scoring a quadruped robot trajectory. Your job is ONLY to score — do not suggest fixes.{robot_context}
 
 Read the task command to understand what was asked. Use ALL available data — the motion quality report, metrics, hardness data, violations, reference analysis, constraint code, and solver status — to determine what actually happened. Do not rely on any single source; cross-reference the motion quality report with the numerical metrics to build a complete picture. Score how well the result matches the goal.
 
@@ -106,11 +141,9 @@ TASK COMPLETION (does the trajectory achieve what was commanded?):
 - Partial completion should be scored proportionally, not rounded up to a "good enough" baseline.
 
 MOTION QUALITY (is the trajectory physically plausible?):
-- Check the motion quality report for CRITICAL or WARNING sections. CRITICAL issues in ground penetration, friction cone, or terminal stability indicate severe physical implausibility.
-- Smoothness: high jerk values indicate discontinuous, non-smooth motion.
-- GRF-contact consistency: phantom forces or missing forces indicate the optimizer is exploiting physics.
-- Joint quality: joints near limits or torque infeasibility indicate an unrealizable trajectory.
-- Manipulability: near-singularity configurations mean the robot cannot control its feet.
+- The motion quality report provides raw metrics for each aspect of motion quality. Use these numbers to assess physical plausibility in the context of the task.
+- Consider what is physically unavoidable for the commanded task (e.g., a jump will have high landing impact velocity, high jerk at contact transitions, and energy injection during pushoff).
+- Penalize issues that indicate the optimizer is exploiting physics (phantom forces, energy appearing from nowhere during flight, feet below ground) or that the motion would fail in reality (robot tipping over, joints locked at limits for extended periods).
 
 SCORING GUIDE:
 - 0.9-1.0: Task fully achieved with physically plausible, smooth motion and stable landing
@@ -119,7 +152,7 @@ SCORING GUIDE:
 - 0.3-0.5: Major shortfall in task completion or severely broken motion
 - 0.0-0.3: Task barely attempted or catastrophic failure
 
-If the solver FAILED, cap the score at 0.40 maximum. If the solver CONVERGED but the motion quality report shows CRITICAL issues (ground penetration, friction violations, terminal instability), cap the score at 0.30 maximum regardless of how close the numbers are to the target.
+If the solver FAILED, cap the score at 0.40 maximum — an unconverged trajectory is physically meaningless. For converged trajectories with motion quality issues, use your judgment: consider whether an issue is inherent to the task (e.g., high landing velocity for a jump, jerk at takeoff/landing transitions, energy injection during pushoff) vs genuinely broken (e.g., robot falls over, feet phase through ground, phantom forces). Penalize genuine physical implausibility heavily, but do not penalize unavoidable physics.
 
 Return a JSON object:
 {{
@@ -212,19 +245,23 @@ def generate_unified_feedback(
     trajectory_analysis: dict[str, Any],
     opt_success: bool,
     error_info: dict[str, Any] | None,
-    pivot_signal: str | None,
     mpc_dt: float = 0.02,
     current_slack_weights: dict[str, float] | None = None,
     reference_analysis: str = "",
     run_dir: Path | None = None,
     iteration: int = 0,
     iteration_summaries: list[dict[str, Any]] | None = None,
+    robot_details: dict[str, Any] | None = None,
 ) -> str:
     """Generate unified constraint + reference feedback via a single LLM call.
 
     Returns multi-paragraph prose analysis covering both constraints and reference.
     """
-    system_prompt = f"""You are an expert providing actionable feedback on constraint and reference trajectory code for quadruped MPC trajectory optimization. A code-generation LLM will read your feedback to decide what to change. Every problem you identify must come with a concrete fix.
+    robot_context = ""
+    if robot_details:
+        robot_context = f"\n\n== ROBOT ==\n{_format_robot_context(robot_details)}\n"
+
+    system_prompt = f"""You are an expert providing actionable feedback on constraint and reference trajectory code for quadruped MPC trajectory optimization. A code-generation LLM will read your feedback to decide what to change. Every problem you identify must come with a concrete fix.{robot_context}
 
 == HOW CONSTRAINTS AND REFERENCE INTERACT ==
 
@@ -248,15 +285,17 @@ The reference must be physically plausible or the solver starts from an unrealis
 - GRF must be zero during flight phases, ~mg/n_feet during stance
 - Angular velocity during flight must be constant (momentum conservation, no external torques)
 - Angles must integrate from angular velocities — don't set angles without matching omega
+- For aerial rotations, orientation change must occur during flight — orientation
+  constraints that are wide during ground phases allow the solver to rotate on the
+  ground instead of in the air
 
 == DATA YOU RECEIVE ==
 
 {_MOTION_QUALITY_LINE}
 {_DATA_DESCRIPTION}
-- MODE: Whether this is the first iteration, an incremental tweak, or a mandatory pivot (fundamentally different approach). Guides how aggressive your suggestions should be.
 - ITERATION HISTORY: Summaries of previous iterations — what was tried, scores, and what happened. Use this to avoid suggesting approaches that already failed and to build on what worked.
 
-Use ALL available data — the motion quality report, metrics, hardness data, violations, reference analysis, constraint code, solver status, and iteration history — to form your feedback. Do not rely on any single source; cross-reference the motion quality report with the numerical metrics to identify root causes accurately. Check the iteration history to ensure you do not suggest approaches that were already tried and failed.
+Use ALL available data — the motion quality report, metrics, hardness data, violations, reference analysis, constraint code, solver status, and iteration history — to form your feedback. Do not rely on any single source; cross-reference the motion quality report with the numerical metrics to identify root causes accurately. Check the iteration history to ensure you do not suggest approaches that were already tried and failed. Use your own judgment about whether to suggest incremental tweaks or a fundamentally different approach based on the score trajectory and iteration history.
 
 SOLVER FAILURE: If the solver status is "failed", this is the most critical issue. The motion quality report describes the debug trajectory — the solver's best attempt before giving up, NOT a valid solution. The metrics may look completely wrong or unrelated to the goal. Focus on WHY the solver failed and how to make the problem feasible: loosen bounds, fix phase timing, fix reference trajectory. A failed solver means the feasible region is too small or the initial guess is too far from it.
 
@@ -264,27 +303,7 @@ SOLVER FAILURE: If the solver status is "failed", this is the most critical issu
 
 Your output must be ACTIONABLE FEEDBACK, not a summary. For every problem you identify, state what specific code is causing it, what concrete change to make (exact bound values, timing, parameters), and why that change will fix the problem.
 
-Write detailed prose paragraphs. No markdown headers, no bullet lists, no asterisks, no code blocks. Start by describing what the motion quality report shows vs what the task requires — highlight any CRITICAL or WARNING sections and what they imply about the trajectory's physical plausibility. Then give focused paragraphs on the highest-impact constraint and reference fixes, always explaining how they interact. End with a final paragraph of numbered priority actions (most impactful first), each stating the exact change to make."""
-
-    mode_text = ""
-    if pivot_signal == "pivot":
-        mode_text = (
-            "MODE: MANDATORY PIVOT\n"
-            "The current approach has stagnated or is declining. Suggest FUNDAMENTALLY DIFFERENT\n"
-            "constraint structures and reference trajectory shapes. Do not suggest incremental adjustments."
-        )
-    elif pivot_signal == "tweak":
-        mode_text = (
-            "MODE: ADJUSTMENT SUGGESTED\n"
-            "The current approach shows some promise. Suggest incremental changes — bound adjustments,\n"
-            "parameter tuning, timing shifts, reference peak tweaks. Keep the overall structure."
-        )
-    else:
-        mode_text = (
-            "MODE: FIRST ITERATION\n"
-            "This is the first attempt. Analyze the constraint and reference design and suggest improvements\n"
-            "based on the trajectory results."
-        )
+Write detailed prose paragraphs. No markdown headers, no bullet lists, no asterisks, no code blocks. Start by describing what the motion quality report shows vs what the task requires — highlight any metrics that indicate physical implausibility and what they imply about the trajectory quality. Then give focused paragraphs on the highest-impact constraint and reference fixes, always explaining how they interact. End with a final paragraph of numbered priority actions (most impactful first), each stating the exact change to make."""
 
     hardness_text = format_hardness_report(
         hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
@@ -293,7 +312,7 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
     metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
     solver_status = "converged" if opt_success else "failed"
 
-    # Format iteration history (same full-detail format as code-gen)
+    # Format iteration history (all iterations, full detail)
     history_lines: list[str] = []
     if iteration_summaries:
         total = len(iteration_summaries)
@@ -302,18 +321,7 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
             f"Detailed analysis of iteration {iteration} follows below."
         )
 
-        full_detail_start = max(0, total - 3)
-
-        for i, entry in enumerate(iteration_summaries):
-            if i >= full_detail_start:
-                break
-            status_label = "SOLVER CONVERGED" if entry.get("success") else "SOLVER FAILED"
-            history_lines.append(
-                f"  Iter {entry.get('iteration', '?')} [{status_label}] "
-                f"Score: {entry.get('score', 0):.2f}"
-            )
-
-        for entry in iteration_summaries[full_detail_start:]:
+        for entry in iteration_summaries:
             status_label = "SOLVER CONVERGED" if entry.get("success") else "SOLVER FAILED"
             history_lines.append("")
             history_lines.append(
@@ -350,7 +358,6 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
 <motion_quality>
 {motion_quality_report if motion_quality_report else "No motion quality report available."}
 </motion_quality>
-<mode>{mode_text}</mode>
 <solver status="{solver_status}">{format_error_info(error_info)}</solver>
 <constraint_code>
 {constraint_code}
