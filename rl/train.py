@@ -31,12 +31,7 @@ import optax
 import config
 from mpc.dynamics.model import KinoDynamic_Model
 
-from .callbacks import (
-    get_log,
-    save_reward_curve,
-    set_log_dir,
-    write_training_header_jax,
-)
+from .callbacks import get_log, save_reward_curve, set_log_dir, write_training_header_jax
 from .feedforward import FeedforwardComputer
 from .ppo import (
     ActorCritic,
@@ -50,7 +45,6 @@ from .ppo import (
     update_normalizer,
 )
 from .reference import ReferenceTrajectory
-from .rollout import execute_policy_rollout
 from .tracking_env import (
     get_obs,
     load_mjx_model,
@@ -60,6 +54,7 @@ from .tracking_env import (
 from .tracking_env import (
     step as env_step,
 )
+from .rollout import execute_policy_rollout
 
 
 def build_reference(
@@ -101,9 +96,7 @@ def train(args: argparse.Namespace) -> None:
     # Load reference trajectory (CPU)
     log.info("Loading reference trajectory...")
     ref, kindyn = build_reference(
-        args.state_traj,
-        args.grf_traj,
-        args.joint_vel_traj,
+        args.state_traj, args.grf_traj, args.joint_vel_traj,
         contact_sequence_path=args.contact_sequence,
         control_dt=args.control_dt,
     )
@@ -133,14 +126,10 @@ def train(args: argparse.Namespace) -> None:
     n_minibatches = max(1, per_device_samples // 5000)
     batch_size = per_device_samples // n_minibatches
 
-    log.info(
-        f"Training: {args.total_timesteps} steps, {num_envs} envs "
-        f"({envs_per_device}/GPU x {n_devices} GPUs)"
-    )
-    log.info(
-        f"  {n_steps} steps/update, {n_updates} updates, {n_epochs} epochs, "
-        f"{n_minibatches} minibatches of {batch_size}"
-    )
+    log.info(f"Training: {args.total_timesteps} steps, {num_envs} envs "
+             f"({envs_per_device}/GPU x {n_devices} GPUs)")
+    log.info(f"  {n_steps} steps/update, {n_updates} updates, {n_epochs} epochs, "
+             f"{n_minibatches} minibatches of {batch_size}")
 
     # Initialize network
     network = ActorCritic(action_dim=12)
@@ -151,7 +140,6 @@ def train(args: argparse.Namespace) -> None:
 
     # Optimizer with LR schedule
     lr_denom = n_epochs * n_minibatches
-
     def lr_schedule(step):
         return 1e-3 * (0.999 ** (step / lr_denom))
 
@@ -168,7 +156,6 @@ def train(args: argparse.Namespace) -> None:
 
     # --- Initialize envs (num_envs total, then reshape for pmap) ---
     log.info("Initializing environments...")
-
     def reset_one(rng):
         return reset_fast(rng, mjx_data_template, ref_data, randomize=True)
 
@@ -210,7 +197,9 @@ def train(args: argparse.Namespace) -> None:
 
         # Per-update friction DR: generate on each device, sync via all_gather
         rng, dr_rng = jax.random.split(rng)
-        friction_coeff = jnp.clip(0.8 + jax.random.normal(dr_rng, ()) * 0.25, 0.1, 1.0)
+        friction_coeff = jnp.clip(
+            0.8 + jax.random.normal(dr_rng, ()) * 0.25, 0.1, 1.0
+        )
         friction_coeff = jax.lax.all_gather(friction_coeff, axis_name="d")[0]
         dr_model = mjx_model.replace(
             geom_friction=mjx_model.geom_friction.at[:, 0].set(friction_coeff),
@@ -218,7 +207,6 @@ def train(args: argparse.Namespace) -> None:
 
         def _step_fn(state, action):
             return env_step(state, action, dr_model, ref_data)
-
         # ---- Rollout collection ----
         def scan_body(carry, _):
             states, norm, rng = carry
@@ -239,15 +227,7 @@ def train(args: argparse.Namespace) -> None:
 
             norm = update_normalizer(norm, obs)
 
-            return (new_states, norm, rng), (
-                obs_norm,
-                actions,
-                log_probs,
-                values,
-                rewards,
-                dones,
-                rw_info,
-            )
+            return (new_states, norm, rng), (obs_norm, actions, log_probs, values, rewards, dones, rw_info)
 
         (env_states, normalizer, rng), rollout = jax.lax.scan(
             scan_body, (env_states, normalizer, rng), None, length=n_steps
@@ -282,19 +262,13 @@ def train(args: argparse.Namespace) -> None:
                 idx = jax.lax.dynamic_slice(perm, (mb_idx * batch_size,), (batch_size,))
                 grad_fn = jax.grad(ppo_loss, has_aux=True)
                 grads, info = grad_fn(
-                    params,
-                    apply_fn,
-                    obs_f[idx],
-                    act_f[idx],
-                    lp_f[idx],
-                    adv_f[idx],
-                    ret_f[idx],
-                    clip_range,
-                    vf_coef,
-                    ent_coef,
+                    params, apply_fn, obs_f[idx], act_f[idx], lp_f[idx],
+                    adv_f[idx], ret_f[idx], clip_range, vf_coef, ent_coef,
                 )
                 # Grad norm before clipping
-                grad_norm = jnp.sqrt(sum(jnp.sum(x**2) for x in jax.tree.leaves(grads)))
+                grad_norm = jnp.sqrt(sum(
+                    jnp.sum(x**2) for x in jax.tree.leaves(grads)
+                ))
                 info["grad_norm"] = grad_norm
                 # Sync gradients across GPUs
                 grads = jax.lax.pmean(grads, axis_name="d")
@@ -457,9 +431,7 @@ def train(args: argparse.Namespace) -> None:
             best_ep_return = ep_return
             params_cpu = jax.tree.map(lambda x: x[0], params)
             norm_cpu = NormalizerState(
-                mean=normalizer.mean[0],
-                var=normalizer.var[0],
-                count=normalizer.count[0],
+                mean=normalizer.mean[0], var=normalizer.var[0], count=normalizer.count[0]
             )
             best_params_cpu = params_cpu
             best_norm_cpu = norm_cpu
@@ -472,16 +444,10 @@ def train(args: argparse.Namespace) -> None:
             log.info(f"  Rendering tracking video at step {total_steps:,}...")
             try:
                 import imageio
-
                 _, _, _, images = execute_policy_rollout(
-                    ref.state_traj,
-                    ref.grf_traj,
-                    ref.joint_vel_traj,
-                    kindyn,
-                    best_params_cpu,
-                    apply_fn,
-                    normalizer=best_norm_cpu,
-                    render=True,
+                    ref.state_traj, ref.grf_traj, ref.joint_vel_traj,
+                    kindyn, best_params_cpu, apply_fn,
+                    normalizer=best_norm_cpu, render=True,
                 )
                 if images:
                     video_path.parent.mkdir(parents=True, exist_ok=True)
@@ -489,33 +455,25 @@ def train(args: argparse.Namespace) -> None:
                     imageio.mimsave(str(video_path), images, fps=fps)
                     log.info(f"  Video saved: {video_path}")
                 else:
-                    log.info("  No frames captured for video")
+                    log.info(f"  No frames captured for video")
             except Exception as e:
                 log.info(f"  Video render failed: {e}")
             next_video_step = (total_steps // 1_000_000 + 1) * 1_000_000
 
         # Save checkpoint periodically
-        if (update_idx + 1) % max(
-            1, n_updates // 10
-        ) == 0 or update_idx == n_updates - 1:
+        if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:
             params_cpu = jax.tree.map(lambda x: x[0], params)
             norm_cpu = NormalizerState(
-                mean=normalizer.mean[0],
-                var=normalizer.var[0],
-                count=normalizer.count[0],
+                mean=normalizer.mean[0], var=normalizer.var[0], count=normalizer.count[0]
             )
             ckpt_path = str(output_dir / "checkpoints" / f"step_{total_steps}")
             save_checkpoint(ckpt_path, params_cpu, norm_cpu, total_steps)
 
         # Save plots periodically
-        if (update_idx + 1) % max(
-            1, n_updates // 5
-        ) == 0 or update_idx == n_updates - 1:
+        if (update_idx + 1) % max(1, n_updates // 5) == 0 or update_idx == n_updates - 1:
             save_reward_curve(
-                np.array(reward_history),
-                np.array(timestep_history),
-                str(output_dir),
-                total_steps,
+                np.array(reward_history), np.array(timestep_history),
+                str(output_dir), total_steps
             )
 
     elapsed = time.time() - t_start
@@ -541,9 +499,7 @@ def train(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Train OPT-Mimic tracking policy (JAX/MJX)"
-    )
+    parser = argparse.ArgumentParser(description="Train OPT-Mimic tracking policy (JAX/MJX)")
     parser.add_argument("--state-traj", type=str, required=True)
     parser.add_argument("--grf-traj", type=str, required=True)
     parser.add_argument("--joint-vel-traj", type=str, required=True)
