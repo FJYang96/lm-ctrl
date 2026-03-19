@@ -32,6 +32,7 @@ from .llm_evaluation import (
 
 # Shared across all three calls — does NOT include trajectory frames
 _DATA_DESCRIPTION = """- TASK COMMAND: The user's task description specifying what the robot should do (e.g. "jump 0.3m high" or "backflip").
+- MOTION QUALITY REPORT: Computed metrics analyzing the physical quality of the trajectory — smoothness (jerk), ground penetration, GRF-contact consistency, friction cone compliance, angular momentum conservation, energy continuity, terminal stability, contact quality, and joint feasibility. Each section provides raw numerical metrics. Use these to assess physical plausibility in context of the task.
 - METRICS: Numerical trajectory data (positions, velocities, orientations, timing, GRF, actuator loads).
 - HARDNESS DATA: Raw constraint slack values and violation timesteps. Larger slack = solver had to relax the constraint more.
 - VIOLATIONS: Which constraints were violated and where.
@@ -39,21 +40,19 @@ _DATA_DESCRIPTION = """- TASK COMMAND: The user's task description specifying wh
 - CONSTRAINT CODE: The full constraint and reference trajectory code that produced this result.
 - SOLVER STATUS: Whether the optimizer converged or failed. Includes error details if failed."""
 
-# Prepended by scoring and feedback (which receive the motion quality report)
-_MOTION_QUALITY_LINE = """- MOTION QUALITY REPORT: Computed metrics analyzing the physical quality of the trajectory — \
-smoothness (jerk), ground penetration, GRF-contact consistency, friction cone compliance, \
-angular momentum conservation, energy continuity, terminal stability, contact quality, and \
-joint feasibility. Each section provides raw numerical metrics. Use these to assess physical \
-plausibility in context of the task."""
-
 
 # ---------------------------------------------------------------------------
 # 1. Scoring
 # ---------------------------------------------------------------------------
 
 
-def _save_prompt(run_dir: Path | None, label: str, iteration: int,
-                  system_prompt: str, user_message: str) -> None:
+def _save_prompt(
+    run_dir: Path | None,
+    label: str,
+    iteration: int,
+    system_prompt: str,
+    user_message: str,
+) -> None:
     """Save a prompt to disk for debugging."""
     if run_dir is None:
         return
@@ -128,7 +127,6 @@ Read the task command to understand what was asked. Use ALL available data — t
 
 == DATA YOU RECEIVE ==
 
-{_MOTION_QUALITY_LINE}
 {_DATA_DESCRIPTION}
 
 == SCORING CRITERIA ==
@@ -177,26 +175,48 @@ Return ONLY valid JSON, no markdown, no extra text."""
         "CONVERGED (success)" if opt_success else "FAILED (did not converge)"
     )
 
-    user_message = f"""<task>{command}</task>
-<motion_quality>
+    error_text = format_error_info(error_info)
+    error_line = f"\n{error_text}" if error_text else ""
+
+    user_message = f"""{"=" * 60}
+                      TASK COMMAND
+{"=" * 60}
+{command}
+
+{"=" * 60}
+             SOLVER STATUS FOR THIS ITERATION
+{"=" * 60}
+{solver_status}{error_line}
+
+{"=" * 60}
+          MOTION QUALITY REPORT FOR THIS ITERATION
+{"=" * 60}
 {motion_quality_report if motion_quality_report else "No motion quality report available."}
-</motion_quality>
-<solver status="{solver_status}">{format_error_info(error_info)}</solver>
-<metrics>
+
+{"=" * 60}
+           TRAJECTORY METRICS FOR THIS ITERATION
+{"=" * 60}
 {metrics_text}
-</metrics>
-<constraint_code>
-{constraint_code}
-</constraint_code>
-<hardness>
+
+{"=" * 60}
+           CONSTRAINT HARDNESS FOR THIS ITERATION
+{"=" * 60}
 {hardness_text if hardness_text else "Not available"}
-</hardness>
-<violations>
+
+{"=" * 60}
+          CONSTRAINT VIOLATIONS FOR THIS ITERATION
+{"=" * 60}
 {format_violations(constraint_violations)}
-</violations>
-<reference_analysis>
+
+{"=" * 60}
+           REFERENCE ANALYSIS FOR THIS ITERATION
+{"=" * 60}
 {reference_analysis if reference_analysis else "Not available"}
-</reference_analysis>
+
+{"=" * 60}
+            CONSTRAINT CODE FOR THIS ITERATION
+{"=" * 60}
+{constraint_code}
 
 Evaluate how well this trajectory achieves the commanded task."""
 
@@ -291,19 +311,25 @@ The reference must be physically plausible or the solver starts from an unrealis
 
 == DATA YOU RECEIVE ==
 
-{_MOTION_QUALITY_LINE}
 {_DATA_DESCRIPTION}
-- ITERATION HISTORY: Summaries of previous iterations — what was tried, scores, and what happened. Use this to avoid suggesting approaches that already failed and to build on what worked.
+- ITERATION HISTORY: Summaries of previous iterations — what was tried, scores, and what happened. Each iteration always builds on the previous iteration's code, so changes are cumulative.
 
-Use ALL available data — the motion quality report, metrics, hardness data, violations, reference analysis, constraint code, solver status, and iteration history — to form your feedback. Do not rely on any single source; cross-reference the motion quality report with the numerical metrics to identify root causes accurately. Check the iteration history to ensure you do not suggest approaches that were already tried and failed. Use your own judgment about whether to suggest incremental tweaks or a fundamentally different approach based on the score trajectory and iteration history.
+Use ALL available data — the motion quality report, metrics, hardness data, violations, reference analysis, constraint code, solver status, and iteration history — to form your feedback. Do not rely on any single source; cross-reference the motion quality report with the numerical metrics to identify root causes accurately.
+
+Your recommended change can be a small tweak (adjusting a bound value, shifting timing) or a major pivot (restructuring constraints, redesigning the reference trajectory, changing the contact sequence). Use your judgment based on the score trajectory — if scores are improving, tweak; if scores are stuck or regressing, pivot.
+
+Use the iteration history summaries as reference, but note that a previously failed change may work now because the surrounding code has changed since then. Do not blindly avoid past suggestions — consider whether the current code context is different enough that a similar change could succeed this time.
 
 SOLVER FAILURE: If the solver status is "failed", this is the most critical issue. The motion quality report describes the debug trajectory — the solver's best attempt before giving up, NOT a valid solution. The metrics may look completely wrong or unrelated to the goal. Focus on WHY the solver failed and how to make the problem feasible: loosen bounds, fix phase timing, fix reference trajectory. A failed solver means the feasible region is too small or the initial guess is too far from it.
 
 == OUTPUT REQUIREMENTS ==
 
-Your output must be ACTIONABLE FEEDBACK, not a summary. For every problem you identify, state what specific code is causing it, what concrete change to make (exact bound values, timing, parameters), and why that change will fix the problem.
+Return a structured table with these fields, one per line, in this exact format: "Label    value". No markdown, no bullet lists, no asterisks, no code blocks.
 
-Write detailed prose paragraphs. No markdown headers, no bullet lists, no asterisks, no code blocks. Start by describing what the motion quality report shows vs what the task requires — highlight any metrics that indicate physical implausibility and what they imply about the trajectory quality. Then give focused paragraphs on the highest-impact constraint and reference fixes, always explaining how they interact. End with a final paragraph of numbered priority actions (most impactful first), each stating the exact change to make."""
+Status       <2-3 sentences (~500 chars): solver converged/failed, what the trajectory achieved vs task goal, key numbers>
+Violations   <one line (~250 chars): friction, constraint violations, slack summary>
+Root cause   <one line (~250 chars): the single biggest problem and what in the code causes it>
+Fix          <2-3 sentences (~500 chars): exactly ONE recommended change with specific parameter names, old→new values, and why it will help. Can target constraint bounds, constraint structure, reference trajectory, contact sequence timing, or phase durations.>"""
 
     hardness_text = format_hardness_report(
         hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
@@ -322,63 +348,89 @@ Write detailed prose paragraphs. No markdown headers, no bullet lists, no asteri
         )
 
         for entry in iteration_summaries:
-            status_label = "SOLVER CONVERGED" if entry.get("success") else "SOLVER FAILED"
+            status_label = (
+                "SOLVER CONVERGED" if entry.get("success") else "SOLVER FAILED"
+            )
             history_lines.append("")
             history_lines.append(
                 f"  Iter {entry.get('iteration', '?')} [{status_label}] "
                 f"Score: {entry.get('score', 0):.2f}"
             )
+            # Compact tabular fields (one line each)
+            _table_fields = [
+                ("Approach", "approach"),
+                ("Solver", "solver"),
+                ("Physics", "physics"),
+                ("Metrics", "metrics"),
+                ("Terminal", "terminal"),
+                ("Hardness", "hardness"),
+                ("Reference", "reference"),
+                ("Feedback", "feedback"),
+            ]
+            for label, key in _table_fields:
+                val = entry.get(key, "")
+                if val:
+                    history_lines.append(f"    {label:12s} {val}")
+    history_text = (
+        "\n".join(history_lines) if history_lines else "First iteration — no history."
+    )
 
-            approach = entry.get("approach", "")
-            if approach:
-                history_lines.append("    Approach:")
-                for line in approach.split("\n"):
-                    history_lines.append(f"      {line}")
+    error_text = format_error_info(error_info)
+    error_line = f"\n{error_text}" if error_text else ""
 
-            fb_summary = entry.get("feedback_summary", "")
-            if fb_summary:
-                history_lines.append("    Feedback:")
-                for line in fb_summary.split("\n"):
-                    history_lines.append(f"      {line}")
+    user_message = f"""{"=" * 60}
+                      TASK COMMAND
+{"=" * 60}
+{command}
 
-            sim_summary = entry.get("simulation_summary", "")
-            if sim_summary:
-                history_lines.append("    Simulation:")
-                for line in sim_summary.split("\n"):
-                    history_lines.append(f"      {line}")
-
-            metrics_summary = entry.get("metrics_summary", "")
-            if metrics_summary:
-                history_lines.append("    Metrics:")
-                for line in metrics_summary.split("\n"):
-                    history_lines.append(f"      {line}")
-    history_text = "\n".join(history_lines) if history_lines else "First iteration — no history."
-
-    user_message = f"""<task>{command}</task>
-<motion_quality>
-{motion_quality_report if motion_quality_report else "No motion quality report available."}
-</motion_quality>
-<solver status="{solver_status}">{format_error_info(error_info)}</solver>
-<constraint_code>
-{constraint_code}
-</constraint_code>
-<metrics>
-{metrics_text}
-</metrics>
-<violations>
-{format_violations(constraint_violations)}
-</violations>
-<hardness>
-{hardness_text if hardness_text else "Not available"}
-</hardness>
-<reference_analysis>
-{reference_analysis if reference_analysis else "Not available"}
-</reference_analysis>
-<iteration_history>
+{"=" * 60}
+                    ITERATION HISTORY
+{"=" * 60}
 {history_text}
-</iteration_history>
+--- END OF ITERATION HISTORY ---
 
-Provide unified feedback on both constraint design and reference trajectory. Start by describing what the motion quality report shows."""
+{"#" * 60}
+{"#" * 60}
+                    CURRENT ITERATION
+{"#" * 60}
+{"#" * 60}
+
+{"=" * 60}
+             SOLVER STATUS FOR THIS ITERATION
+{"=" * 60}
+{solver_status}{error_line}
+
+{"=" * 60}
+          MOTION QUALITY REPORT FOR THIS ITERATION
+{"=" * 60}
+{motion_quality_report if motion_quality_report else "No motion quality report available."}
+
+{"=" * 60}
+           TRAJECTORY METRICS FOR THIS ITERATION
+{"=" * 60}
+{metrics_text}
+
+{"=" * 60}
+           CONSTRAINT HARDNESS FOR THIS ITERATION
+{"=" * 60}
+{hardness_text if hardness_text else "Not available"}
+
+{"=" * 60}
+          CONSTRAINT VIOLATIONS FOR THIS ITERATION
+{"=" * 60}
+{format_violations(constraint_violations)}
+
+{"=" * 60}
+           REFERENCE ANALYSIS FOR THIS ITERATION
+{"=" * 60}
+{reference_analysis if reference_analysis else "Not available"}
+
+{"=" * 60}
+            CONSTRAINT CODE FOR THIS ITERATION
+{"=" * 60}
+{constraint_code}
+
+Provide unified feedback on both constraint design and reference trajectory."""
 
     _save_prompt(run_dir, "feedback", iteration, system_prompt, user_message)
 
@@ -410,6 +462,7 @@ def generate_iteration_summary(
     current_slack_weights: dict[str, float] | None = None,
     reference_analysis: str = "",
     constraint_violations: dict[str, Any] | None = None,
+    motion_quality_report: str = "",
     run_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Generate a structured iteration summary for the history log.
@@ -420,37 +473,27 @@ def generate_iteration_summary(
         hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
     )
 
-    system_prompt = f"""You are summarizing a trajectory optimization iteration for a history log. A code-generation LLM will read this summary to understand what was tried, what happened, and what to do differently next time. Be DETAILED and SPECIFIC — vague summaries are useless.
+    system_prompt = f"""You are summarizing a trajectory optimization iteration as a compact table for a history log. A code-generation LLM will read these summaries to understand what was tried and what happened. Be SPECIFIC with numbers — vague summaries are useless.
 
 == DATA YOU RECEIVE ==
 
 {_DATA_DESCRIPTION}
-- ITERATION NUMBER: Which iteration this is (0-indexed).
-- SCORE: The LLM-assigned score (0.0-1.0) for how well the trajectory matches the task goal. This is set automatically — do not include it in your output.
-- SIMULATION RESULT: Whether MuJoCo rendering succeeded or failed, and what the robot actually did.
-- FEEDBACK: The full unified feedback output from this iteration — actionable analysis covering constraint design, reference trajectory issues, and prioritized fixes. Summarize its key points, do not repeat it verbatim.
+- ITERATION NUMBER, SCORE, SIMULATION RESULT, FEEDBACK from the current iteration.
 
-Use ALL available data — metrics, hardness data, violations, reference analysis, constraint code, solver status, simulation result, and feedback — to build a comprehensive summary. Cross-reference multiple sources to ensure accuracy.
+Return a JSON object with these string fields — one per input data source. Each field is one line (~250 chars max), EXCEPT "approach" which can be 2-3 lines (~400 chars). No paragraphs, no bullet lists, no markdown.
 
-Return a JSON object with ONLY these 4 string fields:
 {{
-    "approach": "<prose paragraph>",
-    "feedback_summary": "<prose paragraph>",
-    "simulation_summary": "<prose paragraph>",
-    "metrics_summary": "<prose paragraph>"
+    "approach": "<2-3 lines: from CONSTRAINT CODE — describe this iteration's strategy: phase structure, durations, horizon, constraint variables and bounds, reference trajectory design>",
+    "solver": "<one line: from SOLVER STATUS — converged/failed, iteration count if failed, error type>",
+    "physics": "<one line: from MOTION QUALITY — friction violations, jerk, ground penetration, angular momentum conservation>",
+    "metrics": "<one line: from TRAJECTORY METRICS — goal progress (rotation/distance/height achieved vs target), key velocities>",
+    "terminal": "<one line: from TRAJECTORY METRICS — terminal velocities (vz, wz), final orientations (roll, pitch), final height>",
+    "hardness": "<one line: from CONSTRAINT HARDNESS — violated steps / total, total slack, worst constraint and timestep>",
+    "reference": "<one line: from REFERENCE ANALYSIS — height/pitch/vz RMSE, plausibility issues>",
+    "feedback": "<one line: from FEEDBACK — the root cause identified and the recommended fix (tweak or pivot) for next iteration>"
 }}
 
 Do NOT include iteration, score, or success fields — those are set automatically.
-
-All fields must be prose paragraphs. No markdown, no bullet lists, no asterisks, no code blocks.
-
-approach: Describe the constraint and reference strategy. Include contact sequence phases and durations, constraint variables with bounds and timing, and reference trajectory design with numerical targets. Explain how constraints and reference work together.
-
-feedback_summary: Summarize the unified feedback — what worked, what failed, root causes, and the prioritized fixes with concrete numbers.
-
-simulation_summary: Whether rendering succeeded or failed, what the robot actually did, landing quality, any visible issues.
-
-metrics_summary: Key numbers from trajectory metrics, hardness data, and reference analysis — rotation (rad and degrees), height, flight duration, solver status, terminal velocities, constraint slack values, reference RMSE.
 
 Return ONLY valid JSON, no extra text."""
 
@@ -465,29 +508,55 @@ Return ONLY valid JSON, no extra text."""
 
     solver_status = "converged" if opt_success else "failed"
 
-    user_message = f"""<task>{command}</task>
-<iteration>{iteration}</iteration>
-<score>{score:.2f}</score>
-<solver status="{solver_status}">{format_error_info(error_info)}</solver>
-<metrics>
+    error_text = format_error_info(error_info)
+    error_line = f"\n{error_text}" if error_text else ""
+
+    user_message = f"""{"=" * 60}
+                      TASK COMMAND
+{"=" * 60}
+{command}
+
+Iteration: {iteration} | Score: {score:.2f} | {sim_text}
+
+{"=" * 60}
+             SOLVER STATUS FOR THIS ITERATION
+{"=" * 60}
+{solver_status}{error_line}
+
+{"=" * 60}
+          MOTION QUALITY REPORT FOR THIS ITERATION
+{"=" * 60}
+{motion_quality_report if motion_quality_report else "Not available"}
+
+{"=" * 60}
+           TRAJECTORY METRICS FOR THIS ITERATION
+{"=" * 60}
 {metrics_text}
-</metrics>
-<hardness>
+
+{"=" * 60}
+           CONSTRAINT HARDNESS FOR THIS ITERATION
+{"=" * 60}
 {hardness_text if hardness_text else "Not available"}
-</hardness>
-<violations>
+
+{"=" * 60}
+          CONSTRAINT VIOLATIONS FOR THIS ITERATION
+{"=" * 60}
 {format_violations(constraint_violations)}
-</violations>
-<reference_analysis>
+
+{"=" * 60}
+           REFERENCE ANALYSIS FOR THIS ITERATION
+{"=" * 60}
 {reference_analysis if reference_analysis else "Not available"}
-</reference_analysis>
-<simulation>{sim_text}</simulation>
-<constraint_code>
+
+{"=" * 60}
+            CONSTRAINT CODE FOR THIS ITERATION
+{"=" * 60}
 {constraint_code}
-</constraint_code>
-<feedback>
-{feedback if feedback else "None"}
-</feedback>"""
+
+{"=" * 60}
+              FEEDBACK FOR THIS ITERATION
+{"=" * 60}
+{feedback if feedback else "None"}"""
 
     _save_prompt(run_dir, "summary", iteration, system_prompt, user_message)
 
@@ -507,7 +576,11 @@ Return ONLY valid JSON, no extra text."""
             "score": score,
             "success": opt_success,
             "approach": "Summary generation failed",
-            "feedback_summary": "",
-            "simulation_summary": "",
-            "metrics_summary": metrics_text,
+            "solver": "",
+            "physics": "",
+            "metrics": "",
+            "terminal": "",
+            "hardness": "",
+            "reference": "",
+            "feedback": "",
         }

@@ -74,7 +74,12 @@ def generate_constraints(
 
     lines: list[str] = []
 
-    # === Header ===
+    # === Task Command ===
+    lines.append("=" * 60)
+    lines.append("                      TASK COMMAND")
+    lines.append("=" * 60)
+    lines.append(command if command else "No task command")
+    lines.append("")
     lines.append("=" * 60)
     lines.append(f"ITERATION {iteration} FEEDBACK")
     lines.append("=" * 60)
@@ -101,7 +106,9 @@ def generate_constraints(
     # === Iteration History (all iterations, full detail) ===
     summaries = iteration_summaries
     lines.append("")
-    lines.append("--- ITERATION HISTORY ---")
+    lines.append("=" * 60)
+    lines.append("                    ITERATION HISTORY")
+    lines.append("=" * 60)
     if summaries:
         total = len(summaries)
         lines.append(
@@ -115,46 +122,43 @@ def generate_constraints(
             lines.append(
                 f"  Iter {entry['iteration']} [{status_label}] Score: {entry['score']:.2f}"
             )
-
-            approach = entry["approach"]
-            if approach:
-                lines.append("    Approach:")
-                for line in approach.split("\n"):
-                    lines.append(f"      {line}")
-
-            fb_summary = entry["feedback_summary"]
-            if fb_summary:
-                lines.append("    Feedback:")
-                for line in fb_summary.split("\n"):
-                    lines.append(f"      {line}")
-
-            sim_summary = entry["simulation_summary"]
-            if sim_summary:
-                lines.append("    Simulation:")
-                for line in sim_summary.split("\n"):
-                    lines.append(f"      {line}")
-
-            metrics_summary = entry["metrics_summary"]
-            if metrics_summary:
-                lines.append("    Metrics:")
-                for line in metrics_summary.split("\n"):
-                    lines.append(f"      {line}")
+            # Compact tabular fields (one line each)
+            _table_fields = [
+                ("Approach", "approach"),
+                ("Solver", "solver"),
+                ("Physics", "physics"),
+                ("Metrics", "metrics"),
+                ("Terminal", "terminal"),
+                ("Hardness", "hardness"),
+                ("Reference", "reference"),
+                ("Feedback", "feedback"),
+            ]
+            for label, key in _table_fields:
+                val = entry.get(key, "")
+                if val:
+                    lines.append(f"    {label:12s} {val}")
     else:
         lines.append("  No previous iterations.")
 
     lines.append("")
     lines.append("--- END OF ITERATION HISTORY ---")
 
-    # === Current Iteration Detailed Analysis ===
+    # === Big separator between history and current iteration ===
     solver_label = "SOLVER CONVERGED" if opt_success else "SOLVER FAILED"
     lines.append("")
     lines.append("")
-    lines.append("=" * 60)
-    lines.append(
-        f"  CURRENT ITERATION DETAILED ANALYSIS  [{solver_label}]  Score: {score:.2f}"
-    )
-    lines.append("=" * 60)
+    lines.append("#" * 60)
+    lines.append("#" * 60)
+    lines.append(f"       CURRENT ITERATION  [{solver_label}]  Score: {score:.2f}")
+    lines.append("#" * 60)
+    lines.append("#" * 60)
 
+    # === Solver Status ===
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("             SOLVER STATUS FOR THIS ITERATION")
+    lines.append("=" * 60)
+    lines.append(solver_label)
     if not opt_success:
         error_msg = optimization_metrics.get("error_message", "")
         solver_iters = optimization_metrics.get("solver_iterations")
@@ -164,15 +168,23 @@ def generate_constraints(
         if solver_iters:
             error_parts.append(f"Solver iterations: {solver_iters}")
         if error_parts:
-            lines.append("")
-            lines.append("SOLVER FAILURE: " + " | ".join(error_parts))
+            lines.append(" | ".join(error_parts))
 
-    # === METRICS ===
+    # === Motion Quality Report ===
     lines.append("")
     lines.append("=" * 60)
-    lines.append("              METRICS FOR THIS ITERATION")
+    lines.append("          MOTION QUALITY REPORT FOR THIS ITERATION")
     lines.append("=" * 60)
+    if motion_quality_report:
+        lines.append(motion_quality_report)
+    else:
+        lines.append("No motion quality report available.")
 
+    # === Trajectory Metrics ===
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("           TRAJECTORY METRICS FOR THIS ITERATION")
+    lines.append("=" * 60)
     if trajectory_analysis:
         metrics_lines = format_trajectory_metrics_section(
             trajectory_analysis, opt_success
@@ -180,46 +192,46 @@ def generate_constraints(
         for ml in metrics_lines:
             lines.append(ml)
 
+    # === Constraint Hardness ===
     hardness_report = optimization_metrics["hardness_report"]
     hardness_text = format_hardness_report(
         hardness_report, dt=dt, current_slack_weights=current_slack_weights
     )
-    if hardness_text:
-        lines.append("")
-        lines.append(hardness_text)
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("           CONSTRAINT HARDNESS FOR THIS ITERATION")
+    lines.append("=" * 60)
+    lines.append(hardness_text if hardness_text else "Not available")
 
+    # === Constraint Violations ===
     violations_text = format_violations(constraint_violations)
     lines.append("")
-    lines.append("CONSTRAINT VIOLATIONS:")
+    lines.append("=" * 60)
+    lines.append("          CONSTRAINT VIOLATIONS FOR THIS ITERATION")
+    lines.append("=" * 60)
     lines.append(violations_text)
 
+    # === Reference Analysis ===
     ref_trajectory_data = opt_result["ref_trajectory_data"]
     state_trajectory = opt_result["state_trajectory"]
     ref_analysis = _compute_reference_metrics(ref_trajectory_data, state_trajectory, dt)
     lines.append("")
+    lines.append("=" * 60)
+    lines.append("           REFERENCE ANALYSIS FOR THIS ITERATION")
+    lines.append("=" * 60)
     lines.append(ref_analysis)
 
-    # === MOTION QUALITY ANALYSIS ===
+    # === Constraint Code ===
     lines.append("")
     lines.append("=" * 60)
-    lines.append("        MOTION QUALITY ANALYSIS FOR THIS ITERATION")
-    lines.append("=" * 60)
-    if motion_quality_report:
-        lines.append(motion_quality_report)
-    else:
-        lines.append("No motion quality report available.")
-
-    # === ENTIRE CODE ===
-    lines.append("")
-    lines.append("=" * 60)
-    lines.append("            ENTIRE CODE FOR THIS ITERATION")
+    lines.append("            CONSTRAINT CODE FOR THIS ITERATION")
     lines.append("=" * 60)
     lines.append(constraint_code)
 
-    # === ENTIRE FEEDBACK ===
+    # === Feedback ===
     lines.append("")
     lines.append("=" * 60)
-    lines.append("          ENTIRE FEEDBACK FOR THIS ITERATION")
+    lines.append("              FEEDBACK FOR THIS ITERATION")
     lines.append("=" * 60)
     if feedback:
         lines.append(feedback)
@@ -234,14 +246,10 @@ def generate_constraints(
     lines.append("=" * 60)
     lines.append("Generate improved constraints and reference trajectory.")
     lines.append(
-        "You MUST follow the feedback's numbered priority actions. "
-        "Implement each one unless you have a specific, stated reason not to. "
-        "In particular: if the feedback says to change the flight duration, "
-        "constraint structure, or reference trajectory design, you must make "
-        "those exact changes — do not substitute a different change instead. "
-        "Use the raw metrics, hardness data, violations, and reference analysis "
-        "to verify the feedback's reasoning, but the priority actions are your "
-        "primary instructions."
+        "The feedback above contains exactly ONE recommended change. "
+        "Implement that single change. Keep everything else in the code "
+        "identical to the current code above. Do not make additional "
+        "modifications beyond what the feedback recommends."
     )
     lines.append("Return ONLY Python code.")
     lines.append("=" * 60)

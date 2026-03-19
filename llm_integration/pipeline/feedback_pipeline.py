@@ -321,6 +321,7 @@ class FeedbackPipeline:
                     current_slack_weights=self.current_slack_weights,
                     reference_analysis=ref_analysis,
                     constraint_violations=constraint_violations,
+                    motion_quality_report=self.current_motion_quality_report,
                     run_dir=run_dir,
                 )
                 # Step 11: Collect feedback data for next iteration
@@ -359,9 +360,13 @@ class FeedbackPipeline:
                     "score": 0.0,
                     "success": False,
                     "approach": f"Iteration failed: {e}",
-                    "feedback_summary": "",
-                    "simulation_summary": "",
-                    "metrics_summary": str(e),
+                    "solver": "failed",
+                    "physics": "",
+                    "metrics": "",
+                    "terminal": "",
+                    "hardness": "",
+                    "reference": "",
+                    "feedback": str(e),
                 }
                 self.iteration_summaries.append(error_summary)
                 self.all_scores.append(0.0)

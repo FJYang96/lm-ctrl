@@ -106,8 +106,13 @@ def format_violations(constraint_violations: dict[str, Any] | None) -> str:
 
     # System constraint info (non-LLM keys)
     for key, val in constraint_violations.items():
-        if key in ("llm_constraints", "by_constraint", "constraint_meta", "summary",
-                    "llm_summary"):
+        if key in (
+            "llm_constraints",
+            "by_constraint",
+            "constraint_meta",
+            "summary",
+            "llm_summary",
+        ):
             continue
         if isinstance(val, list):
             for item in val:
@@ -135,7 +140,7 @@ def format_violations(constraint_violations: dict[str, Any] | None) -> str:
             n_out = 0
 
         # Group violations by element j
-        by_element: dict[int, list[dict]] = {}
+        by_element: dict[int, list[dict[str, Any]]] = {}
         for v in violations_list:
             j = v.get("element", 0)
             by_element.setdefault(j, []).append(v)
@@ -154,7 +159,9 @@ def format_violations(constraint_violations: dict[str, Any] | None) -> str:
             # Find worst violation (max |value - bound|)
             worst = max(
                 elem_violations,
-                key=lambda v: abs(v["value"] - v.get("lower", v.get("upper", v["value"]))),
+                key=lambda v: abs(
+                    v["value"] - v.get("lower", v.get("upper", v["value"]))
+                ),
             )
             worst_k = worst["k"]
             worst_val = worst["value"]
@@ -172,7 +179,9 @@ def format_violations(constraint_violations: dict[str, Any] | None) -> str:
             )
 
     # LLM summary (aggregate)
-    llm_summary = constraint_violations.get("llm_summary") or constraint_violations.get("summary")
+    llm_summary = constraint_violations.get("llm_summary") or constraint_violations.get(
+        "summary"
+    )
     if llm_summary and isinstance(llm_summary, list):
         if lines:
             lines.append("")
