@@ -26,6 +26,9 @@ def format_trajectory_metrics_section(
 
     ta = trajectory_analysis
 
+    if "error" in ta:
+        return [f"Trajectory analysis error: {ta['error']}"]
+
     # Position metrics
     lines.append("Position:")
     lines.append(
@@ -121,9 +124,11 @@ def format_trajectory_metrics_section(
             f = ta.get(f"{axis}_change_flight", 0)
             total = s + f
             if total > 0.01:  # only show if meaningful rotation occurred
+                stance_pct = s / total * 100
+                flight_pct = f / total * 100
                 lines.append(
-                    f"  {axis.capitalize()} change: stance={s:.2f} rad ({s*57.3:.0f} deg), "
-                    f"flight={f:.2f} rad ({f*57.3:.0f} deg)"
+                    f"  {axis.capitalize()} change: stance={s:.2f} rad ({s * 57.3:.0f} deg, {stance_pct:.0f}%), "
+                    f"flight={f:.2f} rad ({f * 57.3:.0f} deg, {flight_pct:.0f}%)"
                 )
 
         s_vel = ta.get("max_angular_vel_stance", 0)
@@ -145,7 +150,7 @@ def format_trajectory_metrics_text(
     """Format trajectory metrics as a single text string.
 
     This is the shared comprehensive formatter used by all LLM calls
-    (scoring, unified feedback, iteration summary).
+    (scoring, iteration summary, codegen).
     """
     if not trajectory_analysis:
         return "No trajectory data available"

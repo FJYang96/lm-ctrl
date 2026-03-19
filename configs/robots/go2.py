@@ -38,10 +38,12 @@ go2 = RobotData(
     urdf_filename=os.path.dirname(gym_quadruped.__file__) + "/robot_model/go2/go2.urdf",
     xml_filename=os.path.dirname(gym_quadruped.__file__) + "/robot_model/go2/go2.xml",
     joint_limits_lower=np.array(
-        [-0.8, -1.6, -2.6, -0.8, -1.6, -2.6, -0.8, -1.6, -2.6, -0.8, -1.6, -2.6]
+        # FL              FR              RL              RR
+        [-0.8, -1.57, -2.6, -0.8, -1.57, -2.6, -0.8, -0.52, -2.6, -0.8, -0.52, -2.6]
     ),
     joint_limits_upper=np.array(
-        [0.8, 1.6, -0.5, 0.8, 1.6, -0.5, 0.8, 1.6, -0.5, 0.8, 1.6, -0.5]
+        # FL              FR              RL              RR
+        [0.8, 1.6, -0.84, 0.8, 1.6, -0.84, 0.8, 1.6, -0.84, 0.8, 1.6, -0.84]
     ),
     robot_cfg=get_robot_config(robot_name="go2"),
     joint_velocity_limits=np.ones(12) * 10.0,

@@ -1,7 +1,7 @@
 """LLM clients and shared helpers for evaluation calls.
 
 Provides:
-- call_llm(): Claude-based text evaluation for scoring/feedback/summary
+- call_llm(): Claude-based text evaluation for scoring/summary
 - format_violations(), format_error_info(): Shared formatting helpers
 - extract_json_from_response(): JSON extraction from LLM responses
 """
@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from .format_metrics import format_trajectory_metrics_text  # noqa: F401 (re-export)
 
 # ---------------------------------------------------------------------------
-# Claude client (scoring, feedback, summary)
+# Claude client (scoring, summary, codegen)
 # ---------------------------------------------------------------------------
 
 _claude_client: anthropic.Anthropic | None = None

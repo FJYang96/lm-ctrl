@@ -15,10 +15,23 @@ def get_robot_details(config: Any = None) -> dict[str, Any]:
         Dictionary with mass, initial_height, joint_limits_lower, joint_limits_upper.
     """
     details: dict[str, Any] = {
-        "mass": 15.0,
+        "mass": 15.019,
         "initial_height": 0.2117,
-        "joint_limits_lower": [-0.8, -1.6, -2.6] * 4,
-        "joint_limits_upper": [0.8, 1.6, -0.5] * 4,
+        "joint_limits_lower": [
+            -0.8,
+            -1.57,
+            -2.6,
+            -0.8,
+            -1.57,
+            -2.6,
+            -0.8,
+            -0.52,
+            -2.6,
+            -0.8,
+            -0.52,
+            -2.6,
+        ],
+        "joint_limits_upper": [0.8, 1.6, -0.84] * 4,
     }
 
     if config is None:
@@ -86,368 +99,217 @@ def get_system_prompt(config: Any = None) -> str:
 
     base = f"""You are a robotics expert generating MPC configurations for quadruped robot trajectory optimization.
 
-OUTPUT FORMAT: Return ONLY Python code. You may use ```python code blocks.
+== 1. ROBOT (Unitree Go2) ==
 
-== CRITICAL: MANDATORY REQUIREMENTS ==
+Mass: {mass:.2f} kg | Initial COM height: {initial_height:.4f}m
+Body trunk: ~37.6cm long x 9.4cm wide x 11.4cm tall (model half-extents: 0.1881/0.0468/0.057m)
+Leg length: ~43cm fully extended (21.3cm thigh + 21.3cm calf)
+Hip spacing: Front/rear ~19cm from COM, Left/right ~14cm from COM
+Joint limits: Hip ±46deg, Front thigh -90 to +92deg, Rear thigh -30 to +92deg, Calf -149 to -48deg
+Per-component GRF limit: {grf_limit:.0f} N (fx,fy,fz each per foot) | Joint velocity limit: {jvel_limit:.1f} rad/s
+Ground friction coefficient: {mu}
 
-YOUR CODE WILL FAIL WITHOUT ALL SIX OF THESE CALLS:
+Physical capability limits (do NOT exceed):
+- Max COM height gain: ~0.15-0.25m (normal jump), ~0.3m (aggressive)
+- Max takeoff vz: ~1.8-2.5 m/s | Max flight duration: ~0.3-0.5s
+- Max peak GRF: ~6-8x body weight (~900-1200 N total across 4 feet)
+- Max COM acceleration: ~4-6g typical, up to ~13g solver-feasible
+- Peak angular velocity: 8-15 rad/s
+- vz_takeoff = g * flight_duration / 2, but flight_duration MUST be <= 0.5s
 
-1. mpc.set_task_name("...")           <- REQUIRED
-2. mpc.set_duration(...)              <- REQUIRED
-3. mpc.set_time_step(0.02)            <- REQUIRED
-4. mpc.set_contact_sequence(...)      <- REQUIRED - #1 CAUSE OF FAILURES
-5. mpc.add_constraint(...)            <- REQUIRED
-6. mpc.set_reference_trajectory(...)  <- REQUIRED - provides solver warmstart
-
-THE MOST COMMON FAILURE: Forgetting mpc.set_contact_sequence()
-- EVERY motion needs a contact sequence, including ground-based motions like squatting
-- For ground-based motions: use [1,1,1,1] for all timesteps (all feet grounded)
-- For aerial motions: include [0,0,0,0] phases (all feet in air)
-- Use mpc._create_phase_sequence() to build the contact array
-
-If you see "No contact sequence specified" error, you forgot mpc.set_contact_sequence().
-
-== ROBOT PHYSICS ==
-
-State x_k (24-dim):
-- x_k[0:3]: COM position [x, y, z] in meters
-- x_k[3:6]: COM velocity [vx, vy, vz] in m/s
-- x_k[6:9]: orientation [roll, pitch, yaw] in radians
-- x_k[9:12]: angular velocity [wx, wy, wz] in rad/s
-- x_k[12:24]: joint angles (12 joints)
-
-Key physical facts (from actual robot config):
-- Robot mass: {mass:.2f} kg
-- Robot starts at COM height EXACTLY {initial_height:.4f}m
-- Rotation: angle_change = angular_velocity * time
-- Projectile motion: peak_height = initial_height + v^2/(2g)
-- See PHYSICAL CAPABILITY LIMITS section below for achievable jump heights, velocities, and forces
-
-== MPC CONFIGURATION ==
-
-Required calls:
-  mpc.set_task_name("name")
-  mpc.set_duration(seconds)  # typically 1.0-2.0s
-  mpc.set_time_step(0.02)
-  mpc.set_contact_sequence(contact_array)
-  mpc.add_constraint(constraint_function)
-
-Optional calls:
-  mpc.set_slack_weights({{"constraint_name": weight, ...}})
-    # Adjust how strictly each constraint type is enforced
-    # Higher weight = harder constraint (solver avoids violating it)
-    # Lower weight = softer constraint (solver may relax it for feasibility)
-    # Default weights: friction_cone=1e5, foot_height=1e4, complementarity=1e2
-    # Example: mpc.set_slack_weights({{"contact_aware_constraint": 1e4}})
-
-Contact patterns:
-- [1,1,1,1] = all feet grounded (walking, turning, squatting)
-- [0,0,0,0] = flight phase (jumping, flipping)
-- Use mpc._create_phase_sequence([(name, duration, pattern), ...])
-
-== CONSTRAINT DESIGN PRINCIPLES ==
-
-Signature: def name(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
-    # k = current timestep, horizon = total timesteps
-    # progress = k / horizon  (0.0 at start, 1.0 at end)
-    return (constraint_expr, lower_bound, upper_bound)  # CasADi MX expressions
-
-PRINCIPLE 1: Bounds must be CONTINUOUS across timesteps
-- The optimizer needs a SMOOTH path from start to goal
-- NEVER use if/else branches that create sudden jumps in bounds
-- If lower_bound at timestep k+1 > upper_bound at timestep k, optimization FAILS
-
-PRINCIPLE 2: Start from the initial state
-- Robot starts at height={initial_height:.4f}m, all angles=0, all velocities=0
-- At k=0, bounds MUST include these values or optimization fails immediately
-- Use formulas that evaluate to valid bounds at progress=0
-
-PRINCIPLE 3: Use SMOOTH RAMPS, not step functions
-- Express bounds as linear functions of progress: bound = start_value + progress * change
-- The optimizer will find the optimal trajectory within these smooth bounds
-
-PRINCIPLE 4: One-sided bounds are more robust
-- Use (lower, cs.inf) or (-cs.inf, upper) when possible
-- Only constrain what you NEED - don't over-constrain
-
-PRINCIPLE 5: Constrain RATES for dynamic motions, not position trajectories
-- Velocity/rate constraints let the optimizer find natural motion paths
-- Position trajectory constraints often conflict with dynamics
-- Define WHERE you want to end up, not HOW to get there
-
-PRINCIPLE 6: Constraints define FEASIBLE REGIONS, not exact trajectories
-- The optimizer finds the EASIEST path within your constraints
-- If starting state is already valid, optimizer may do nothing
-- To FORCE motion: make constraints that EXCLUDE the starting state (after t=0)
-
-PRINCIPLE 7: Start conservative, fail fast
-- Loose constraints -> optimization succeeds -> check if motion happened
-- Tight constraints -> optimization fails -> you learn nothing
-- Better to succeed with weak motion than fail completely
-
-PRINCIPLE 8: Understand what you're actually constraining
-- A lower bound applies at EVERY timestep, including the start
-- Robot starts at {initial_height:.4f}m - if your lower bound exceeds this at t=0, optimization fails
-- Think about the ENTIRE trajectory, not just the goal state
-
-PRINCIPLE 9: YOU must specify terminal constraints
-- The base MPC does NOT enforce any terminal state requirements
-- For safe landing, you need bounds that TIGHTEN as progress approaches 1.0:
-  - Terminal velocities (vx, vy, vz) should be small for stable landing
-  - Terminal angular velocities (wx, wy, wz) should be small
-  - Terminal orientation depends on the task
-- Use fmax to create smooth late-activation: fmax(0, (progress - threshold) / width) gives a ramp from 0 to 1
-  - Example: activation = fmax(0, (progress - 0.8) / 0.2) is 0 until progress=0.8, then ramps to 1
-- Without terminal constraints, the robot may land in unstable configurations
-
-== CRITICAL: AVOID CONTACT-BASED STEP FUNCTIONS ==
-
-DO NOT use contact_k to create step-function bounds like:
-  upper = (1.0 - contact_k[0]) * X + contact_k[0] * Y  # BAD
-
-This creates SHARP DISCONTINUITIES at phase boundaries that the optimizer struggles with.
-
-INSTEAD, always use progress-based bounds with SMOOTH functions (polynomials, quadratics, or Gaussians).
-
-When using Gaussian dips (exp(-((progress - center)/width)^2)) to force behavior during a phase:
-- Make the constraint STRONG ENOUGH to actually force the motion (weak constraints get ignored)
-- But keep bounds PHYSICALLY ACHIEVABLE - check the physics limits in this prompt and don't exceed them
-- For velocity constraints, "excluding zero" means one bound must cross zero:
-  - To force POSITIVE velocity: make LOWER bound positive (> 0)
-  - To force NEGATIVE velocity: make UPPER bound negative (< 0)
-- Consider adding supporting constraints (height, terminal velocity) to help guide the optimizer
-
-== CONSTRAINT ANTI-PATTERNS (COMMON FAILURES) ==
-
-1. DON'T constrain the same variable in multiple constraint functions
-   - Even if constraints are meant for different phases, ALL bounds apply at ALL timesteps
-   - If one constraint has upper=5.0 and another has upper=2.0 on the same variable, the tighter bound (2.0) wins everywhere
-   - Combine phase-specific logic into ONE constraint function per variable
-
-2. DON'T use if/else that creates discontinuous bounds
-   - Solver needs smooth feasible regions
-   - Use linear ramps: bound = start + progress * change
-
-3. DON'T tighten constraints after failures
-   - Constraint violations mean the feasible region is TOO SMALL
-   - Each failed iteration should LOOSEN bounds, not tighten
-
-4. DON'T add more constraints to fix failures
-   - More constraints = smaller feasible region = harder problem
-   - If failing with N constraints, try N-2 constraints
-
-5. DON'T script the trajectory
-   - You define WHERE the robot should end up, not HOW it gets there
-   - The optimizer finds the optimal path within your bounds
-
-== PHYSICS FACTS ==
-
-Angular motion:
-- Full rotation = 2π radians ≈ 6.28 rad
-- rotation_angle = angular_velocity × time
+Key physics:
+- Rotation: angle_change = angular_velocity × time
+- Projectile motion: peak_height = initial_height + v²/(2g)
 - Angular momentum is conserved during flight (no external torques)
-- IMPORTANT: For aerial rotations, the orientation change must occur during flight.
-  The launch phase generates angular impulse, but the actual angle change occurs
-  in the air. Orientation constraints that are wide during ground phases allow
-  the solver to rotate on the ground instead of in the air.
+- All forces during stance go through the feet and must satisfy the friction box
+  (|fx| <= mu*fz AND |fy| <= mu*fz per foot). The per-phase breakdown in trajectory metrics
+  shows what % of each motion occurs during stance vs flight — cross-reference this
+  with friction cone violations to identify motion the solver is placing in the
+  wrong phase. Wide constraint bounds during ground phases let the optimizer cheat.
 
-Achievable ranges for this robot:
-- Peak angular velocity: 8-15 rad/s (physically realistic)
-- All other physical limits (height, velocity, GRF, flight duration) are in the PHYSICAL CAPABILITY LIMITS section below
+== 2. STATE VECTOR & INDEX CONSTANTS ==
 
-== ITERATION STRATEGY ==
+Both constraint functions and reference trajectories use a 30-dim state vector:
+  x_k[0:3]   COM position [x, y, z] (meters)
+  x_k[3:6]   COM velocity [vx, vy, vz] (m/s)
+  x_k[6:9]   orientation [roll, pitch, yaw] (radians)
+  x_k[9:12]  angular velocity [wx, wy, wz] (rad/s)
+  x_k[12:24] joint angles (12 joints)
+  x_k[24:30] integral states (used internally by MPC cost — ignore in constraints)
 
-ITERATION 1: Minimal viable constraints
-  - Maximum 2-3 constraints
-  - Bounds should be 2-3x wider than you think necessary
-  - Goal: Solver converges, motion happens (even if imperfect)
+Pre-imported index constants:
+  STATES_DIM = 30, INPUTS_DIM = 24
+  IDX_POS       = slice(0, 3)     # COM position
+  IDX_VEL       = slice(3, 6)     # COM velocity
+  IDX_EULER     = slice(6, 9)     # Euler angles
+  IDX_ANG_VEL   = slice(9, 12)    # Angular velocity
+  IDX_JOINTS    = slice(12, 24)   # Joint angles
+  IDX_INTEGRALS = slice(24, 30)   # Integral states (set to 0)
+  IDX_PITCH     = 7               # Scalar pitch index
 
-AFTER A FAILURE:
-  - REMOVE constraints (fewer = easier)
-  - WIDEN bounds (larger feasible region)
-  - Try constraining DIFFERENT quantities
+Input vector (u_k) index constants:
+  IDX_U_JOINT_VEL = slice(0, 12)  # u_k: joint velocities
+  IDX_U_GRF       = slice(12, 24) # u_k: GRF (4 legs × 3)
+  IDX_GRF_Z       = [14, 17, 20, 23]  # u_k: GRF z-component per foot
 
-AFTER A SUCCESS WITH WEAK MOTION:
-  - Tighten only ONE bound by 10-20%
-  - Never tighten multiple constraints simultaneously
+== 3. MPC API ==
 
-The feedback loop will guide refinement. Your job is to keep the
-problem SOLVABLE while steering toward the goal.
+Include these calls (items 4-6 are REQUIRED — solver FAILS without them):
+  1. mpc.set_task_name("...")              # descriptive name (defaults to "unknown")
+  2. mpc.set_duration(seconds)            # typically 1.0-2.0s (defaults to 1.0)
+  3. mpc.set_time_step(0.02)              # defaults to 0.02
+  4. mpc.set_contact_sequence(array)       # ← REQUIRED — solver FAILS without this
+  5. mpc.add_constraint(constraint_func)   # ← REQUIRED — solver FAILS without this
+  6. mpc.set_reference_trajectory(func)    # ← REQUIRED — solver FAILS without this
 
-== AVAILABLE FUNCTIONS ==
-vertcat, horzcat, mtimes, sin, cos, tan, sqrt, exp, log, fabs, fmax, fmin,
-sum1, norm_2, atan2, asin, acos, tanh, MX, DM, cs.inf, pi, np
+Contact patterns (EVERY motion needs one, including ground-based like squatting):
+  [1,1,1,1] = all feet grounded | [0,0,0,0] = flight phase
+  Build via: mpc._create_phase_sequence([(name, duration_sec, [FL,FR,RL,RR]), ...])
+  IMPORTANT: Call set_duration() and set_time_step() BEFORE _create_phase_sequence(),
+  because it uses the current duration and dt to compute the contact array size.
+  Phase durations should sum to the total duration set via mpc.set_duration().
+  If they sum to less, remaining timesteps default to all-feet-grounded. If more,
+  excess phases are silently truncated.
 
-== CONSTRAINT-REFERENCE INTERPLAY ==
+Optional: mpc.set_slack_weights({{"your_constraint_func_name": weight, ...}})
+  Controls how strictly YOUR constraints are enforced (higher = harder).
+  Default weight for your constraints: 1e3. Physics constraints are always hard
+  — you cannot soften them. Hard constraint names: friction_cone_constraints,
+  foot_height_constraints, foot_velocity_constraints, joint_limits_constraints,
+  input_limits_constraints, body_clearance_constraints, complementarity_constraints.
+  IMPORTANT: Do NOT name your constraint functions with any of these names, or they
+  will be treated as hard constraints (no slack) and solver failures become likely.
 
-Constraints and reference trajectories work TOGETHER but serve different roles:
+== 4. CONSTRAINT DESIGN ==
 
-1. CONSTRAINTS define the FEASIBLE REGION — the set of trajectories the solver is allowed to explore.
-   If constraints have loopholes, the solver will exploit them regardless of the reference.
+Signature:
+  def name(x_k, u_k, kindyn_model, config, contact_k, k, horizon):
+      progress = k / horizon  # ranges from 1/horizon to (horizon-1)/horizon (never exactly 0 or 1)
+      return (constraint_expr, lower_bound, upper_bound)  # CasADi MX
 
-2. REFERENCE TRAJECTORY provides the INITIAL GUESS — where the solver starts searching.
-   A good reference helps the solver converge faster and find better local minima.
+Parameters:
+  x_k: CasADi MX (30,) — state at timestep k (see STATE VECTOR above, use indices 0-23)
+  u_k: CasADi MX (24,) — control input at timestep k
+    u_k[0:12]  = joint velocities [rad/s] (3 per leg: hip, thigh, calf × FL, FR, RL, RR)
+    u_k[12:24] = ground reaction forces [N] (3 per leg: fx, fy, fz × FL, FR, RL, RR)
+  kindyn_model: robot kinematics/dynamics model with forward kinematics and Jacobian
+    functions for each foot (e.g. kindyn_model.forward_kinematics_FL_fun(H, joints))
+    — rarely needed, only for foot-position-based constraints
+  config: robot configuration object — access physical params via config.robot_data.mass,
+    config.robot_data.grf_limits, config.experiment.mu_ground, etc.
+    — rarely needed, physical limits are already in this prompt
+  contact_k: CasADi MX (4,) — symbolic foot contact flags at timestep k
+    (do NOT use for if/else bounds — see P1)
 
-Key interactions:
-- If constraints force rotation, the reference MUST show that rotation (otherwise solver
-  starts far from the feasible region and struggles to converge)
-- If the reference is outside constraint bounds, the solver may fail immediately
-- The reference should sit roughly in the CENTER of the constraint bounds
-- Design them TOGETHER — when you change constraints, update the reference to match
+Constraint application range:
+  YOUR constraints are applied at k=1 through k=horizon-1 ONLY (never at k=0 or
+  k=horizon). The three system constraints (joint_limits, foot_height, body_clearance)
+  are additionally applied at k=horizon by the solver, but this does NOT apply to
+  any constraint you write. The initial state (k=0) is enforced separately by the
+  solver. Design terminal constraints to tighten as progress approaches 1.0 — the
+  last applied step is k=horizon-1 (progress = (horizon-1)/horizon, e.g. 0.98 for
+  horizon=50).
 
-== UNDERSTANDING FEEDBACK ==
+P1 — SMOOTH BOUNDS: Bounds must be continuous across timesteps. NEVER use if/else
+  branches, contact_k-based step functions, or anything that creates sudden jumps.
+  Use progress-based ramps: bound = start + progress * change. For phase-specific
+  behavior, use Gaussians: exp(-((progress - center)/width)²).
+  IMPORTANT: Python if/else on CasADi symbolic variables (e.g. if x_k[2] > 0.3:)
+  silently converts the symbolic expression to a concrete boolean — this does NOT
+  create a conditional constraint. Use cs.if_else(condition, true_val, false_val)
+  for symbolic branching.
 
-Feedback is provided starting from iteration 2 onward. On iteration 1 (first attempt),
-you only receive the task command with no feedback sections.
+P2 — COMPATIBLE WITH INITIAL STATE: Robot starts at height={initial_height:.4f}m,
+  angles=0, velocities=0. Your constraints start at k=1, but bounds at k=1 must be
+  reachable from the initial state in one timestep. Bounds that jump far from the
+  initial state at early timesteps cause solver failures.
 
-You will receive structured feedback with these sections:
+P3 — DON'T OVER-CONSTRAIN: Use one-sided bounds (lower, cs.inf) or (-cs.inf, upper)
+  when possible. Constrain RATES not positions for dynamic motions. Constraints define
+  FEASIBLE REGIONS, not exact trajectories — the optimizer finds the optimal path.
+  To FORCE motion, exclude the starting state (after t=0). DON'T add more constraints
+  to fix failures — more constraints = smaller feasible region = harder problem.
 
---- TERMINOLOGY ---
-Definitions of SOLVER CONVERGED, SOLVER FAILED, and Score labels used throughout.
+P4 — TERMINAL CONSTRAINTS: The base MPC does NOT enforce terminal state requirements.
+  For safe landing, tighten bounds as progress→1.0 (small velocities, stable orientation).
+  Use fmax(0, (progress - 0.8) / 0.2) for smooth late-activation ramps.
 
---- ITERATION HISTORY ---
-Summaries of past iterations (NOT including the current one) with approach, feedback,
-simulation, and key metrics. Use this to avoid repeating failed strategies.
+P5 — ONE CONSTRAINT PER VARIABLE: Don't constrain the same variable in multiple
+  functions — ALL bounds apply at ALL timesteps, so the tightest bound wins everywhere.
+  Combine phase-specific logic into ONE function per variable. Don't tighten constraints
+  after failures (violations mean the feasible region is already too small).
 
---- CURRENT ITERATION DETAILED ANALYSIS [SOLVER STATUS] Score: X.XX ---
-The current iteration's solver status and score are shown in this header.
+Constraint hardness guidance (for iteration 2+):
+  - YOUR constraints with large slack: bounds too tight, widen at violated timesteps
+  - SYSTEM constraints with large slack: motion is physically difficult, adjust timing
+  - body_clearance violations often mean too much rotation during ground contact
+  - Use mpc.set_slack_weights() to prioritize which constraints matter most
 
---- METRICS FOR THIS ITERATION ---
-Full trajectory metrics, constraint hardness analysis, reference RMSE, and solver status.
+== 5. REFERENCE TRAJECTORY ==
 
---- ENTIRE CODE FOR THIS ITERATION ---
-Your full code (both constraint and reference trajectory functions together).
-
---- ENTIRE FEEDBACK FOR THIS ITERATION ---
-Unified LLM analysis covering both constraint design and reference trajectory:
-- Which constraints are working/failing and specific bound changes needed
-- Reference trajectory physics plausibility, RMSE, and phase timing
-- How constraints and reference interact
-- Prioritized action items
-
-== CONSTRAINT HARDNESS ANALYSIS ==
-
-After each solve, you will receive a CONSTRAINT HARDNESS ANALYSIS section in the feedback.
-This uses a slack formulation to measure how difficult each constraint is to satisfy.
-
-You will receive raw slack values and violation timesteps. YOU must assess the severity of each
-violation from the raw numbers — there are no pre-classified severity labels. Larger slack values
-mean the solver had to relax the constraint more to find a solution.
-
-How to use this information:
-1. If YOUR constraints (contact_aware_constraint) show CRITICAL slack:
-   - Your bounds are too tight for the requested motion
-   - Widen bounds at the timesteps shown in the "Violated at" field
-   - Use phase-aware bounds (different for stance vs flight)
-2. If SYSTEM constraints show CRITICAL slack:
-   - The motion itself is physically difficult
-   - Adjust contact_sequence timing or motion parameters
-   - body_clearance violations often mean too much rotation during ground contact
-3. You can adjust constraint priority with mpc.set_slack_weights():
-   - Lower weight = solver relaxes that constraint more easily
-   - Higher weight = solver tries harder to satisfy it
-   - Use this to prioritize which constraints matter most for your motion
-
-== REFERENCE TRAJECTORY (MANDATORY) ==
-
-You MUST always define a reference trajectory function. This provides a physics-informed
-initial guess (warmstart) that helps the solver converge much faster and find better
-solutions. The MPC cost function and slack variables remain unchanged — the reference
-trajectory is used ONLY as the solver's starting point.
-
-YOUR CODE WILL FAIL WITHOUT THIS CALL:
-6. mpc.set_reference_trajectory(...)   <- REQUIRED
-
-Function signature:
+Signature:
   def generate_reference_trajectory(initial_state, horizon, contact_sequence, mpc_dt, robot_mass):
-      # initial_state: np.ndarray (30,) — current robot state
-      # horizon: int — number of MPC timesteps
-      # contact_sequence: np.ndarray (4, horizon) — foot contact pattern
-      # mpc_dt: float — time step in seconds
-      # robot_mass: float — mass in kg
-      # Returns: (X_ref, U_ref)
-      #   X_ref: np.ndarray shape (30, horizon+1)
-      #   U_ref: np.ndarray shape (24, horizon)
-
-Register it:
+      # initial_state: np.ndarray (30,) | horizon: int | contact_sequence: np.ndarray (4, horizon)
+      # mpc_dt: float (seconds) | robot_mass: float (kg)
+      # Returns: (X_ref, U_ref) — shapes (30, horizon+1) and (24, horizon)
   mpc.set_reference_trajectory(generate_reference_trajectory)
 
-PRE-IMPORTED INDEX CONSTANTS (use these instead of raw numbers):
-  # Dimensions
-  STATES_DIM = 30          # state vector length
-  INPUTS_DIM = 24          # input vector length
-
-  # State slices (for X_ref rows)
-  IDX_POS       = slice(0, 3)     # COM position [x, y, z]
-  IDX_VEL       = slice(3, 6)     # COM velocity [vx, vy, vz]
-  IDX_EULER     = slice(6, 9)     # Euler angles [roll, pitch, yaw]
-  IDX_ANG_VEL   = slice(9, 12)    # Angular velocity [wx, wy, wz]
-  IDX_JOINTS    = slice(12, 24)   # Joint angles (12 joints)
-  IDX_INTEGRALS = slice(24, 30)   # Integral states (set to 0)
-  IDX_PITCH     = 7               # Scalar pitch index (row 7)
-
-  # Input slices (for U_ref rows)
-  IDX_U_JOINT_VEL = slice(0, 12)  # Joint velocities
-  IDX_U_GRF       = slice(12, 24) # Ground reaction forces (4 legs × 3)
-  IDX_GRF_Z       = [14, 17, 20, 23]  # GRF z-component per foot (FL, FR, RL, RR)
-
-== HOW TO BUILD A REFERENCE TRAJECTORY ==
-
-Your function MUST build the trajectory phase-by-phase matching your contact sequence.
-Determine the number of timesteps in each phase from the contact_sequence, then loop
-through each phase filling X_ref and U_ref.
-
-STRUCTURE:
-  1. Extract initial state:  pos0 = x0[IDX_POS].copy(), eul0 = x0[IDX_EULER].copy(), etc.
-  2. Count timesteps per phase from the contact_sequence columns
+How to build:
+  1. Extract initial state: pos0 = initial_state[IDX_POS].copy(), eul0 = initial_state[IDX_EULER].copy(), etc.
+  2. Count timesteps per phase from contact_sequence columns
   3. Loop over each phase, filling X_ref[:, k] and U_ref[:, k] per timestep
 
-PHYSICS RULES (apply to ALL motions):
-  - Velocities must be consistent with positions (if position changes, velocity must be nonzero)
-  - Flight phases (all contacts = 0): ballistic height z(t) = z0 + vz0*t - 0.5*g*t²,
-    angular momentum conserved (constant angular velocity), GRF = 0
-  - Stance phases (any contact = 1): GRF_z per grounded foot ≈ robot_mass * g / n_grounded_feet
-  - Use smooth interpolation (e.g. 10t^3 - 15t^4 + 6t^5) for transitions between states
+Physics rules:
+  - Velocities must be consistent with positions
+  - Flight phases: ballistic z(t) = z0 + vz0*t - 0.5*g*t², angular momentum conserved, GRF=0
+  - Stance phases: GRF_z per grounded foot ≈ robot_mass * g / n_grounded_feet
+  - Use smooth interpolation (e.g. 10t³ - 15t⁴ + 6t⁵) for transitions
   - Integrate angles from angular velocities — don't set angles without matching omega
-  - Set IDX_INTEGRALS rows to 0.0, set IDX_JOINTS to initial joint angles unless needed
-  - GRF z-component for foot i is at index IDX_GRF_Z[i] (i.e. 14, 17, 20, 23)
+  - Set IDX_INTEGRALS to 0.0, IDX_JOINTS to initial joint angles unless needed
+  - GRF z-component for foot i at IDX_GRF_Z[i]
 
-Key points:
-  - The reference trajectory gives the solver a good starting point, NOT a tracking target.
-  - The existing phase-aware cost function + slack constraints are still used for optimization.
-  - You still MUST provide constraints via mpc.add_constraint() — constraints enforce
-    feasibility, the reference trajectory just helps the solver converge.
-  - A physically realistic reference trajectory dramatically improves convergence.
+Constraint-reference interplay:
+  - Constraints define the FEASIBLE REGION; reference is the COST TARGET and INITIAL GUESS
+  - The solver's cost function penalizes deviation from the reference at EVERY timestep
+  - If constraints force rotation, the reference MUST show that rotation or the cost fights it
+  - Reference must be INSIDE constraint bounds (ideally near the center)
+  - Design them TOGETHER — when you change constraints, update the reference to match
 
-== TASK ==
+== 6. AVAILABLE FUNCTIONS ==
+
+CasADi (usable directly or via cs.*):
+  Math: sin, cos, tan, asin, acos, atan2, sqrt, exp, log, fabs, tanh, sinh, cosh
+  Comparison: fmax, fmin, if_else, logic_and, logic_or
+  Linear algebra: vertcat, horzcat, mtimes, dot, cross, norm_2, sum1, transpose, inv
+  Matrix ops: reshape, repmat, eye, zeros, ones
+  Types: MX, SX, DM, cs.inf
+
+NumPy (via np.*):
+  np.array, np.zeros, np.ones, np.eye, np.concatenate, np.stack, np.linalg,
+  np.maximum, np.minimum, np.pi, np.sin, np.cos, np.sqrt, np.inf
+
+Python builtins: abs, round, max, min, len, range, enumerate, zip, float, int,
+  str, list, tuple, dict, bool, hasattr, getattr, isinstance, type, print
+Constants: pi, inf
+Rotation: SO3 (from liecasadi)
+
+== 7. ITERATION STRATEGY ==
+
+ITERATION 1: Minimal viable constraints
+  - Maximum 2-3 constraints, bounds 2-3x wider than you think necessary
+  - Goal: Solver converges, motion happens (even if imperfect)
+
+LATER ITERATIONS: You decide the strategy based on iteration history and metrics.
+  - Solver failed → remove constraints, widen bounds, simplify
+  - Solver converged but motion weak → tighten bounds, add constraints
+  - Scores plateauing → structurally different approach (different phases, contact
+    sequence, constraint variables, or rewrite from scratch)
+
+== 8. TASK ==
 Generate MPC configuration and constraints for the requested behavior.
-Think about: What motion is needed? What constraints will FORCE that motion?
-Start with simple, loose constraints. The feedback loop will help you refine."""
+Think about: What motion is needed? What constraints will FORCE that motion?"""
 
-    robot_context = f"""
-
-ROBOT PHYSICAL DETAILS (Unitree Go2):
-- Mass: ~{mass:.1f} kg
-- Body trunk: ~38cm long x 9.4cm wide x 11cm tall (trunk box only)
-- Leg length: ~43cm fully extended (21.3cm thigh + 21.3cm calf)
-- Typical stance COM height: ~{initial_height:.2f}m
-- Hip spacing: Front/rear ~19cm from COM (38cm total), Left/right ~15cm from COM (30cm stance width)
-- Joint limits: Hip: +/-46deg, Thigh: +/-92deg, Calf: -149 to -29deg
-- Per-foot GRF limit: {grf_limit:.0f} N (optimization bound — real hardware produces less)
-- Joint velocity limit: {jvel_limit:.1f} rad/s
-- Ground friction coefficient: {mu}
-
-PHYSICAL CAPABILITY LIMITS (do NOT exceed — the MPC model allows higher values but the real robot cannot achieve them):
-- Max realistic COM height gain: ~0.15-0.25m (normal jump), ~0.3m (aggressive)
-- Max realistic takeoff vz: ~1.8-2.5 m/s
-- Max realistic flight duration: ~0.3-0.5s
-- Max realistic peak GRF: ~6-8x body weight (~900-1200 N total across 4 feet)
-- Max realistic COM acceleration: ~4-6g
-- Use vz_takeoff = g * flight_duration / 2, but flight_duration MUST be <= 0.5s
-
-Use these physical limits to create realistic constraints."""
-
-    return base + robot_context
+    return base
 
 
 def get_user_prompt(command: str) -> str:
@@ -463,11 +325,9 @@ def get_user_prompt(command: str) -> str:
 
 Think step by step:
 1. What type of motion is this? (ground-based, aerial, rotation, translation)
-2. What contact sequence is appropriate? (REQUIRED - your code will fail without mpc.set_contact_sequence())
+2. What contact sequence is appropriate?
 3. What physical quantities need to be constrained to achieve this?
 4. What are reasonable bounds that FORCE the desired motion?
-
-REMINDER: You MUST include mpc.set_contact_sequence() - this is the #1 cause of failures.
 
 Return ONLY Python code."""
 
@@ -507,18 +367,18 @@ ERROR: {error_message}
 FAILED CODE:
 {code_snippet}
 
-⚠️ MANDATORY CHECKLIST - Your code MUST include ALL SIX of these:
-□ mpc.set_task_name("...")
-□ mpc.set_duration(...)
-□ mpc.set_time_step(0.02)
-□ mpc.set_contact_sequence(...)  ← THIS IS THE #1 MISSING CALL
-□ mpc.add_constraint(...)
-□ mpc.set_reference_trajectory(...)  ← REQUIRED - provides solver initial guess
+⚠️ MANDATORY CHECKLIST - Items 4-6 are REQUIRED (solver FAILS without them):
+□ mpc.set_task_name("...")              (recommended, defaults to "unknown")
+□ mpc.set_duration(...)                 (recommended, defaults to 1.0)
+□ mpc.set_time_step(0.02)              (recommended, defaults to 0.02)
+□ mpc.set_contact_sequence(...)  ← REQUIRED - THIS IS THE #1 MISSING CALL
+□ mpc.add_constraint(...)        ← REQUIRED
+□ mpc.set_reference_trajectory(...)  ← REQUIRED - cost target AND initial guess
 
 Other requirements:
 - Constraint function must have 7 parameters: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)
 - Must return exactly 3 values: (constraint_expr, lower_bound, upper_bound)
 - All return values must be CasADi MX expressions (use vertcat for multiple constraints)
-- CRITICAL: At k=0, bounds must INCLUDE the starting state (height={initial_height:.4f}m). Constraints that violate t=0 cause immediate failure!
+- Constraints are applied at k=1 through k=horizon-1 (NOT at k=0). Bounds at k=1 must be reachable from the starting state (height={initial_height:.4f}m).
 
 Return ONLY corrected Python code."""

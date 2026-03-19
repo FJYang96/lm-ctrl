@@ -51,7 +51,22 @@ class SafeConstraintExecutor:
             "globals",
             "locals",
         ]
-        dangerous_attributes = ["__class__", "__mro__", "__bases__", "__globals__"]
+        dangerous_attributes = [
+            "__class__",
+            "__mro__",
+            "__bases__",
+            "__globals__",
+            "__subclasses__",
+            "__dict__",
+            "__code__",
+            "__func__",
+            "__self__",
+            "__module__",
+            "__init__",
+            "__new__",
+            "__getattribute__",
+            "__import__",
+        ]
 
         for node in ast.walk(tree):
             # Block dangerous built-ins
@@ -62,8 +77,10 @@ class SafeConstraintExecutor:
 
             # Block dangerous attribute access
             if isinstance(node, ast.Attribute):
-                if node.attr in dangerous_attributes:
-                    return False, f"Dangerous attribute access: {node.attr}"
+                if node.attr.startswith("__") and node.attr.endswith("__"):
+                    return False, f"Dunder attribute access not allowed: {node.attr}"
+                if node.attr in ("ctypeslib",):
+                    return False, f"Blocked attribute: {node.attr}"
 
             # Allow imports but validate they're safe
             if isinstance(node, ast.Import):
@@ -98,26 +115,20 @@ class SafeConstraintExecutor:
                 "No function definition found. Must define a constraint function.",
             )
 
-        # Validate function signatures
+        # Validate function signatures for known function types.
+        # Functions with 5 or 7 args are treated as constraint functions.
+        # Functions named with "reference" or "generate_" are reference trajectory
+        # generators.  All other functions are allowed as helpers (any arg count).
         for func_def in function_defs:
             num_args = len(func_def.args.args)
-            # Reference trajectory functions have a different signature (2-8 args)
             is_ref_func = "reference" in func_def.name or func_def.name.startswith(
                 "generate_"
             )
-            if is_ref_func:
-                if not (2 <= num_args <= 8):
-                    return (
-                        False,
-                        f"Reference function '{func_def.name}' must have 2-8 arguments. Got {num_args}.",
-                    )
-            else:
-                # Constraint functions: prefer 7 arguments, accept 5 for backward compat
-                if num_args not in (5, 7):
-                    return (
-                        False,
-                        f"Function '{func_def.name}' must have 7 arguments: (x_k, u_k, kindyn_model, config, contact_k, k, horizon). Got {num_args} arguments.",
-                    )
+            if is_ref_func and not (2 <= num_args <= 8):
+                return (
+                    False,
+                    f"Reference function '{func_def.name}' must have 2-8 arguments. Got {num_args}.",
+                )
 
         return True, ""
 

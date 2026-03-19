@@ -22,8 +22,7 @@ from typing import Any
 import numpy as np
 
 from mpc.dynamics.model import KinoDynamic_Model
-from mpc.mpc_opti import QuadrupedMPCOpti
-from mpc.mpc_opti_slack import QuadrupedMPCOptiSlack
+from mpc.mpc_opti_slack import PHYSICS_CONSTRAINT_NAMES, QuadrupedMPCOptiSlack
 
 from .config_management import create_task_config, restore_base_config
 from .constraint_wrapper import (
@@ -37,6 +36,36 @@ from .contact_utils import (
 )
 
 logger = logging.getLogger("llm_integration")
+
+
+class _LLMTaskMPCProxy:
+    """Proxy that exposes only the LLM-callable API of LLMTaskMPC.
+
+    Prevents LLM-generated code from traversing internal attributes like
+    base_config, kindyn_model, or the underlying solver instance.
+    """
+
+    _ALLOWED = frozenset(
+        {
+            "set_task_name",
+            "set_duration",
+            "set_time_step",
+            "set_contact_sequence",
+            "add_constraint",
+            "set_reference_trajectory",
+            "set_slack_weights",
+            "_create_phase_sequence",
+            "_create_contact_sequence",
+        }
+    )
+
+    def __init__(self, real: LLMTaskMPC) -> None:
+        object.__setattr__(self, "_real", real)
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self._ALLOWED:
+            raise AttributeError(f"Access to mpc.{name} is not allowed in LLM code")
+        return getattr(object.__getattribute__(self, "_real"), name)
 
 
 class LLMTaskMPC:
@@ -85,7 +114,7 @@ class LLMTaskMPC:
         self.ref_trajectory_data: dict[str, np.ndarray] | None = None
 
         # MPC instance (created when configured)
-        self.mpc: QuadrupedMPCOpti | QuadrupedMPCOptiSlack | None = None
+        self.mpc: QuadrupedMPCOptiSlack | None = None
         self.is_configured = False
 
         # Solver info for feedback (populated after solve)
@@ -115,17 +144,31 @@ class LLMTaskMPC:
 
             safe_executor = SafeConstraintExecutor()
 
-            # Extract any imports from LLM code for dynamic processing
+            # Extract imports from LLM code for dynamic processing, then strip
+            # them from the code.  process_dynamic_imports pre-populates the
+            # namespace so the import statements are no longer needed at exec
+            # time.  This lets us omit __import__ from __builtins__.
             imports_needed = safe_executor.extract_imports_from_code(llm_config_code)
             exec_globals = safe_executor._create_restricted_globals(imports_needed)
 
+            # Strip import statements from code — symbols already in exec_globals
+            import ast as _ast
+
+            _tree = _ast.parse(llm_config_code)
+            _tree.body = [
+                node
+                for node in _tree.body
+                if not isinstance(node, (_ast.Import, _ast.ImportFrom))
+            ]
+            exec_code = _ast.unparse(_tree)
+
             # Add MPC-specific objects to the execution environment
-            exec_globals["mpc"] = self
+            exec_globals["mpc"] = _LLMTaskMPCProxy(self)
             exec_globals["create_contact_sequence"] = self._create_contact_sequence
             exec_globals["create_phase_sequence"] = self._create_phase_sequence
 
-            # Execute LLM configuration code with full CasADi environment + dynamic imports
-            exec(llm_config_code, exec_globals)
+            # Execute LLM configuration code (imports already resolved)
+            exec(exec_code, exec_globals)
 
             # Validate configuration
             if self.contact_sequence is None:
@@ -175,6 +218,17 @@ class LLMTaskMPC:
 
     def add_constraint(self, constraint_func: Callable[..., Any]) -> None:
         """Add a constraint function to this task."""
+        # Guard: rename LLM constraints that collide with physics constraint names,
+        # otherwise they would be treated as hard (no slack) by the solver.
+        func_name = getattr(constraint_func, "__name__", "")
+        if func_name in PHYSICS_CONSTRAINT_NAMES:
+            safe_name = f"llm_{func_name}"
+            logger.warning(
+                f"LLM constraint '{func_name}' collides with a physics constraint "
+                f"name — renaming to '{safe_name}' to preserve soft enforcement."
+            )
+            constraint_func.__name__ = safe_name
+
         # Wrap the constraint function to be contact-aware for jumping tasks
         wrapped_constraint = wrap_constraint_for_contact_phases(constraint_func)
         self.constraint_functions.append(wrapped_constraint)
@@ -199,14 +253,22 @@ class LLMTaskMPC:
         Lower weight = softer constraint (solver uses slack more freely).
 
         Args:
-            weights: Dict mapping constraint names to penalty weights.
-                     e.g. {"friction_cone_constraints": 1e6, "contact_aware_constraint": 1e4}
+            weights: Dict mapping YOUR constraint function names to penalty weights.
+                     e.g. {"height_constraint": 1e4, "velocity_constraint": 1e2}
+                     Physics constraints are always hard and cannot be softened.
         """
         self.slack_weights.update(weights)
 
     def set_reference_trajectory(self, func: Callable[..., Any]) -> None:
         """
         Set a function that generates per-timestep reference trajectories.
+
+        The reference trajectory serves a dual role:
+        1. **Cost target**: The solver's cost function penalizes deviation from
+           X_ref/U_ref at every timestep. This is what steers the optimized
+           trajectory toward the desired motion.
+        2. **Initial guess**: The solver uses X_ref/U_ref as its warm-start
+           initial iterate, improving convergence speed.
 
         The function will be called with:
             func(initial_state, horizon, contact_sequence, mpc_dt, robot_mass)
@@ -244,19 +306,19 @@ class LLMTaskMPC:
             # Create modified config for this task
             task_config = create_task_config(self)
 
-            # Build MPC with task configuration
-            if self.use_slack:
-                self.mpc = QuadrupedMPCOptiSlack(
-                    model=self.kindyn_model,
-                    config=task_config,
-                    build=True,
-                    use_slack=True,
-                    slack_weights=self.slack_weights if self.slack_weights else None,
+            # Build MPC with slack formulation — always required for LLM tasks
+            if not self.use_slack:
+                raise ValueError(
+                    "Slack formulation is required for LLM tasks. "
+                    "Cannot build MPC with use_slack=False."
                 )
-            else:
-                self.mpc = QuadrupedMPCOpti(
-                    model=self.kindyn_model, config=task_config, build=True
-                )
+            self.mpc = QuadrupedMPCOptiSlack(
+                model=self.kindyn_model,
+                config=task_config,
+                build=True,
+                use_slack=True,
+                slack_weights=self.slack_weights if self.slack_weights else None,
+            )
 
             # Restore base config to prevent pollution between iterations
             restore_base_config(self)

@@ -120,15 +120,25 @@ def format_hardness_report(
         ]
     )
 
-    # Separate LLM-controllable constraints from system constraints
+    # Separate LLM-controllable constraints from system (physics) constraints.
+    # Must match PHYSICS_CONSTRAINT_NAMES in mpc_opti_slack.py.
+    _PHYSICS_NAMES = {
+        "friction_cone_constraints",
+        "foot_height_constraints",
+        "foot_velocity_constraints",
+        "joint_limits_constraints",
+        "input_limits_constraints",
+        "body_clearance_constraints",
+        "complementarity_constraints",
+    }
     llm_constraints = {}
     system_constraints = {}
 
     for name, metrics in hardness_report.items():
-        if "contact_aware" in name.lower() or "llm" in name.lower():
-            llm_constraints[name] = metrics
-        else:
+        if name in _PHYSICS_NAMES:
             system_constraints[name] = metrics
+        else:
+            llm_constraints[name] = metrics
 
     # Format LLM constraints (most important - LLM can fix these)
     if llm_constraints:

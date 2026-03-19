@@ -218,9 +218,9 @@ def body_clearance_constraints(
 
     # Safety margin accounts for body dimensions and tilt
     # For small angles: additional_clearance ≈ body_length/2 * |pitch| + body_width/2 * |roll|
-    body_half_length = 0.15
-    body_half_width = 0.10
-    body_half_height = 0.05
+    body_half_length = 0.1881
+    body_half_width = 0.0468
+    body_half_height = 0.057
 
     tilt_clearance = body_half_length * cs.fabs(
         cs.sin(pitch)

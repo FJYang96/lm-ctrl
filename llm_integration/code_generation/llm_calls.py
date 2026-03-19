@@ -39,7 +39,6 @@ def generate_constraints(
     iteration_summaries: list[dict[str, Any]] | None = None,
     mpc_dt: float | None = None,
     current_slack_weights: dict[str, float] | None = None,
-    feedback: str = "",
     score: float = 0.0,
     motion_quality_report: str = "",
     constraint_violations: dict[str, Any] | None = None,
@@ -81,7 +80,7 @@ def generate_constraints(
     lines.append(command if command else "No task command")
     lines.append("")
     lines.append("=" * 60)
-    lines.append(f"ITERATION {iteration} FEEDBACK")
+    lines.append(f"ITERATION {iteration} CONTEXT")
     lines.append("=" * 60)
 
     # === Terminology ===
@@ -103,7 +102,7 @@ def generate_constraints(
         "to converge first."
     )
 
-    # === Iteration History (all iterations, full detail) ===
+    # === Iteration History (windowed: best + last 3) ===
     summaries = iteration_summaries
     lines.append("")
     lines.append("=" * 60)
@@ -116,23 +115,47 @@ def generate_constraints(
             f"Detailed analysis of iteration {iteration} follows below."
         )
 
-        for entry in summaries:
+        # Find best iteration
+        best_idx = max(range(total), key=lambda i: summaries[i].get("score", 0))
+        # Last 3 iterations
+        recent_start = max(0, total - 3)
+        shown_indices = set(range(recent_start, total))
+        shown_indices.add(best_idx)
+
+        # One-line summary of skipped iterations
+        skipped = [i for i in range(total) if i not in shown_indices]
+        if skipped:
+            skipped_scores = ", ".join(
+                f"{summaries[i].get('score', 0):.2f}" for i in skipped
+            )
+            skipped_iters = (
+                f"{skipped[0] + 1}-{skipped[-1] + 1}"
+                if len(skipped) > 1
+                else str(skipped[0] + 1)
+            )
+            lines.append(
+                f"  Iterations {skipped_iters} omitted (scores: {skipped_scores})"
+            )
+
+        _table_fields = [
+            ("Approach", "approach"),
+            ("Solver", "solver"),
+            ("Physics", "physics"),
+            ("Metrics", "metrics"),
+            ("Terminal", "terminal"),
+            ("Hardness", "hardness"),
+            ("Reference", "reference"),
+        ]
+
+        for idx in sorted(shown_indices):
+            entry = summaries[idx]
             status_label = "SOLVER CONVERGED" if entry["success"] else "SOLVER FAILED"
+            best_tag = " [BEST]" if idx == best_idx else ""
             lines.append("")
             lines.append(
-                f"  Iter {entry['iteration']} [{status_label}] Score: {entry['score']:.2f}"
+                f"  Iter {entry['iteration']} [{status_label}] "
+                f"Score: {entry['score']:.2f}{best_tag}"
             )
-            # Compact tabular fields (one line each)
-            _table_fields = [
-                ("Approach", "approach"),
-                ("Solver", "solver"),
-                ("Physics", "physics"),
-                ("Metrics", "metrics"),
-                ("Terminal", "terminal"),
-                ("Hardness", "hardness"),
-                ("Reference", "reference"),
-                ("Feedback", "feedback"),
-            ]
             for label, key in _table_fields:
                 val = entry.get(key, "")
                 if val:
@@ -191,6 +214,10 @@ def generate_constraints(
         )
         for ml in metrics_lines:
             lines.append(ml)
+    else:
+        lines.append(
+            "No trajectory data available (solver failed before trajectory analysis)."
+        )
 
     # === Constraint Hardness ===
     hardness_report = optimization_metrics["hardness_report"]
@@ -228,28 +255,20 @@ def generate_constraints(
     lines.append("=" * 60)
     lines.append(constraint_code)
 
-    # === Feedback ===
-    lines.append("")
-    lines.append("=" * 60)
-    lines.append("              FEEDBACK FOR THIS ITERATION")
-    lines.append("=" * 60)
-    if feedback:
-        lines.append(feedback)
-    else:
-        lines.append(
-            "No feedback available. Analyze the raw metrics, hardness data, "
-            "and reference analysis above to diagnose issues yourself."
-        )
-
     # === Footer ===
     lines.append("")
     lines.append("=" * 60)
     lines.append("Generate improved constraints and reference trajectory.")
     lines.append(
-        "The feedback above contains exactly ONE recommended change. "
-        "Implement that single change. Keep everything else in the code "
-        "identical to the current code above. Do not make additional "
-        "modifications beyond what the feedback recommends."
+        "You have the full diagnosis above — metrics, physics analysis, "
+        "constraint hardness, violations, and iteration history. "
+        "You decide the strategy: tweak parameters, restructure constraints, "
+        "change the phase structure, redesign the contact sequence, or "
+        "rewrite from scratch. "
+        "Use the iteration history to avoid repeating failed approaches. "
+        "If scores are stagnating, do NOT keep tweaking parameters — try a "
+        "structurally different approach (different phases, contact sequence, "
+        "constraint variables, or rewrite from scratch)."
     )
     lines.append("Return ONLY Python code.")
     lines.append("=" * 60)

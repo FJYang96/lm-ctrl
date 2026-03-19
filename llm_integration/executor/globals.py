@@ -39,28 +39,40 @@ ALLOWED_IMPORTS = {
         "cs",
         "MX",
         "SX",
+        "DM",
         "vertcat",
+        "horzcat",
         "mtimes",
-        "fabs",
+        "dot",
+        "cross",
+        "norm_2",
+        "sum1",
+        "transpose",
+        "inv",
+        "reshape",
+        "repmat",
         "sin",
         "cos",
-        "sqrt",
-        "exp",
-        "sum1",
-        "fmax",
-        "fmin",
-        "inf",
-        "horzcat",
-        "DM",
-        "transpose",
-        "norm_2",
-        "atan2",
         "tan",
         "asin",
         "acos",
+        "atan2",
+        "sqrt",
+        "exp",
+        "log",
+        "fabs",
+        "fmax",
+        "fmin",
         "tanh",
         "sinh",
         "cosh",
+        "if_else",
+        "logic_and",
+        "logic_or",
+        "inf",
+        "eye",
+        "zeros",
+        "ones",
     ],
     "numpy": [
         "np",
@@ -102,6 +114,68 @@ ALLOWED_IMPORTS = {
 }
 
 
+class _RestrictedNumpy:
+    """Proxy that blocks dangerous numpy submodules."""
+
+    _BLOCKED = frozenset({"ctypeslib", "testing", "distutils", "f2py", "core"})
+
+    def __init__(self, mod: Any) -> None:
+        object.__setattr__(self, "_mod", mod)
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self._BLOCKED:
+            raise AttributeError(f"Access to np.{name} is not allowed")
+        return getattr(object.__getattribute__(self, "_mod"), name)
+
+
+class _RestrictedCasadi:
+    """Proxy that blocks CasADi code-generation and file I/O facilities."""
+
+    _BLOCKED = frozenset(
+        {
+            "CodeGenerator",
+            "cse",
+            "external",
+            "load_library",
+            "import_plugin",
+        }
+    )
+
+    def __init__(self, mod: Any) -> None:
+        object.__setattr__(self, "_mod", mod)
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self._BLOCKED:
+            raise AttributeError(f"Access to cs.{name} is not allowed")
+        return getattr(object.__getattribute__(self, "_mod"), name)
+
+
+class _RestrictedLiecasadi:
+    """Proxy that only exposes SO3 and SE3 from liecasadi."""
+
+    _ALLOWED = frozenset({"SO3", "SE3"})
+
+    def __init__(self, mod: Any) -> None:
+        object.__setattr__(self, "_mod", mod)
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self._ALLOWED:
+            raise AttributeError(f"Access to liecasadi.{name} is not allowed")
+        return getattr(object.__getattribute__(self, "_mod"), name)
+
+
+def _safe_type(obj: Any) -> type:
+    """type() for checking types only — no metaclass construction."""
+    return type(obj)
+
+
+def _safe_getattr(obj: Any, name: str, *default: Any) -> Any:
+    """getattr wrapper that blocks access to dunder attributes."""
+    if isinstance(name, str) and name.startswith("__") and name.endswith("__"):
+        raise AttributeError(f"Access to dunder attribute '{name}' is not allowed")
+    return getattr(obj, name, *default)
+
+
 def create_restricted_globals(
     allowed_imports: dict[str, list[str]] | None = None,
     additional_imports: list[str] | None = None,
@@ -134,11 +208,11 @@ def create_restricted_globals(
             "list": list,
             "tuple": tuple,
             "dict": dict,
+            "bool": bool,
             "hasattr": hasattr,
-            "getattr": getattr,
+            "getattr": _safe_getattr,
             "isinstance": isinstance,
-            "type": type,
-            "__import__": __import__,  # Needed for dynamic imports
+            "type": _safe_type,
         }
     }
 
@@ -152,15 +226,15 @@ def create_restricted_globals(
         from liecasadi import SO3
 
         # Add main module references
-        restricted_globals["cs"] = cs
-        restricted_globals["np"] = np
+        restricted_globals["cs"] = _RestrictedCasadi(cs)
+        restricted_globals["np"] = _RestrictedNumpy(np)
         restricted_globals["math"] = math
         restricted_globals["SO3"] = SO3
 
         # Make liecasadi module available too
         import liecasadi
 
-        restricted_globals["liecasadi"] = liecasadi
+        restricted_globals["liecasadi"] = _RestrictedLiecasadi(liecasadi)
 
         # Add ALL commonly used CasADi functions directly
         restricted_globals["vertcat"] = cs.vertcat

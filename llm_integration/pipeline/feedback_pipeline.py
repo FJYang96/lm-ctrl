@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from mpc.dynamics.model import KinoDynamic_Model
-from mpc.mpc_opti import QuadrupedMPCOpti
 
 from ..code_generation.prompts import (
     get_robot_details,
@@ -19,7 +18,6 @@ from ..executor import SafeConstraintExecutor
 from ..feedback.llm_calls import (
     evaluate_iteration_unified,
     generate_iteration_summary,
-    generate_unified_feedback,
 )
 from ..feedback.motion_analysis import compute_motion_quality_report
 from ..feedback.reference_feedback import _compute_reference_metrics
@@ -47,7 +45,7 @@ class FeedbackPipeline:
     1. LLM constraint generation
     2. Trajectory optimization with generated constraints
     3. Simulation execution
-    4. Unified feedback and iteration
+    4. Scoring and iteration summary
     """
 
     def __init__(self, config_obj: Any = None, use_slack: bool = True):
@@ -67,11 +65,6 @@ class FeedbackPipeline:
 
         # Initialize kinodynamic model
         self.kindyn_model = KinoDynamic_Model(self.config)
-
-        # Legacy MPC for fallback (in case LLM MPC fails)
-        self.fallback_mpc = QuadrupedMPCOpti(
-            model=self.kindyn_model, config=self.config, build=True
-        )
 
         # Task-specific MPC tracking
         self.current_task_mpc: LLMTaskMPC | None = None
@@ -107,6 +100,9 @@ class FeedbackPipeline:
         self.previous_score: float = -float("inf")
         self.all_scores: list[float] = []
 
+        # Last LLM-requested mpc_dt (survives restore_base_config resets)
+        self._last_mpc_dt: float = float(self.config.mpc_config.mpc_dt)
+
     def _extract_constraint_violations(
         self, optimization_result: dict[str, Any]
     ) -> dict[str, Any]:
@@ -135,6 +131,8 @@ class FeedbackPipeline:
         )
         constraint_violations["llm_constraints"] = llm_violations["llm_constraints"]
         constraint_violations["llm_summary"] = llm_violations["summary"]
+        constraint_violations["by_constraint"] = llm_violations["by_constraint"]
+        constraint_violations["constraint_meta"] = llm_violations["constraint_meta"]
 
         return constraint_violations
 
@@ -170,6 +168,7 @@ class FeedbackPipeline:
 
         for iteration in range(1, self.max_iterations + 1):
             logger.info(f"--- Iteration {iteration} ---")
+            constraint_code = ""
 
             try:
                 # Step 1: Generate constraints via LLM with auto-retry
@@ -203,7 +202,7 @@ class FeedbackPipeline:
                     self, optimization_result, iteration, run_dir
                 )
 
-                # === Step 5: Extract constraint data (needed by scoring + feedback) ===
+                # === Step 5: Extract constraint data (needed by scoring + summary) ===
                 trajectory_analysis = optimization_result["trajectory_analysis"]
                 opt_success = optimization_result["success"]
                 error_info = optimization_result["optimization_metrics"]
@@ -215,9 +214,14 @@ class FeedbackPipeline:
                 hardness_report = optimization_result["optimization_metrics"][
                     "hardness_report"
                 ]
-                mpc_dt = float(self.config.mpc_config.mpc_dt)
 
-                # Compute reference analysis (used by scoring, feedback, and summary)
+                if self.current_task_mpc is not None:
+                    mpc_dt = float(self.current_task_mpc.mpc_dt)
+                    self._last_mpc_dt = mpc_dt
+                else:
+                    mpc_dt = self._last_mpc_dt
+
+                # Compute reference analysis (used by scoring and summary)
                 ref_analysis = _compute_reference_metrics(
                     optimization_result["ref_trajectory_data"],
                     optimization_result["state_trajectory"],
@@ -227,22 +231,25 @@ class FeedbackPipeline:
                 # Step 5b: Compute motion quality report (pure computation, no LLM)
                 import numpy as np
 
-                self.current_motion_quality_report = compute_motion_quality_report(
-                    state_traj=optimization_result["state_trajectory"],
-                    grf_traj=optimization_result["grf_trajectory"],
-                    joint_vel_traj=optimization_result["joint_vel_trajectory"],
-                    mpc_dt=mpc_dt,
-                    contact_sequence=self.current_task_mpc.contact_sequence,  # type: ignore[union-attr]
-                    kindyn_model=self.kindyn_model,
-                    joint_limits_lower=np.array(
-                        self.robot_details["joint_limits_lower"]
-                    ),
-                    joint_limits_upper=np.array(
-                        self.robot_details["joint_limits_upper"]
-                    ),
-                    robot_mass=self.robot_details["mass"],
-                    mu_friction=float(self.config.experiment.mu_ground),
-                )
+                if opt_success and optimization_result["state_trajectory"] is not None:
+                    self.current_motion_quality_report = compute_motion_quality_report(
+                        state_traj=optimization_result["state_trajectory"],
+                        grf_traj=optimization_result["grf_trajectory"],
+                        joint_vel_traj=optimization_result["joint_vel_trajectory"],
+                        mpc_dt=mpc_dt,
+                        contact_sequence=self.current_task_mpc.contact_sequence,  # type: ignore[union-attr]
+                        kindyn_model=self.kindyn_model,
+                        joint_limits_lower=np.array(
+                            self.robot_details["joint_limits_lower"]
+                        ),
+                        joint_limits_upper=np.array(
+                            self.robot_details["joint_limits_upper"]
+                        ),
+                        robot_mass=self.robot_details["mass"],
+                        mu_friction=float(self.config.experiment.mu_ground),
+                    )
+                else:
+                    self.current_motion_quality_report = ""
 
                 # === Step 6: Unified scoring ===
                 llm_eval = evaluate_iteration_unified(
@@ -284,34 +291,12 @@ class FeedbackPipeline:
                 # Step 8: Append score
                 self.all_scores.append(score)
 
-                # Step 9: Unified feedback (single Claude call — receives motion quality report)
-                unified_fb = generate_unified_feedback(
-                    command=command,
-                    constraint_code=constraint_code,
-                    motion_quality_report=self.current_motion_quality_report,
-                    hardness_report=hardness_report,
-                    mpc_dt=mpc_dt,
-                    current_slack_weights=self.current_slack_weights,
-                    constraint_violations=constraint_violations,
-                    trajectory_analysis=trajectory_analysis,
-                    opt_success=opt_success,
-                    error_info=error_info if not opt_success else None,
-                    reference_analysis=ref_analysis,
-                    run_dir=run_dir,
-                    iteration=iteration,
-                    iteration_summaries=list(self.iteration_summaries),
-                    robot_details=self.robot_details,
-                )
-
-                logger.info(f"Unified feedback: {len(unified_fb)} chars")
-
-                # Step 10: Iteration summary LLM call
+                # Step 9: Iteration summary LLM call
                 iter_summary = generate_iteration_summary(
                     command=command,
                     iteration=iteration,
                     score=score,
                     constraint_code=constraint_code,
-                    feedback=unified_fb,
                     trajectory_analysis=trajectory_analysis,
                     opt_success=opt_success,
                     error_info=error_info if not opt_success else None,
@@ -324,7 +309,7 @@ class FeedbackPipeline:
                     motion_quality_report=self.current_motion_quality_report,
                     run_dir=run_dir,
                 )
-                # Step 11: Collect feedback data for next iteration
+                # Step 10: Collect feedback data for next iteration
                 # (snapshot iteration_summaries BEFORE appending current summary,
                 # so current iteration's summary only shows in future history)
                 feedback_data = {
@@ -335,9 +320,8 @@ class FeedbackPipeline:
                     "constraint_code": constraint_code,
                     "run_dir": run_dir,
                     "iteration_summaries": list(self.iteration_summaries),
-                    "mpc_dt": float(self.config.mpc_config.mpc_dt),
+                    "mpc_dt": mpc_dt,
                     "current_slack_weights": self.current_slack_weights,
-                    "feedback": unified_fb,
                     "score": score,
                     "motion_quality_report": self.current_motion_quality_report,
                     "constraint_violations": constraint_violations,
@@ -366,21 +350,25 @@ class FeedbackPipeline:
                     "terminal": "",
                     "hardness": "",
                     "reference": "",
-                    "feedback": str(e),
                 }
                 self.iteration_summaries.append(error_summary)
                 self.all_scores.append(0.0)
 
                 # Build error-path feedback data so the next iteration
                 # sees this failure in the iteration history.
-                code = constraint_code if "constraint_code" in locals() else ""
+                code = constraint_code
                 feedback_data = {
                     "iteration": iteration,
                     "command": command,
                     "optimization_result": {
                         "success": False,
-                        "trajectory_analysis": {},
-                        "optimization_metrics": {"hardness_report": None},
+                        "trajectory_analysis": None,
+                        "optimization_metrics": {
+                            "hardness_report": None,
+                            "error_message": str(e),
+                            "solver_iterations": None,
+                            "infeasibility_info": None,
+                        },
                         "ref_trajectory_data": None,
                         "state_trajectory": None,
                     },
@@ -391,10 +379,15 @@ class FeedbackPipeline:
                     "constraint_code": code,
                     "run_dir": run_dir,
                     "iteration_summaries": list(self.iteration_summaries),
-                    "mpc_dt": float(self.config.mpc_config.mpc_dt),
+                    "mpc_dt": float(
+                        self.current_task_mpc.mpc_dt
+                        if self.current_task_mpc is not None
+                        else self._last_mpc_dt
+                    ),
                     "current_slack_weights": self.current_slack_weights,
-                    "feedback": "",
                     "score": 0.0,
+                    "motion_quality_report": "",
+                    "constraint_violations": None,
                 }
 
                 continue

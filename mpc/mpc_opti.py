@@ -212,11 +212,20 @@ class QuadrupedMPCOpti:
         # Set objective
         self.opti.minimize(cost)
 
+    # Constraints that only depend on state (x_k), not inputs (u_k).
+    # These can be applied at the terminal state where no inputs exist.
+    STATE_ONLY_CONSTRAINT_NAMES = {
+        "foot_height_constraints",
+        "joint_limits_constraints",
+        "body_clearance_constraints",
+    }
+
     def _setup_path_constraints(self) -> None:
         """Setup path constraints including friction cone, foot height, etc."""
-        # Begin imposing path constraints only after the first timestep
-        # This prevents conflicts with the initial state constraints
-        for k in range(1, self.horizon):  # Start from k=1 instead of k=0
+        # Apply all constraints at k=1..horizon-1.
+        # k=0 is skipped: the initial state is fixed and the solver needs
+        # unconstrained forces at the first timestep to drive dynamics.
+        for k in range(1, self.horizon):
             contact_k = self.P_contact[:, k]
             u_k = self.U[:, k]
             x_k = self.X[:, k]
@@ -241,7 +250,33 @@ class QuadrupedMPCOpti:
                 self.opti.subject_to(constraint_expr >= constraint_l)
                 self.opti.subject_to(constraint_expr <= constraint_u)
 
-        # NOTE: Terminal landing constraints have been removed from the base MPC.
+        # Apply state-only constraints at the terminal state (k=horizon).
+        # No inputs exist at this timestep, so input-dependent constraints are skipped.
+        x_terminal = self.X[:, self.horizon]
+        contact_terminal = self.P_contact[:, self.horizon - 1]
+        u_zero = cs.MX.zeros(self.inputs_dim)
+
+        for constraint in self.config.mpc_config.path_constraints:
+            constraint_name = constraint.__name__
+            if constraint_name not in self.STATE_ONLY_CONSTRAINT_NAMES:
+                continue
+
+            try:
+                constraint_expr, constraint_l, constraint_u = constraint(
+                    x_terminal,
+                    u_zero,
+                    self.kindyn_model,
+                    self.config,
+                    contact_terminal,
+                    self.horizon,
+                    self.horizon,
+                )
+            except TypeError:
+                constraint_expr, constraint_l, constraint_u = constraint(
+                    x_terminal, u_zero, self.kindyn_model, self.config, contact_terminal
+                )
+            self.opti.subject_to(constraint_expr >= constraint_l)
+            self.opti.subject_to(constraint_expr <= constraint_u)
         # The LLM should specify task-specific terminal constraints.
         # For a backflip, terminal pitch needs to be ~2π, not constrained to ±0.2 rad.
         # For a simple jump, the LLM can add terminal upright constraints.

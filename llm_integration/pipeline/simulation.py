@@ -58,7 +58,12 @@ def execute_simulation(
             import imageio
 
             video_dir = get_video_dir(run_dir)
-            fps = 1 / self.config.mpc_config.mpc_dt
+            mpc_dt = (
+                self.current_task_mpc.mpc_dt
+                if self.current_task_mpc is not None
+                else self._last_mpc_dt
+            )
+            fps = 1 / mpc_dt
             video_path = video_dir / f"planned_traj_iter_{iteration}.mp4"
             imageio.mimsave(str(video_path), planned_traj_images, fps=fps)
 
@@ -94,8 +99,8 @@ def render_failed_trajectory(
             "debug_video_saved": False,
         }
 
-    state_traj = optimization_result["state_trajectory"]
-    if state_traj.size == 0:
+    state_traj = optimization_result.get("state_trajectory")
+    if state_traj is None or state_traj.size == 0:
         return {
             "success": False,
             "error": "Optimization failed - no debug trajectory available",
@@ -111,7 +116,13 @@ def render_failed_trajectory(
         }
 
     try:
-        joint_vel_traj = optimization_result["joint_vel_trajectory"]
+        joint_vel_traj = optimization_result.get("joint_vel_trajectory")
+        if joint_vel_traj is None:
+            return {
+                "success": False,
+                "error": "Optimization failed - no joint velocity trajectory available",
+                "debug_video_saved": False,
+            }
 
         # Render the debug trajectory (what solver was attempting)
         logger.info("Rendering debug trajectory from failed optimization...")
@@ -126,14 +137,19 @@ def render_failed_trajectory(
         if debug_traj_images and len(debug_traj_images) > 0:
             import imageio
 
-            fps = 1 / self.config.mpc_config.mpc_dt
+            mpc_dt = (
+                self.current_task_mpc.mpc_dt
+                if self.current_task_mpc is not None
+                else self._last_mpc_dt
+            )
+            fps = 1 / mpc_dt
             video_path = video_dir / f"debug_trajectory_iter_{iteration}.mp4"
             imageio.mimsave(str(video_path), debug_traj_images, fps=fps)
             logger.info(f"Saved debug trajectory video: {video_path}")
 
-        trajectory_analysis = optimization_result["trajectory_analysis"]
-        pitch_achieved = abs(trajectory_analysis["total_pitch_rotation"])
-        height_gain = trajectory_analysis["height_gain"]
+        trajectory_analysis = optimization_result.get("trajectory_analysis", {})
+        pitch_achieved = abs(trajectory_analysis.get("total_pitch_rotation", 0))
+        height_gain = trajectory_analysis.get("height_gain", 0)
 
         return {
             "success": False,  # Still marked as failed (optimization didn't converge)

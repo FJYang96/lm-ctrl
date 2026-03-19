@@ -6,12 +6,10 @@ from .format_hardness import (
 from .llm_calls import (
     evaluate_iteration_unified,
     generate_iteration_summary,
-    generate_unified_feedback,
 )
 
 __all__ = [
     "format_hardness_report",
     "evaluate_iteration_unified",
     "generate_iteration_summary",
-    "generate_unified_feedback",
 ]

@@ -73,6 +73,7 @@ def generate_constraints_with_retry(
                         "code": mpc_config_code,
                         "error": "No code extracted from LLM response - check response format",
                         "success": False,
+                        "failure_stage": "no_code_extracted",
                     }
                 )
                 continue

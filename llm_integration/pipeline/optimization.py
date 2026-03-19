@@ -90,7 +90,7 @@ def analyze_trajectory(
                 np.sum(np.linalg.norm(np.diff(com_positions, axis=0), axis=1))
             ),
             # Timing
-            "trajectory_duration": float(len(state_traj) * mpc_dt),
+            "trajectory_duration": float((len(state_traj) - 1) * mpc_dt),
         }
 
         # Flight phase analysis
@@ -325,6 +325,24 @@ def solve_trajectory_optimization(
             "success": False,
             "error": "No LLM MPC configured for this iteration",
             "converged": False,
+            "status": -1,
+            "state_trajectory": None,
+            "grf_trajectory": None,
+            "joint_vel_trajectory": None,
+            "optimization_metrics": {
+                "converged": False,
+                "status": "failed",
+                "error_message": "No LLM MPC configured for this iteration",
+                "hardness_report": None,
+                "solver_iterations": None,
+                "infeasibility_info": None,
+                "objective_value": float("inf"),
+            },
+            "trajectory_analysis": None,
+            "mpc_config_valid": False,
+            "task_name": "unknown",
+            "mpc_config_code": "",
+            "ref_trajectory_data": None,
         }
 
     # Get MPC configuration summary
@@ -358,6 +376,24 @@ def solve_trajectory_optimization(
             "success": False,
             "error": f"LLM MPC failed: {e}",
             "converged": False,
+            "status": -1,
+            "state_trajectory": None,
+            "grf_trajectory": None,
+            "joint_vel_trajectory": None,
+            "optimization_metrics": {
+                "converged": False,
+                "status": "failed",
+                "error_message": f"LLM MPC failed: {e}",
+                "hardness_report": None,
+                "solver_iterations": None,
+                "infeasibility_info": None,
+                "objective_value": float("inf"),
+            },
+            "trajectory_analysis": None,
+            "mpc_config_valid": False,
+            "task_name": "unknown",
+            "mpc_config_code": "",
+            "ref_trajectory_data": None,
         }
 
     # Log reference trajectory metrics
