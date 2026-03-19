@@ -34,7 +34,9 @@ def get_robot_details(config: Any = None) -> dict[str, Any]:
         details["grf_limits"] = val.tolist() if hasattr(val, "tolist") else float(val)
     if hasattr(config.robot_data, "joint_velocity_limits"):
         val = config.robot_data.joint_velocity_limits
-        details["joint_velocity_limits"] = val.tolist() if hasattr(val, "tolist") else float(val)
+        details["joint_velocity_limits"] = (
+            val.tolist() if hasattr(val, "tolist") else float(val)
+        )
     if hasattr(config.experiment, "mu_ground"):
         details["mu_ground"] = float(config.experiment.mu_ground)
 
@@ -53,6 +55,34 @@ def get_system_prompt(config: Any = None) -> str:
     details = get_robot_details(config)
     mass = details["mass"]
     initial_height = details["initial_height"]
+
+    # Extract GRF limit, joint velocity limit, and friction coefficient
+    grf_limit = 500.0  # default
+    grf_limits_raw = details.get("grf_limits")
+    if grf_limits_raw is not None:
+        if isinstance(grf_limits_raw, (int, float)):
+            grf_limit = float(grf_limits_raw)
+        else:
+            grf_limit = (
+                float(grf_limits_raw[2])
+                if len(grf_limits_raw) > 2
+                else float(max(grf_limits_raw))
+            )
+
+    jvel_limit = 10.0  # default
+    jvel_limits_raw = details.get("joint_velocity_limits")
+    if jvel_limits_raw is not None:
+        if isinstance(jvel_limits_raw, (int, float)):
+            jvel_limit = float(abs(jvel_limits_raw))
+        else:
+            jvel_limit = (
+                float(max(abs(v) for v in jvel_limits_raw)) if jvel_limits_raw else 10.0
+            )
+
+    mu = 0.5  # default
+    mu_raw = details.get("mu_ground")
+    if mu_raw is not None:
+        mu = float(mu_raw)
 
     base = f"""You are a robotics expert generating MPC configurations for quadruped robot trajectory optimization.
 
@@ -89,9 +119,9 @@ State x_k (24-dim):
 Key physical facts (from actual robot config):
 - Robot mass: {mass:.2f} kg
 - Robot starts at COM height EXACTLY {initial_height:.4f}m
-- Achievable jump height: ~0.3-0.5m above starting height
 - Rotation: angle_change = angular_velocity * time
 - Projectile motion: peak_height = initial_height + v^2/(2g)
+- See PHYSICAL CAPABILITY LIMITS section below for achievable jump heights, velocities, and forces
 
 == MPC CONFIGURATION ==
 
@@ -223,7 +253,7 @@ Angular motion:
 
 Achievable ranges for this robot:
 - Peak angular velocity: 8-15 rad/s (physically realistic)
-- Flight duration: 0.4-0.8s (based on achievable jump height)
+- All other physical limits (height, velocity, GRF, flight duration) are in the PHYSICAL CAPABILITY LIMITS section below
 
 == ITERATION STRATEGY ==
 
@@ -396,14 +426,24 @@ Start with simple, loose constraints. The feedback loop will help you refine."""
 
     robot_context = f"""
 
-ROBOT PHYSICAL DETAILS:
+ROBOT PHYSICAL DETAILS (Unitree Go2):
 - Mass: ~{mass:.1f} kg
-- Body: ~30cm x 20cm x 10cm
-- Leg reach: ~30cm leg extension
-- Joint limits: Hip: +/-45deg, Thigh: +/-90deg, Calf: +/-150deg
-- Realistic jump height: ~0.5-0.8m
+- Body trunk: ~38cm long x 9.4cm wide x 11cm tall (trunk box only)
+- Leg length: ~43cm fully extended (21.3cm thigh + 21.3cm calf)
 - Typical stance COM height: ~{initial_height:.2f}m
-- Foot spacing: Front/rear: ~30cm, Left/right: ~20cm
+- Hip spacing: Front/rear ~19cm from COM (38cm total), Left/right ~15cm from COM (30cm stance width)
+- Joint limits: Hip: +/-46deg, Thigh: +/-92deg, Calf: -149 to -29deg
+- Per-foot GRF limit: {grf_limit:.0f} N (optimization bound — real hardware produces less)
+- Joint velocity limit: {jvel_limit:.1f} rad/s
+- Ground friction coefficient: {mu}
+
+PHYSICAL CAPABILITY LIMITS (do NOT exceed — the MPC model allows higher values but the real robot cannot achieve them):
+- Max realistic COM height gain: ~0.15-0.25m (normal jump), ~0.3m (aggressive)
+- Max realistic takeoff vz: ~1.8-2.5 m/s
+- Max realistic flight duration: ~0.3-0.5s
+- Max realistic peak GRF: ~6-8x body weight (~900-1200 N total across 4 feet)
+- Max realistic COM acceleration: ~4-6g
+- Use vz_takeoff = g * flight_duration / 2, but flight_duration MUST be <= 0.5s
 
 Use these physical limits to create realistic constraints."""
 

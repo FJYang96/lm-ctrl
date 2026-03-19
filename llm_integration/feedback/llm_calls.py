@@ -92,7 +92,16 @@ def _format_robot_context(robot_details: dict[str, Any]) -> str:
     if mu is not None:
         lines.append(f"Ground friction coefficient: {mu}.")
     lines.append(f"Joint limits: {lower[:3]} to {upper[:3]} (per leg, repeated x4).")
-    return " ".join(lines)
+    lines.append("")
+    lines.append("Physical capabilities (realistic for this robot):")
+    lines.append("- Max COM height gain: ~0.15-0.25m normal, ~0.3m aggressive")
+    lines.append("- Max realistic takeoff vz: ~1.8-2.5 m/s")
+    lines.append("- Max realistic flight duration: ~0.3-0.5s")
+    lines.append("- Max realistic peak total GRF: ~900-1200 N (6-8x body weight)")
+    lines.append(
+        "- Trajectories exceeding these limits are physically unrealizable even if the solver converges."
+    )
+    return "\n".join(lines)
 
 
 def evaluate_iteration_unified(
@@ -142,6 +151,7 @@ MOTION QUALITY (is the trajectory physically plausible?):
 - The motion quality report provides raw metrics for each aspect of motion quality. Use these numbers to assess physical plausibility in the context of the task.
 - Consider what is physically unavoidable for the commanded task (e.g., a jump will have high landing impact velocity, high jerk at contact transitions, and energy injection during pushoff).
 - Penalize issues that indicate the optimizer is exploiting physics (phantom forces, energy appearing from nowhere during flight, feet below ground) or that the motion would fail in reality (robot tipping over, joints locked at limits for extended periods).
+- Penalize trajectories that exceed physical capability limits: COM height gain > 0.3m, takeoff vz > 2.5 m/s, total GRF > 1200 N, or COM acceleration > 6g indicate the optimizer is exploiting the model's lack of torque-based GRF limits. These trajectories cannot be reproduced on real hardware.
 
 SCORING GUIDE:
 - 0.9-1.0: Task fully achieved with physically plausible, smooth motion and stable landing

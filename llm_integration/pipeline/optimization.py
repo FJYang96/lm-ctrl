@@ -23,6 +23,7 @@ def analyze_trajectory(
     mpc_dt: float,
     grf_traj: np.ndarray | None = None,
     joint_vel_traj: np.ndarray | None = None,
+    contact_sequence: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Extract key numeric metrics from a trajectory for LLM feedback.
 
@@ -31,6 +32,7 @@ def analyze_trajectory(
         mpc_dt: Time step
         grf_traj: GRF trajectory (horizon x 12), 4 feet x 3 forces
         joint_vel_traj: Joint velocity trajectory (horizon x 12)
+        contact_sequence: Contact sequence (4 x horizon), 1=contact, 0=flight per foot
 
     Returns:
         Dictionary of comprehensive trajectory metrics
@@ -150,6 +152,77 @@ def analyze_trajectory(
             metrics["max_joint_velocity"] = 0.0
             metrics["mean_joint_velocity"] = 0.0
             metrics["joint_vel_utilization"] = 0.0
+
+        # Per-phase breakdown (stance vs flight)
+        if (
+            contact_sequence is not None
+            and contact_sequence.shape[1] >= state_traj.shape[0] - 1
+        ):
+            horizon = state_traj.shape[0] - 1
+            # A timestep is "flight" if all 4 feet are off ground
+            all_flight = np.all(contact_sequence[:, :horizon] < 0.5, axis=0)
+            # Map to state indices: state k+1 corresponds to timestep k
+            flight_states = np.zeros(state_traj.shape[0], dtype=bool)
+            flight_states[1:] = all_flight[:horizon]
+            flight_states[0] = all_flight[0] if horizon > 0 else False
+            stance_states = ~flight_states
+
+            # Orientation changes per phase type
+            for axis_name, axis_idx in [("roll", 0), ("pitch", 1), ("yaw", 2)]:
+                angles = euler_angles[:, axis_idx]
+                stance_change = 0.0
+                flight_change = 0.0
+                for k in range(1, len(angles)):
+                    delta = abs(angles[k] - angles[k - 1])
+                    if stance_states[k]:
+                        stance_change += delta
+                    else:
+                        flight_change += delta
+                metrics[f"{axis_name}_change_stance"] = float(stance_change)
+                metrics[f"{axis_name}_change_flight"] = float(flight_change)
+
+            # Max angular velocity per phase
+            ang_vel_mag = np.linalg.norm(angular_velocities, axis=1)
+            if np.any(stance_states):
+                metrics["max_angular_vel_stance"] = float(
+                    np.max(ang_vel_mag[stance_states])
+                )
+            else:
+                metrics["max_angular_vel_stance"] = 0.0
+            if np.any(flight_states):
+                metrics["max_angular_vel_flight"] = float(
+                    np.max(ang_vel_mag[flight_states])
+                )
+            else:
+                metrics["max_angular_vel_flight"] = 0.0
+
+            # Per-axis max angular velocity during flight
+            for axis_name, axis_idx in [("wx", 0), ("wy", 1), ("wz", 2)]:
+                if np.any(flight_states):
+                    metrics[f"max_{axis_name}_flight"] = float(
+                        np.max(np.abs(angular_velocities[flight_states, axis_idx]))
+                    )
+                else:
+                    metrics[f"max_{axis_name}_flight"] = 0.0
+
+            # Height change per phase
+            stance_height_change = 0.0
+            flight_height_change = 0.0
+            heights = com_positions[:, 2]
+            for k in range(1, len(heights)):
+                delta = heights[k] - heights[k - 1]
+                if stance_states[k]:
+                    stance_height_change += delta
+                else:
+                    flight_height_change += delta
+            metrics["height_change_stance"] = float(stance_height_change)
+            metrics["height_change_flight"] = float(flight_height_change)
+
+            # Phase duration summary
+            n_flight = int(np.sum(all_flight))
+            n_stance = int(horizon - n_flight)
+            metrics["n_stance_steps"] = n_stance
+            metrics["n_flight_steps"] = n_flight
 
         return metrics
 
@@ -329,8 +402,13 @@ def solve_trajectory_optimization(
 
     # Analyze trajectory using LLM MPC time step
     mpc_dt = config_summary["time_step"]
+    contact_seq = self.current_task_mpc.contact_sequence
     trajectory_analysis = analyze_trajectory(
-        state_traj, mpc_dt, grf_traj=grf_traj, joint_vel_traj=joint_vel_traj
+        state_traj,
+        mpc_dt,
+        grf_traj=grf_traj,
+        joint_vel_traj=joint_vel_traj,
+        contact_sequence=contact_seq,
     )
 
     # Log key trajectory metrics

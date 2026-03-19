@@ -109,6 +109,33 @@ def format_trajectory_metrics_section(
     lines.append(f"  Max joint range: {ta['max_joint_range']:.2f} rad")
     lines.append(f"  Avg joint range: {ta['avg_joint_range']:.2f} rad")
 
+    # Per-phase breakdown (stance vs flight)
+    if "n_stance_steps" in ta:
+        lines.append("Phase breakdown (stance vs flight):")
+        n_stance = ta["n_stance_steps"]
+        n_flight = ta["n_flight_steps"]
+        lines.append(f"  Stance steps: {n_stance}, Flight steps: {n_flight}")
+
+        for axis in ["roll", "pitch", "yaw"]:
+            s = ta.get(f"{axis}_change_stance", 0)
+            f = ta.get(f"{axis}_change_flight", 0)
+            total = s + f
+            if total > 0.01:  # only show if meaningful rotation occurred
+                lines.append(
+                    f"  {axis.capitalize()} change: stance={s:.2f} rad ({s*57.3:.0f} deg), "
+                    f"flight={f:.2f} rad ({f*57.3:.0f} deg)"
+                )
+
+        s_vel = ta.get("max_angular_vel_stance", 0)
+        f_vel = ta.get("max_angular_vel_flight", 0)
+        lines.append(
+            f"  Max angular velocity: stance={s_vel:.2f}, flight={f_vel:.2f} rad/s"
+        )
+
+        sh = ta.get("height_change_stance", 0)
+        fh = ta.get("height_change_flight", 0)
+        lines.append(f"  Height change: stance={sh:+.3f}m, flight={fh:+.3f}m")
+
     return lines
 
 
