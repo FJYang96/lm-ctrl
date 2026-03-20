@@ -231,8 +231,8 @@ class FeedbackPipeline:
                 # Step 5b: Compute motion quality report (pure computation, no LLM)
                 import numpy as np
 
-                if opt_success and optimization_result["state_trajectory"] is not None:
-                    self.current_motion_quality_report = compute_motion_quality_report(
+                if optimization_result["state_trajectory"] is not None:
+                    report = compute_motion_quality_report(
                         state_traj=optimization_result["state_trajectory"],
                         grf_traj=optimization_result["grf_trajectory"],
                         joint_vel_traj=optimization_result["joint_vel_trajectory"],
@@ -248,6 +248,14 @@ class FeedbackPipeline:
                         robot_mass=self.robot_details["mass"],
                         mu_friction=float(self.config.experiment.mu_ground),
                     )
+                    if not opt_success:
+                        report = (
+                            "!! SOLVER DID NOT CONVERGE — metrics below are from "
+                            "the last INFEASIBLE iterate and may violate physics. "
+                            "Use to diagnose geometric/structural issues, not as "
+                            "achieved results. !!\n\n" + report
+                        )
+                    self.current_motion_quality_report = report
                 else:
                     self.current_motion_quality_report = ""
 

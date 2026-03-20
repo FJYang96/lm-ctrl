@@ -34,7 +34,7 @@ from .llm_evaluation import (
 
 # Shared across both calls — does NOT include trajectory frames
 _DATA_DESCRIPTION = """- TASK COMMAND: The user's task description specifying what the robot should do (e.g. "jump 0.3m high" or "backflip").
-- MOTION QUALITY REPORT: Computed metrics analyzing the physical quality of the trajectory — smoothness (jerk), ground penetration, GRF-contact consistency, friction cone compliance, angular momentum conservation, energy continuity, terminal stability, contact quality, and joint feasibility. Each section provides raw numerical metrics. Use these to assess physical plausibility in context of the task.
+- MOTION QUALITY REPORT: Computed metrics analyzing the physical quality of the trajectory — smoothness (jerk), ground penetration (foot and full-body link penetration), GRF-contact consistency, friction cone compliance, angular momentum conservation, energy continuity, terminal stability, contact quality (impact velocity, landing foot placement, foot spread, support polygon, landing joint limits), and joint feasibility. Each section provides raw numerical metrics. Use these to assess physical plausibility in context of the task.
 - METRICS: Numerical trajectory data (positions, velocities, orientations, timing, GRF, actuator loads).
 - HARDNESS DATA: Raw constraint slack values and violation timesteps. Larger slack = solver had to relax the constraint more.
 - VIOLATIONS: Which constraints were violated and where.

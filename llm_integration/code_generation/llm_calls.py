@@ -266,9 +266,18 @@ def generate_constraints(
         "change the phase structure, redesign the contact sequence, or "
         "rewrite from scratch. "
         "Use the iteration history to avoid repeating failed approaches. "
-        "If scores are stagnating, do NOT keep tweaking parameters — try a "
-        "structurally different approach (different phases, contact sequence, "
-        "constraint variables, or rewrite from scratch)."
+        "If scores are stagnating or the solver has failed 3+ consecutive "
+        "iterations, do NOT keep tweaking parameters within the same "
+        "structure — try a structurally different approach (different number "
+        "of phases, different total duration, different contact sequence, "
+        "different interpolation method, different constraint variables, "
+        "or rewrite from scratch). "
+        "If NO iteration has ever converged, drastically simplify: use a "
+        "single loose envelope constraint with wide bounds, reduce slack "
+        "weights, and remove any per-timestep corridor or schedule "
+        "constraints. Get the solver to converge first, then tighten. "
+        "A converged solution with imperfect task completion is far more "
+        "valuable than an unconverged one."
     )
     lines.append("Return ONLY Python code.")
     lines.append("=" * 60)

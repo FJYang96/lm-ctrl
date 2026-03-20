@@ -300,10 +300,15 @@ ITERATION 1: Minimal viable constraints
   - Goal: Solver converges, motion happens (even if imperfect)
 
 LATER ITERATIONS: You decide the strategy based on iteration history and metrics.
-  - Solver failed → remove constraints, widen bounds, simplify
+  - Solver failed (first 1-2 times) → remove constraints, widen bounds, simplify
+  - Solver failed 3+ consecutive times → structurally different approach (different
+    phases, total duration, contact sequence, interpolation method, or rewrite)
   - Solver converged but motion weak → tighten bounds, add constraints
-  - Scores plateauing → structurally different approach (different phases, contact
-    sequence, constraint variables, or rewrite from scratch)
+  - Scores plateauing → structurally different approach
+  Reference the [BEST] iteration in the history for context, but don't anchor
+  on it — it may be unconverged or a poor solution. Pivoting away from its
+  structure is valid. Even if it converged well with a high score, trying a new
+  structure may score higher.
 
 == 8. TASK ==
 Generate MPC configuration and constraints for the requested behavior.
