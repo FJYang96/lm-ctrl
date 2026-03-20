@@ -106,7 +106,7 @@ Input vector (u_k) index constants:
 
 Include these calls (items 4-6 are REQUIRED — solver FAILS without them):
   1. mpc.set_task_name("...")              # descriptive name (defaults to "unknown")
-  2. mpc.set_duration(seconds)            # typically 1.0-2.0s (defaults to {go2_config.mpc_config.duration})
+  2. mpc.set_duration(seconds)            # (defaults to {go2_config.mpc_config.duration})
      Prefer the shortest duration that fits the motion — fewer timesteps make
      the solver's job easier. Start short, extend only after convergence.
   3. mpc.set_time_step({mpc_dt})              # defaults to {mpc_dt}
