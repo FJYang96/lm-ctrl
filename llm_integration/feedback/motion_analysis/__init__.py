@@ -75,9 +75,7 @@ def compute_motion_quality_report(
         sections.append(("SMOOTHNESS", [f"  Computation failed: {e}"]))
 
     try:
-        lns = _section_ground_penetration(
-            state_traj, contact_sequence, kindyn_model
-        )
+        lns = _section_ground_penetration(state_traj, contact_sequence, kindyn_model)
         sections.append(("GROUND PENETRATION", lns))
     except Exception as e:
         logger.warning(f"Motion quality: ground penetration computation failed: {e}")
@@ -88,9 +86,7 @@ def compute_motion_quality_report(
         sections.append(("GRF-CONTACT CONSISTENCY", lns))
     except Exception as e:
         logger.warning(f"Motion quality: GRF-contact computation failed: {e}")
-        sections.append(
-            ("GRF-CONTACT CONSISTENCY", [f"  Computation failed: {e}"])
-        )
+        sections.append(("GRF-CONTACT CONSISTENCY", [f"  Computation failed: {e}"]))
 
     try:
         lns = _section_friction_cone(grf_traj, contact_sequence, mu_friction)
@@ -104,9 +100,7 @@ def compute_motion_quality_report(
         sections.append(("ANGULAR MOMENTUM (FLIGHT)", lns))
     except Exception as e:
         logger.warning(f"Motion quality: angular momentum computation failed: {e}")
-        sections.append(
-            ("ANGULAR MOMENTUM (FLIGHT)", [f"  Computation failed: {e}"])
-        )
+        sections.append(("ANGULAR MOMENTUM (FLIGHT)", [f"  Computation failed: {e}"]))
 
     try:
         lns = _section_energy_continuity(state_traj, robot_mass, mpc_dt)
@@ -124,7 +118,12 @@ def compute_motion_quality_report(
 
     try:
         lns = _section_contact_quality(
-            state_traj, contact_sequence, kindyn_model, mpc_dt
+            state_traj,
+            contact_sequence,
+            kindyn_model,
+            mpc_dt,
+            joint_limits_lower,
+            joint_limits_upper,
         )
         sections.append(("CONTACT QUALITY", lns))
     except Exception as e:

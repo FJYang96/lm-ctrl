@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from ._helpers import _build_H, _eval_jacobian
+from ._helpers import _build_H, _eval_fk, _eval_jacobian
 
 # Foot names in order matching the 4x3 GRF layout and contact_sequence rows
 _FOOT_NAMES = ("FL", "FR", "RL", "RR")
@@ -17,6 +17,8 @@ def _section_contact_quality(
     contact_sequence: np.ndarray | None,
     kindyn_model: Any,
     mpc_dt: float,
+    joint_limits_lower: np.ndarray | None = None,
+    joint_limits_upper: np.ndarray | None = None,
 ) -> list[str]:
     """H. Contact Quality."""
     lines: list[str] = []
@@ -69,7 +71,157 @@ def _section_contact_quality(
     else:
         lines.append("  No individual foot landings detected")
 
+    # ── Landing foot placement & leg quality ──
+    # Find the last timestep where all 4 feet are in contact (final stance)
+    all_on = np.all(contact_sequence[:, :N] > 0.5, axis=0)
+    landing_step = None
+    for t in range(N - 1, -1, -1):
+        if all_on[t]:
+            landing_step = t
+            break
+
+    # Fallback: last timestep with any contact
+    if landing_step is None:
+        any_on = np.any(contact_sequence[:, :N] > 0.5, axis=0)
+        for t in range(N - 1, -1, -1):
+            if any_on[t]:
+                landing_step = t
+                break
+
+    if landing_step is not None:
+        fk_funs = [
+            kindyn_model.forward_kinematics_FL_fun,
+            kindyn_model.forward_kinematics_FR_fun,
+            kindyn_model.forward_kinematics_RL_fun,
+            kindyn_model.forward_kinematics_RR_fun,
+        ]
+
+        # Compute foot positions at landing
+        com_pos_land = state_traj[landing_step, 0:3]
+        euler_land = state_traj[landing_step, 6:9]
+        joint_pos_land = state_traj[landing_step, 12:24]
+        H_land = _build_H(com_pos_land, euler_land)
+
+        foot_positions = np.zeros((4, 3))
+        for f_idx, fk_fun in enumerate(fk_funs):
+            foot_positions[f_idx] = _eval_fk(fk_fun, H_land, joint_pos_land)
+
+        # Compute initial foot positions for nominal stance reference
+        com_pos_init = state_traj[0, 0:3]
+        euler_init = state_traj[0, 6:9]
+        joint_pos_init = state_traj[0, 12:24]
+        H_init = _build_H(com_pos_init, euler_init)
+
+        init_foot_positions = np.zeros((4, 3))
+        for f_idx, fk_fun in enumerate(fk_funs):
+            init_foot_positions[f_idx] = _eval_fk(fk_fun, H_init, joint_pos_init)
+
+        # Report foot heights at landing
+        lines.append(f"  Landing foot placement (step {landing_step}):")
+        for f_idx in range(4):
+            z = foot_positions[f_idx, 2]
+            status = "OK" if abs(z) < 0.01 else f"OFF ({z:.4f}m)"
+            lines.append(
+                f"    {_FOOT_NAMES[f_idx]}: x={foot_positions[f_idx, 0]:.3f} "
+                f"y={foot_positions[f_idx, 1]:.3f} z={z:.4f}m [{status}]"
+            )
+
+        # Foot spread: diagonal distances
+        diag_fl_rr = float(
+            np.linalg.norm(foot_positions[0, :2] - foot_positions[3, :2])
+        )
+        diag_fr_rl = float(
+            np.linalg.norm(foot_positions[1, :2] - foot_positions[2, :2])
+        )
+        init_diag_fl_rr = float(
+            np.linalg.norm(init_foot_positions[0, :2] - init_foot_positions[3, :2])
+        )
+        init_diag_fr_rl = float(
+            np.linalg.norm(init_foot_positions[1, :2] - init_foot_positions[2, :2])
+        )
+
+        def _spread_status(current: float, nominal: float) -> str:
+            if nominal < 1e-6:
+                return "N/A"
+            ratio = current / nominal
+            if 0.7 <= ratio <= 1.3:
+                return "OK"
+            return f"{'wide' if ratio > 1.3 else 'narrow'} ({ratio:.2f}x nominal)"
+
+        lines.append(
+            f"  Foot spread: FL-RR={diag_fl_rr:.3f}m "
+            f"(nominal {init_diag_fl_rr:.3f}m, {_spread_status(diag_fl_rr, init_diag_fl_rr)}), "
+            f"FR-RL={diag_fr_rl:.3f}m "
+            f"(nominal {init_diag_fr_rl:.3f}m, {_spread_status(diag_fr_rl, init_diag_fr_rl)})"
+        )
+
+        # Support polygon: convex hull of foot XY, check if COM XY is inside
+        foot_xy = foot_positions[:, :2]
+        com_xy = com_pos_land[:2]
+        _report_support_polygon(lines, foot_xy, com_xy)
+
+        # Leg joint configuration at landing
+        if joint_limits_lower is not None and joint_limits_upper is not None:
+            joint_range = joint_limits_upper - joint_limits_lower
+            joint_range = np.maximum(joint_range, 1e-6)
+            dist_lower = joint_pos_land - joint_limits_lower
+            dist_upper = joint_limits_upper - joint_pos_land
+            min_dist = np.minimum(dist_lower, dist_upper)
+            proximity = min_dist / (joint_range / 2)  # 0 = at limit, 1 = centered
+
+            near_limit_threshold = 0.05
+            near_limit_joints = []
+            for j in range(len(proximity)):
+                if proximity[j] < near_limit_threshold:
+                    near_limit_joints.append(f"joint {j} ({proximity[j]:.3f})")
+
+            if near_limit_joints:
+                lines.append(
+                    f"  Landing joint limits: {len(near_limit_joints)} joint(s) "
+                    f"near limits (<{near_limit_threshold}):"
+                )
+                for entry in near_limit_joints:
+                    lines.append(f"    {entry}")
+            else:
+                lines.append("  Landing joint limits: OK (no joints near limits)")
+
     return lines
+
+
+def _report_support_polygon(
+    lines: list[str],
+    foot_xy: np.ndarray,
+    com_xy: np.ndarray,
+) -> None:
+    """Compute convex hull of foot XY positions and check COM containment."""
+    # Simple 2D convex-hull containment using cross-product winding
+    # Order points by angle from centroid to form convex hull
+    centroid = np.mean(foot_xy, axis=0)
+    angles = np.arctan2(foot_xy[:, 1] - centroid[1], foot_xy[:, 0] - centroid[0])
+    order = np.argsort(angles)
+    hull = foot_xy[order]
+
+    # Check if COM is inside convex hull (cross product method)
+    n = len(hull)
+    inside = True
+    min_margin = float("inf")
+    for i in range(n):
+        j = (i + 1) % n
+        edge = hull[j] - hull[i]
+        to_point = com_xy - hull[i]
+        cross = edge[0] * to_point[1] - edge[1] * to_point[0]
+        # Signed distance from COM to edge line
+        edge_len = np.linalg.norm(edge)
+        if edge_len > 1e-9:
+            margin = cross / edge_len
+            min_margin = min(min_margin, margin)
+        if cross < 0:
+            inside = False
+
+    if inside:
+        lines.append(f"  Support polygon: COM inside (margin {min_margin:.4f}m)")
+    else:
+        lines.append(f"  Support polygon: COM OUTSIDE (margin {min_margin:.4f}m)")
 
 
 def _section_joint_quality(

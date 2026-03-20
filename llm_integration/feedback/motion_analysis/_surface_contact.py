@@ -11,6 +11,26 @@ from ._helpers import _build_H, _eval_fk
 # Foot names in order matching the 4x3 GRF layout and contact_sequence rows
 _FOOT_NAMES = ("FL", "FR", "RL", "RR")
 
+# Body links worth checking for ground penetration (trunk, head, leg segments).
+# Foot frames (FL_foot, FR_foot, RL_foot, RR_foot) are excluded — already checked above.
+_BODY_LINK_NAMES = (
+    "base",
+    "Head_upper",
+    "Head_lower",
+    "FL_hip",
+    "FL_thigh",
+    "FL_calf",
+    "FR_hip",
+    "FR_thigh",
+    "FR_calf",
+    "RL_hip",
+    "RL_thigh",
+    "RL_calf",
+    "RR_hip",
+    "RR_thigh",
+    "RR_calf",
+)
+
 
 def _section_smoothness(
     state_traj: np.ndarray,
@@ -191,6 +211,48 @@ def _section_ground_penetration(
                 lines.append(f"    ... and {len(swing_warnings) - 5} more")
         else:
             lines.append("  Swing clearance: OK (all feet > 5mm during swing phases)")
+
+    # ── Full-body ground penetration (non-foot links) ──
+    body_pen_threshold = -0.005  # 5mm tolerance, same as feet
+    body_offenders: list[tuple[str, float, int]] = []  # (link_name, depth, timestep)
+
+    for link_name in _BODY_LINK_NAMES:
+        try:
+            fk_fun = kindyn_model.kindyn.forward_kinematics_fun(link_name)
+        except Exception:
+            continue  # skip links the model doesn't recognise
+
+        worst_depth = 0.0
+        worst_step = 0
+        for t in range(state_traj.shape[0]):
+            com_pos = state_traj[t, 0:3]
+            euler = state_traj[t, 6:9]
+            joint_pos = state_traj[t, 12:24]
+            H = _build_H(com_pos, euler)
+            pos = _eval_fk(fk_fun, H, joint_pos)
+            z = pos[2]
+            if z < worst_depth:
+                worst_depth = z
+                worst_step = t
+
+        if worst_depth < body_pen_threshold:
+            body_offenders.append((link_name, worst_depth, worst_step))
+
+    # Sort by depth (most negative first)
+    body_offenders.sort(key=lambda x: x[1])
+
+    if body_offenders:
+        worst_name, worst_d, worst_t = body_offenders[0]
+        lines.append(
+            f"  Body-link penetration: {len(body_offenders)} link(s) below ground"
+        )
+        lines.append(f"    Worst: {worst_name} at {worst_d:.4f}m (step {worst_t})")
+        for name, depth, step in body_offenders[1:5]:  # cap at 5 total
+            lines.append(f"    {name}: {depth:.4f}m (step {step})")
+        if len(body_offenders) > 5:
+            lines.append(f"    ... and {len(body_offenders) - 5} more")
+    else:
+        lines.append("  Body-link penetration: none (all non-foot links above ground)")
 
     return lines
 
