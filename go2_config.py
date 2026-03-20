@@ -218,11 +218,11 @@ initial_crouch_qvel: np.ndarray = np.zeros(18)
 capability_limits: dict[str, Any] = {
     "min_height_gain_normal": 0.15,
     "max_height_gain_normal": 0.25,
-    "max_height_gain_aggressive": 0.3,
+    "max_height_gain_aggressive": 0.4,
     "min_takeoff_vz": 1.8,
-    "max_takeoff_vz": 2.5,
+    "max_takeoff_vz": 3.0,
     "min_flight_duration": 0.3,
-    "max_flight_duration": 0.5,
+    "max_flight_duration": 0.55,
     "min_peak_grf_total": 900.0,
     "max_peak_grf_total": 1200.0,
     "min_peak_grf_bodyweight_multiple": 6.0,
@@ -231,7 +231,7 @@ capability_limits: dict[str, Any] = {
     "max_com_accel_typical_g": 6.0,
     "max_com_accel_feasible_g": 13.0,
     "min_peak_angular_velocity": 8.0,
-    "peak_angular_velocity": 15.0,
+    "peak_angular_velocity": 18.0,
 }
 
 # Analysis thresholds (used by motion quality reports and trajectory classification)
@@ -304,7 +304,7 @@ experiment = types.SimpleNamespace(
 )
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name == "mpc_config":
         from mpc.defaults import mpc_config as _mpc_config
 

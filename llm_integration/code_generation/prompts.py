@@ -107,6 +107,8 @@ Input vector (u_k) index constants:
 Include these calls (items 4-6 are REQUIRED — solver FAILS without them):
   1. mpc.set_task_name("...")              # descriptive name (defaults to "unknown")
   2. mpc.set_duration(seconds)            # typically 1.0-2.0s (defaults to {go2_config.mpc_config.duration})
+     Prefer the shortest duration that fits the motion — fewer timesteps make
+     the solver's job easier. Start short, extend only after convergence.
   3. mpc.set_time_step({mpc_dt})              # defaults to {mpc_dt}
   4. mpc.set_contact_sequence(array)       # ← REQUIRED — solver FAILS without this
   5. mpc.add_constraint(constraint_func)   # ← REQUIRED — solver FAILS without this
@@ -123,7 +125,8 @@ Contact patterns (EVERY motion needs one, including ground-based like squatting)
 
 Optional: mpc.set_slack_weights({{"your_constraint_func_name": weight, ...}})
   Controls how strictly YOUR constraints are enforced (higher = harder).
-  Default weight for your constraints: 1e3. Physics constraints are always hard
+  Default weight for your constraints: 1e3. Never go below 1e3 — smaller values
+  mean the solver barely enforces your constraints. Physics constraints are always hard
   — you cannot soften them. Hard constraint names: friction_cone_constraints,
   foot_height_constraints, joint_limits_constraints,
   input_limits_constraints, body_clearance_constraints, complementarity_constraints.
@@ -262,13 +265,15 @@ ITERATION 1: Minimal viable constraints
   - Maximum 2-3 constraints, bounds 2-3x wider than you think necessary
   - Goal: Solver converges, motion happens (even if imperfect)
 
-LATER ITERATIONS: Use the iteration summary to see what was tried and why it
-  failed or succeeded. You decide whether to tweak or pivot but some guidance on when to do what.
-  - Solver failing for 2+ iterations or scores plateauing for 3+ iterations → pivot structurally (different phases,
-    duration, contact sequence, or rewrite). Start the new structure with wide
-    bounds and low slack weights. Keep at least one constraint for the primary
-    motion variable and one for height/stability.
-  - Solver converging and scores improving → tighten bounds, add constraints
+LATER ITERATIONS: Use the iteration history to count consecutive failures and
+  score trends. You decide whether to tweak or pivot but here's some guidance.
+  Pivot = drastic structural change (phases, contact sequence, reference
+  trajectory shape, or full rewrite).
+  - Solver failing → first try shorter duration and wider bounds (simplify the
+    problem). If still failing after 2 attempts, pivot.
+  - Scores plateauing for 3+ converged iterations → pivot structurally.
+  - Solver converging and scores improving → tighten bounds, add constraints,
+    or extend duration if the motion needs more time.
   A converged solution with imperfect task completion is far more valuable than
   an unconverged one.
   Reference the [BEST] iteration for context, but don't anchor on it — it may

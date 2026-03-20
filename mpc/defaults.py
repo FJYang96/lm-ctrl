@@ -7,6 +7,8 @@ import mpc.constraints as constr
 from mpc.config_complementarity import ComplementarityMPCConfig
 from mpc.mpc_config import HoppingMPCConfig
 
+mpc_config: ComplementarityMPCConfig | HoppingMPCConfig
+
 if go2_config.CONSTRAINT_MODE == "complementarity":
     mpc_config = ComplementarityMPCConfig(
         duration=go2_config.duration,
