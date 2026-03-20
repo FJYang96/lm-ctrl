@@ -51,7 +51,7 @@ class SafeConstraintExecutor:
             "globals",
             "locals",
         ]
-        dangerous_attributes = [
+        _dangerous_attributes = [
             "__class__",
             "__mro__",
             "__bases__",

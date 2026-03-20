@@ -12,15 +12,15 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optax
-
 
 # ---------------------------------------------------------------------------
 # Network
 # ---------------------------------------------------------------------------
 
+
 class ActorCritic(nn.Module):
     """Separate actor [128,128] and critic [512,512] with ReLU + orthogonal init."""
+
     action_dim: int = 12
 
     @nn.compact
@@ -30,9 +30,13 @@ class ActorCritic(nn.Module):
         a = nn.relu(a)
         a = nn.Dense(128, kernel_init=nn.initializers.orthogonal(np.sqrt(2)))(a)
         a = nn.relu(a)
-        mean = nn.Dense(self.action_dim, kernel_init=nn.initializers.orthogonal(0.01))(a)
+        mean = nn.Dense(self.action_dim, kernel_init=nn.initializers.orthogonal(0.01))(
+            a
+        )
         mean = nn.tanh(mean)
-        log_std = self.param("log_std", nn.initializers.constant(-0.7), (self.action_dim,))
+        log_std = self.param(
+            "log_std", nn.initializers.constant(-0.7), (self.action_dim,)
+        )
         log_std = jnp.clip(log_std, -2.0, 0.0)
 
         # Critic: 39 -> 512 -> 512 -> 1
@@ -48,6 +52,7 @@ class ActorCritic(nn.Module):
 # ---------------------------------------------------------------------------
 # Observation normalization (running mean/var)
 # ---------------------------------------------------------------------------
+
 
 class NormalizerState(NamedTuple):
     mean: jnp.ndarray
@@ -79,13 +84,16 @@ def update_normalizer(state: NormalizerState, batch: jnp.ndarray) -> NormalizerS
     return NormalizerState(mean=new_mean, var=new_var, count=total_count)
 
 
-def normalize_obs(state: NormalizerState, obs: jnp.ndarray, clip: float = 10.0) -> jnp.ndarray:
+def normalize_obs(
+    state: NormalizerState, obs: jnp.ndarray, clip: float = 10.0
+) -> jnp.ndarray:
     return jnp.clip((obs - state.mean) / jnp.sqrt(state.var + 1e-8), -clip, clip)
 
 
 # ---------------------------------------------------------------------------
 # GAE
 # ---------------------------------------------------------------------------
+
 
 def compute_gae(
     rewards: jnp.ndarray,
@@ -119,7 +127,9 @@ def compute_gae(
         gae = delta + gamma * gae_lambda * (1.0 - done) * gae
         return gae, gae
 
-    _, advantages_rev = jax.lax.scan(_scan_fn, jnp.zeros_like(last_value), jnp.arange(T))
+    _, advantages_rev = jax.lax.scan(
+        _scan_fn, jnp.zeros_like(last_value), jnp.arange(T)
+    )
     advantages = jnp.flip(advantages_rev, axis=0)
     returns = advantages + values
     return advantages, returns
@@ -128,6 +138,7 @@ def compute_gae(
 # ---------------------------------------------------------------------------
 # PPO loss
 # ---------------------------------------------------------------------------
+
 
 def ppo_loss(
     params: Any,
@@ -180,6 +191,7 @@ def ppo_loss(
 # Action sampling
 # ---------------------------------------------------------------------------
 
+
 def sample_action(
     params: Any, apply_fn: Any, obs: jnp.ndarray, rng: jnp.ndarray
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -207,7 +219,10 @@ def deterministic_action(
 # Checkpoint save/load
 # ---------------------------------------------------------------------------
 
-def save_checkpoint(path: str, params: Any, normalizer: NormalizerState, step: int) -> None:
+
+def save_checkpoint(
+    path: str, params: Any, normalizer: NormalizerState, step: int
+) -> None:
     """Save params + normalizer to disk as numpy pickle (synchronous, reliable)."""
     import os
     import pickle

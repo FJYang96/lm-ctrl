@@ -14,6 +14,8 @@ from typing import Any
 import casadi as cs
 import numpy as np
 
+import go2_config
+
 from .dynamics.model import KinoDynamic_Model
 
 logger = logging.getLogger("llm_integration")
@@ -55,7 +57,7 @@ class QuadrupedMPCOptiSlack:
     def __init__(
         self,
         model: KinoDynamic_Model,
-        config: Any,
+        config: Any = None,
         build: bool = True,
         use_slack: bool = True,
         slack_weights: dict[str, float] | None = None,
@@ -65,13 +67,14 @@ class QuadrupedMPCOptiSlack:
 
         Args:
             model: KinoDynamic_Model instance
-            config: Configuration object with MPC parameters
+            config: Deprecated — ignored. go2_config is used directly.
             build: Whether to build the solver
             use_slack: Whether to use slack formulation
             slack_weights: Custom weights for slack penalties per constraint type
         """
-        self.horizon = int(config.mpc_config.duration / config.mpc_config.mpc_dt)
-        self.config = config
+        self.horizon = int(
+            go2_config.mpc_config.duration / go2_config.mpc_config.mpc_dt
+        )
         self.kindyn_model = model
         self.use_slack = use_slack
 
@@ -87,10 +90,11 @@ class QuadrupedMPCOptiSlack:
 
         # Compute phase boundaries for jumping motion
         self.pre_flight_steps = int(
-            config.mpc_config.pre_flight_stance_duration / config.mpc_config.mpc_dt
+            go2_config.mpc_config.pre_flight_stance_duration
+            / go2_config.mpc_config.mpc_dt
         )
         self.flight_steps = int(
-            config.mpc_config.flight_duration / config.mpc_config.mpc_dt
+            go2_config.mpc_config.flight_duration / go2_config.mpc_config.mpc_dt
         )
         self.landing_start = self.pre_flight_steps + self.flight_steps
 
@@ -170,7 +174,7 @@ class QuadrupedMPCOptiSlack:
                 self.P_mass,
             )
 
-            dt = self.config.mpc_config.mpc_dt
+            dt = go2_config.mpc_config.mpc_dt
             f_k = self._dynamics_fun(x_k, u_k, param_k)
             self.opti.subject_to(x_next == x_k + dt * f_k)
 
@@ -246,7 +250,7 @@ class QuadrupedMPCOptiSlack:
             u_k = self.U[:, k]
             x_k = self.X[:, k]
 
-            for constraint_fn in self.config.mpc_config.path_constraints:
+            for constraint_fn in go2_config.mpc_config.path_constraints:
                 constraint_name = constraint_fn.__name__
 
                 # Try new signature with k and horizon first, fall back to old signature
@@ -255,7 +259,7 @@ class QuadrupedMPCOptiSlack:
                         x_k,
                         u_k,
                         self.kindyn_model,
-                        self.config,
+                        go2_config,
                         contact_k,
                         k,
                         self.horizon,
@@ -263,7 +267,7 @@ class QuadrupedMPCOptiSlack:
                 except TypeError:
                     # Fall back to old 5-argument signature
                     expr, lb, ub = constraint_fn(
-                        x_k, u_k, self.kindyn_model, self.config, contact_k
+                        x_k, u_k, self.kindyn_model, go2_config, contact_k
                     )
 
                 self._add_constraint_with_slack(constraint_name, k, expr, lb, ub)
@@ -275,7 +279,7 @@ class QuadrupedMPCOptiSlack:
         contact_terminal = self.P_contact[:, self.horizon - 1]
         u_zero = cs.MX.zeros(self.inputs_dim)
 
-        for constraint_fn in self.config.mpc_config.path_constraints:
+        for constraint_fn in go2_config.mpc_config.path_constraints:
             constraint_name = constraint_fn.__name__
             if constraint_name not in self.STATE_ONLY_CONSTRAINT_NAMES:
                 continue
@@ -285,26 +289,26 @@ class QuadrupedMPCOptiSlack:
                     x_terminal,
                     u_zero,
                     self.kindyn_model,
-                    self.config,
+                    go2_config,
                     contact_terminal,
                     self.horizon,
                     self.horizon,
                 )
             except TypeError:
                 expr, lb, ub = constraint_fn(
-                    x_terminal, u_zero, self.kindyn_model, self.config, contact_terminal
+                    x_terminal, u_zero, self.kindyn_model, go2_config, contact_terminal
                 )
 
             self._add_constraint_with_slack(constraint_name, self.horizon, expr, lb, ub)
 
     def _setup_cost_function_with_slack(self) -> None:
         """Setup the cost function including slack penalties."""
-        q_base = self.config.mpc_config.q_base
-        q_joint = self.config.mpc_config.q_joint
-        r_joint_vel = self.config.mpc_config.r_joint_vel
-        r_forces = self.config.mpc_config.r_forces
-        q_terminal_base = self.config.mpc_config.q_terminal_base
-        q_terminal_joint = self.config.mpc_config.q_terminal_joint
+        q_base = go2_config.mpc_config.q_base
+        q_joint = go2_config.mpc_config.q_joint
+        r_joint_vel = go2_config.mpc_config.r_joint_vel
+        r_forces = go2_config.mpc_config.r_forces
+        q_terminal_base = go2_config.mpc_config.q_terminal_base
+        q_terminal_joint = go2_config.mpc_config.q_terminal_joint
 
         cost = 0
 
@@ -342,7 +346,7 @@ class QuadrupedMPCOptiSlack:
 
     def _setup_solver(self) -> None:
         """Setup the solver options."""
-        solver_opts = dict(self.config.solver_config)
+        solver_opts = dict(go2_config.solver_config)
         # Cap solve time to prevent excessive runtime with slack variables
         if "ipopt.max_wall_time" not in solver_opts:
             solver_opts["ipopt.max_wall_time"] = 300.0
@@ -401,9 +405,9 @@ class QuadrupedMPCOptiSlack:
         self.opti.set_value(self.P_X_ref, X_ref_param)
         self.opti.set_value(self.P_U_ref, U_ref_param)
 
-        self.opti.set_value(self.P_mu, self.config.experiment.mu_ground)
-        self.opti.set_value(self.P_mass, self.config.robot_data.mass)
-        self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
+        self.opti.set_value(self.P_mu, go2_config.experiment.mu_ground)
+        self.opti.set_value(self.P_mass, go2_config.robot_data.mass)
+        self.opti.set_value(self.P_inertia, go2_config.robot_data.inertia.flatten())
 
         # Determine initial guess: ref_trajectory or heuristic
         if ref_trajectory is not None:
@@ -429,7 +433,10 @@ class QuadrupedMPCOptiSlack:
                 for foot in range(4):
                     if contact_i[foot] > 0.5:
                         U_init[12 + foot * 3 + 2, i] = (
-                            self.config.robot_data.mass * 9.81 / 4 * 0.8
+                            go2_config.robot_data.mass
+                            * go2_config.experiment.gravity_constant
+                            / 4
+                            * 0.8
                         )
 
         self.opti.set_initial(self.X, X_init)

@@ -31,6 +31,8 @@ from typing import Any
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+import go2_config
+
 
 def main() -> int:
     """Main entry point for LLM-enhanced quadruped control."""
@@ -70,8 +72,8 @@ Examples:
         "--config",
         type=str,
         choices=["standard", "complementarity"],
-        default="complementarity",
-        help="MPC configuration mode (default: complementarity)",
+        default=go2_config.CONSTRAINT_MODE,
+        help="MPC configuration mode (default: %(default)s)",
     )
 
     parser.add_argument(
@@ -111,16 +113,15 @@ Examples:
     try:
         # Import and run pipeline
         print("Loading pipeline components...")
-        import config
         from llm_integration import FeedbackPipeline
 
         # Update config for the selected mode
-        config.CONSTRAINT_MODE = args.config
+        go2_config.CONSTRAINT_MODE = args.config
 
         # Initialize and run pipeline
         use_slack = not args.no_slack
         print("Initializing feedback pipeline...")
-        pipeline = FeedbackPipeline(config, use_slack=use_slack)
+        pipeline = FeedbackPipeline(use_slack=use_slack)
 
         start_time = time.time()
         results = pipeline.run_pipeline(args.command)

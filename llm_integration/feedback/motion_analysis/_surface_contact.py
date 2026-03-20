@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+import go2_config
+
 from ._helpers import _build_H, _eval_fk
 
 # Foot names in order matching the 4x3 GRF layout and contact_sequence rows
@@ -40,9 +42,9 @@ def _section_smoothness(
     """A. Smoothness (jerk-based)."""
     lines: list[str] = []
 
-    # COM position jerk
-    com_pos = state_traj[:, 0:3]
-    com_vel = np.diff(com_pos, axis=0) / mpc_dt
+    # COM position jerk — use state-vector velocities (indices 3:6)
+    # instead of finite-differencing positions, to avoid amplifying numerical noise
+    com_vel = state_traj[:, 3:6]
     com_accel = np.diff(com_vel, axis=0) / mpc_dt
     com_jerk = np.diff(com_accel, axis=0) / mpc_dt
     com_jerk_mag = np.linalg.norm(com_jerk, axis=1)
@@ -68,9 +70,8 @@ def _section_smoothness(
         joint_jerk_max_time = 0.0
         joint_jerk_max_joint = 0
 
-    # Angular jerk
-    euler = state_traj[:, 6:9]
-    euler_vel = np.diff(euler, axis=0) / mpc_dt
+    # Angular jerk — use state-vector angular velocities (indices 9:12)
+    euler_vel = state_traj[:, 9:12]
     euler_accel = np.diff(euler_vel, axis=0) / mpc_dt
     euler_jerk = np.diff(euler_accel, axis=0) / mpc_dt
     euler_jerk_mag = (
@@ -162,7 +163,10 @@ def _section_ground_penetration(
 
     # Ground penetration
     min_height = float(np.min(foot_heights))
-    penetration_threshold = -0.005  # 5mm tolerance
+
+    penetration_threshold = -go2_config.analysis_thresholds[
+        "ground_penetration_tolerance"
+    ]
     penetration_mask = foot_heights < penetration_threshold
     n_penetration = int(np.sum(np.any(penetration_mask, axis=0)))
     total_steps = state_traj.shape[0]
@@ -195,7 +199,11 @@ def _section_ground_penetration(
         for f_idx in range(4):
             for t in range(min(N, contact_sequence.shape[1])):
                 if contact_sequence[f_idx, t] < 0.5:  # swing phase
-                    if t < foot_heights.shape[1] and foot_heights[f_idx, t] < 0.005:
+                    if (
+                        t < foot_heights.shape[1]
+                        and foot_heights[f_idx, t]
+                        < go2_config.analysis_thresholds["swing_clearance_min"]
+                    ):
                         swing_warnings.append(
                             f"{_FOOT_NAMES[f_idx]} foot at step {t}: "
                             f"z={foot_heights[f_idx, t]:.4f}m"
@@ -203,17 +211,19 @@ def _section_ground_penetration(
         if swing_warnings:
             lines.append(
                 f"  Swing clearance warnings "
-                f"({len(swing_warnings)} instances of foot < 5mm during swing):"
+                f"({len(swing_warnings)} instances of foot < {go2_config.analysis_thresholds['swing_clearance_min']*1000:.0f}mm during swing):"
             )
             for w in swing_warnings[:5]:  # cap display
                 lines.append(f"    {w}")
             if len(swing_warnings) > 5:
                 lines.append(f"    ... and {len(swing_warnings) - 5} more")
         else:
-            lines.append("  Swing clearance: OK (all feet > 5mm during swing phases)")
+            lines.append(
+                f"  Swing clearance: OK (all feet > {go2_config.analysis_thresholds['swing_clearance_min']*1000:.0f}mm during swing phases)"
+            )
 
     # ── Full-body ground penetration (non-foot links) ──
-    body_pen_threshold = -0.005  # 5mm tolerance, same as feet
+    body_pen_threshold = -go2_config.analysis_thresholds["ground_penetration_tolerance"]
     body_offenders: list[tuple[str, float, int]] = []  # (link_name, depth, timestep)
 
     for link_name in _BODY_LINK_NAMES:
@@ -282,13 +292,20 @@ def _section_grf_contact(
             grf_mag = float(np.linalg.norm(grf_foot))
             contact = contact_sequence[f_idx, t] > 0.5
 
-            if not contact and grf_mag > 1.0:  # phantom force: GRF during flight
+            if (
+                not contact
+                and grf_mag > go2_config.analysis_thresholds["phantom_force_threshold"]
+            ):
                 phantom_count += 1
                 if grf_mag > worst_phantom_mag:
                     worst_phantom_mag = grf_mag
                     worst_phantom_foot = f"{_FOOT_NAMES[f_idx]} at step {t}"
 
-            if contact and grf_foot[2] < 0.1:  # missing force: no GRF_z during stance
+            if (
+                contact
+                and grf_foot[2]
+                < go2_config.analysis_thresholds["missing_force_threshold"]
+            ):
                 missing_count += 1
 
     # Contact chattering
@@ -297,7 +314,10 @@ def _section_grf_contact(
     )
     chattering_feet = []
     for f_idx in range(4):
-        if transitions_per_foot[f_idx] > 4:
+        if (
+            transitions_per_foot[f_idx]
+            > go2_config.analysis_thresholds["chattering_transition_limit"]
+        ):
             chattering_feet.append(
                 f"{_FOOT_NAMES[f_idx]} ({int(transitions_per_foot[f_idx])} transitions)"
             )

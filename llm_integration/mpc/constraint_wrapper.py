@@ -8,6 +8,8 @@ from typing import Any, cast
 
 import numpy as np
 
+import go2_config
+
 
 def wrap_constraint_for_contact_phases(
     constraint_func: Callable[..., Any],
@@ -71,7 +73,6 @@ def evaluate_constraint_violations(
     constraint_functions: list[Any],
     contact_sequence: np.ndarray,
     kindyn_model: Any,
-    base_config: Any,
     X_debug: np.ndarray,
     U_debug: np.ndarray,
 ) -> dict[str, Any]:
@@ -85,7 +86,6 @@ def evaluate_constraint_violations(
         constraint_functions: List of constraint functions
         contact_sequence: Contact sequence array (4 x horizon)
         kindyn_model: Robot kinodynamic model
-        base_config: Configuration object
         X_debug: State trajectory (states_dim x horizon+1) from opti.debug.value(X)
         U_debug: Input trajectory (inputs_dim x horizon) from opti.debug.value(U)
 
@@ -122,7 +122,7 @@ def evaluate_constraint_violations(
                     x_k,
                     u_k,
                     kindyn_model,
-                    base_config,
+                    go2_config,
                     contact_k,
                     k,
                     horizon,

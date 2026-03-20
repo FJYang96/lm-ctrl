@@ -87,7 +87,7 @@ def save_reward_curve(
     window = max(1, min(50, len(rewards) // 4))
     kernel = np.ones(window) / window
     smooth_r = np.convolve(rewards, kernel, mode="valid")
-    smooth_s = timesteps[window - 1:]
+    smooth_s = timesteps[window - 1 :]
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 4))
     ax.plot(smooth_s, smooth_r, linewidth=0.8)
@@ -115,12 +115,10 @@ def save_component_plot(
 
     window = max(1, min(50, len(timesteps) // 4))
     kernel = np.ones(window) / window
-    smooth_s = timesteps[window - 1:]
+    smooth_s = timesteps[window - 1 :]
 
     fig, axes = plt.subplots(len(COMPONENT_KEYS), 1, figsize=(10, 12), sharex=True)
-    fig.suptitle(
-        f"Raw Reward Components ({total_steps:,} steps)", fontsize=13
-    )
+    fig.suptitle(f"Raw Reward Components ({total_steps:,} steps)", fontsize=13)
 
     for ax, key, label, color in zip(
         axes, COMPONENT_KEYS, COMPONENT_LABELS, COMPONENT_COLORS, strict=False
@@ -128,7 +126,7 @@ def save_component_plot(
         vals = np.array(component_history.get(key, []))
         if len(vals) >= window:
             smooth_v = np.convolve(vals, kernel, mode="valid")
-            ax.plot(smooth_s[:len(smooth_v)], smooth_v, linewidth=0.8, color=color)
+            ax.plot(smooth_s[: len(smooth_v)], smooth_v, linewidth=0.8, color=color)
         ax.set_ylabel(label, fontsize=9)
         ax.set_ylim(-0.01, 1.02)
         ax.grid(True, alpha=0.3)
@@ -152,7 +150,9 @@ class RewardTracker:
         self.ep_lengths: list[int] = []
         self.component_history: dict[str, list[float]] = {k: [] for k in COMPONENT_KEYS}
 
-    def log_episode(self, reward: float, length: int, components: dict[str, float] | None = None) -> None:
+    def log_episode(
+        self, reward: float, length: int, components: dict[str, float] | None = None
+    ) -> None:
         self.ep_rewards.append(reward)
         self.ep_lengths.append(length)
         if components:
@@ -172,7 +172,7 @@ def diagnose_termination(
     contact_sequence: np.ndarray | None = None,
 ) -> None:
     """Run one episode in the CPU tracking env and write per-step diagnostics."""
-    import config as cfg
+    import go2_config as cfg
 
     from .feedforward import FeedforwardComputer
     from .reference import ReferenceTrajectory

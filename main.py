@@ -1,7 +1,7 @@
 import numpy as np
 from gym_quadruped.quadruped_env import QuadrupedEnv
 
-import config
+import go2_config as config
 from mpc.dynamics.model import KinoDynamic_Model
 from mpc.mpc_opti import QuadrupedMPCOpti
 from utils import conversion
@@ -18,8 +18,8 @@ def main() -> None:
     # Stage 0: Setup
     # ========================================================
     color_print("orange", "Stage 0: Setup")
-    kinodynamic_model = KinoDynamic_Model(config)
-    mpc = QuadrupedMPCOpti(model=kinodynamic_model, config=config, build=True)
+    kinodynamic_model = KinoDynamic_Model()
+    mpc = QuadrupedMPCOpti(model=kinodynamic_model, build=True)
     env = QuadrupedEnv(
         robot=config.robot,
         scene="flat",
@@ -58,9 +58,7 @@ def main() -> None:
 
     # Render planned trajectory if rendering is enabled
     if config.experiment.render:
-        render_and_save_planned_trajectory(
-            state_traj, input_traj, env, suffix
-        )
+        render_and_save_planned_trajectory(state_traj, input_traj, env, suffix)
 
 
 if __name__ == "__main__":

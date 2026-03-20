@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+import go2_config
 from mpc.mpc_opti_slack import QuadrupedMPCOptiSlack
 from utils import conversion
 from utils.simulation import create_reference_trajectory
@@ -95,7 +96,11 @@ def analyze_trajectory(
 
         # Flight phase analysis
         initial_height = com_positions[0, 2]
-        height_threshold = initial_height + 0.05  # 5cm above initial
+        import go2_config
+
+        height_threshold = (
+            initial_height + go2_config.analysis_thresholds["flight_height_offset"]
+        )
         airborne_mask = com_positions[:, 2] > height_threshold
 
         if np.any(airborne_mask):
@@ -126,14 +131,19 @@ def analyze_trajectory(
 
         # GRF metrics (4 feet x 3 forces: fx, fy, fz per foot)
         if grf_traj is not None and grf_traj.shape[0] > 0:
-            grf_z_indices = [2, 5, 8, 11]  # z-component per foot
+            grf_z_indices = [
+                f_idx * 3 + 2 for f_idx in range(go2_config.N_LEGS)
+            ]  # z-component per foot
             grf_z = grf_traj[:, grf_z_indices]  # (horizon, 4)
             total_grf_z = np.sum(grf_z, axis=1)  # (horizon,)
             metrics["max_total_grf_z"] = float(np.max(np.abs(total_grf_z)))
             metrics["mean_total_grf_z"] = float(np.mean(np.abs(total_grf_z)))
             metrics["max_single_foot_grf_z"] = float(np.max(np.abs(grf_z)))
             # Check GRF utilization: fraction of timesteps with significant GRF
-            active_grf_mask = np.abs(total_grf_z) > 1.0  # > 1N threshold
+            active_grf_mask = (
+                np.abs(total_grf_z)
+                > go2_config.analysis_thresholds["negligible_force_threshold"]
+            )
             metrics["grf_active_fraction"] = float(np.mean(active_grf_mask))
         else:
             metrics["max_total_grf_z"] = 0.0
@@ -262,8 +272,15 @@ def _extract_hardness_report(
                 logger.info(f"Slack penalty cost: {slack_cost:.4f}")
                 logger.info(f"Base cost (without slack): {obj_value - slack_cost:.4f}")
         else:
-            obj_value = float(mpc.opti.value(mpc.opti.f))
-            logger.info(f"Optimization objective value: {obj_value:.4f}")
+            try:
+                obj_value = float(mpc.opti.value(mpc.opti.f))
+            except Exception:
+                try:
+                    obj_value = float(mpc.opti.debug.value(mpc.opti.f))
+                except Exception:
+                    obj_value = None
+            if obj_value is not None:
+                logger.info(f"Optimization objective value: {obj_value:.4f}")
 
     hardness_report = task_mpc.last_hardness_report
 
@@ -355,10 +372,10 @@ def solve_trajectory_optimization(
 
     # Setup initial conditions
     initial_state, _ = conversion.sim_to_mpc(
-        self.config.experiment.initial_qpos, self.config.experiment.initial_qvel
+        go2_config.experiment.initial_qpos, go2_config.experiment.initial_qvel
     )
 
-    ref = create_reference_trajectory(self.config.experiment.initial_qpos)
+    ref = create_reference_trajectory(go2_config.experiment.initial_qpos)
 
     try:
         state_traj, grf_traj, joint_vel_traj, status = (

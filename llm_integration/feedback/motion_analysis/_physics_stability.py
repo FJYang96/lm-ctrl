@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+import go2_config
+
 # Foot names in order matching the 4x3 GRF layout and contact_sequence rows
 _FOOT_NAMES = ("FL", "FR", "RL", "RR")
 
@@ -30,7 +32,7 @@ def _section_friction_cone(
 
             grf_foot = grf_traj[t, f_idx * 3 : (f_idx + 1) * 3]
             fz = grf_foot[2]
-            if fz < 1.0:  # skip negligible forces
+            if fz < go2_config.analysis_thresholds["negligible_force_threshold"]:
                 continue
 
             tangential = np.sqrt(grf_foot[0] ** 2 + grf_foot[1] ** 2)
@@ -118,15 +120,17 @@ def _section_energy_continuity(
 ) -> list[str]:
     """F. Energy Continuity."""
     lines: list[str] = []
-    g = 9.81
+    import go2_config
+
+    g = go2_config.experiment.gravity_constant
 
     com_pos = state_traj[:, 0:3]
     com_vel = state_traj[:, 3:6]
     omega = state_traj[:, 9:12]
 
     KE_linear = 0.5 * robot_mass * np.sum(com_vel**2, axis=1)
-    # Approximate rotational KE using scalar inertia ~ m * 0.01 (rough Go2)
-    I_approx = robot_mass * 0.01
+    # Use average diagonal of composite inertia for scalar approximation
+    I_approx = float(np.mean(np.diag(go2_config.composite_inertia)))
     KE_rot = 0.5 * I_approx * np.sum(omega**2, axis=1)
     PE = robot_mass * g * com_pos[:, 2]
 

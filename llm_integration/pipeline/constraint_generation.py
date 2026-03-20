@@ -58,8 +58,13 @@ def generate_constraints_with_retry(
                 # Subsequent attempts use repair prompts with detailed error feedback
                 failed_code = attempts[-1]["code"]
                 error_msg = attempts[-1]["error"]
+                # Use the LLM's mpc_dt (from feedback_data or pipeline state)
+                # so the repair prompt shows the correct dt, not the base config.
+                repair_dt = (
+                    feedback_data.get("mpc_dt") if feedback_data else None
+                ) or getattr(self, "_last_mpc_dt", None)
                 prompt = create_repair_prompt(
-                    command, failed_code, error_msg, attempt, config=self.config
+                    command, failed_code, error_msg, attempt, mpc_dt=repair_dt
                 )
                 response, _ = generate_constraints(system_prompt, prompt)
 
@@ -79,9 +84,7 @@ def generate_constraints_with_retry(
                 continue
 
             # Create fresh LLM MPC instance for this attempt
-            task_mpc = LLMTaskMPC(
-                self.kindyn_model, self.config, use_slack=self.use_slack
-            )
+            task_mpc = LLMTaskMPC(self.kindyn_model, use_slack=self.use_slack)
 
             # Initialize with previous iteration's slack weights
             if self.current_slack_weights:

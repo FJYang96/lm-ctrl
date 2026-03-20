@@ -4,118 +4,68 @@ from __future__ import annotations
 
 from typing import Any
 
+import go2_config
 
-def get_robot_details(config: Any = None) -> dict[str, Any]:
-    """Extract robot-specific details from config or use sensible defaults.
 
-    Args:
-        config: Optional robot configuration object.
+def get_robot_details() -> dict[str, Any]:
+    """Return robot-specific details from go2_config.
 
     Returns:
-        Dictionary with mass, initial_height, joint_limits_lower, joint_limits_upper.
+        Dictionary with mass, initial_height, joint_limits, geometry,
+        and capability fields — all from go2_config.
     """
-    details: dict[str, Any] = {
-        "mass": 15.019,
-        "initial_height": 0.2117,
-        "joint_limits_lower": [
-            -0.8,
-            -1.57,
-            -2.6,
-            -0.8,
-            -1.57,
-            -2.6,
-            -0.8,
-            -0.52,
-            -2.6,
-            -0.8,
-            -0.52,
-            -2.6,
-        ],
-        "joint_limits_upper": [0.8, 1.6, -0.84] * 4,
+    return {
+        "mass": go2_config.composite_mass,
+        "initial_height": float(go2_config.initial_crouch_qpos[2]),
+        "joint_limits_lower": go2_config.urdf_joint_limits_lower.tolist(),
+        "joint_limits_upper": go2_config.urdf_joint_limits_upper.tolist(),
+        "grf_limits": float(go2_config.grf_limits),
+        "joint_velocity_limits": go2_config.urdf_joint_velocities.tolist(),
+        "mu_ground": go2_config.experiment.mu_ground,
+        "body_half_extents": go2_config.body_half_extents,
+        "leg_lengths": go2_config.leg_lengths,
+        "hip_spacing": go2_config.hip_spacing,
+        "capability_limits": go2_config.capability_limits,
     }
 
-    if config is None:
-        return details
 
-    details["mass"] = float(config.robot_data.mass)
-    details["initial_height"] = float(config.experiment.initial_qpos[2])
-    details["joint_limits_lower"] = config.robot_data.joint_limits_lower.tolist()
-    details["joint_limits_upper"] = config.robot_data.joint_limits_upper.tolist()
-
-    if hasattr(config.robot_data, "grf_limits"):
-        val = config.robot_data.grf_limits
-        details["grf_limits"] = val.tolist() if hasattr(val, "tolist") else float(val)
-    if hasattr(config.robot_data, "joint_velocity_limits"):
-        val = config.robot_data.joint_velocity_limits
-        details["joint_velocity_limits"] = (
-            val.tolist() if hasattr(val, "tolist") else float(val)
-        )
-    if hasattr(config.experiment, "mu_ground"):
-        details["mu_ground"] = float(config.experiment.mu_ground)
-
-    return details
-
-
-def get_system_prompt(config: Any = None) -> str:
+def get_system_prompt() -> str:
     """Get the system prompt that instructs the LLM on MPC configuration + constraint generation.
 
-    Args:
-        config: Optional robot configuration object.
-
     Returns:
-        System prompt string with accurate physical parameters.
+        System prompt string with accurate physical parameters from go2_config.
     """
-    details = get_robot_details(config)
+    details = get_robot_details()
     mass = details["mass"]
     initial_height = details["initial_height"]
-
-    # Extract GRF limit, joint velocity limit, and friction coefficient
-    grf_limit = 500.0  # default
-    grf_limits_raw = details.get("grf_limits")
-    if grf_limits_raw is not None:
-        if isinstance(grf_limits_raw, (int, float)):
-            grf_limit = float(grf_limits_raw)
-        else:
-            grf_limit = (
-                float(grf_limits_raw[2])
-                if len(grf_limits_raw) > 2
-                else float(max(grf_limits_raw))
-            )
-
-    jvel_limit = 10.0  # default
-    jvel_limits_raw = details.get("joint_velocity_limits")
-    if jvel_limits_raw is not None:
-        if isinstance(jvel_limits_raw, (int, float)):
-            jvel_limit = float(abs(jvel_limits_raw))
-        else:
-            jvel_limit = (
-                float(max(abs(v) for v in jvel_limits_raw)) if jvel_limits_raw else 10.0
-            )
-
-    mu = 0.5  # default
-    mu_raw = details.get("mu_ground")
-    if mu_raw is not None:
-        mu = float(mu_raw)
+    grf_limit = float(details["grf_limits"])
+    jvel_limit = float(max(details["joint_velocity_limits"]))
+    mu = float(details["mu_ground"])
+    bhe = details["body_half_extents"]
+    ll = details["leg_lengths"]
+    hs = details["hip_spacing"]
+    cl = details["capability_limits"]
+    mpc_dt = go2_config.mpc_config.mpc_dt
 
     base = f"""You are a robotics expert generating MPC configurations for quadruped robot trajectory optimization.
 
 == 1. ROBOT (Unitree Go2) ==
 
 Mass: {mass:.2f} kg | Initial COM height: {initial_height:.4f}m
-Body trunk: ~37.6cm long x 9.4cm wide x 11.4cm tall (model half-extents: 0.1881/0.0468/0.057m)
-Leg length: ~43cm fully extended (21.3cm thigh + 21.3cm calf)
-Hip spacing: Front/rear ~19cm from COM, Left/right ~14cm from COM
-Joint limits: Hip ±46deg, Front thigh -90 to +92deg, Rear thigh -30 to +92deg, Calf -149 to -48deg
+Body trunk: ~{bhe[0]*2*100:.1f}cm long x {bhe[1]*2*100:.1f}cm wide x {bhe[2]*2*100:.1f}cm tall (model half-extents: {bhe[0]}/{bhe[1]}/{bhe[2]}m)
+Leg length: ~{ll['total']*100:.0f}cm fully extended ({ll['thigh']*100:.1f}cm thigh + {ll['calf']*100:.1f}cm calf)
+Hip spacing: Front/rear ~{hs['front_rear_from_com']*100:.0f}cm from COM, Left/right ~{hs['left_right_from_com']*100:.0f}cm from COM
+Joint limits (from URDF, per joint in rad): lower={details['joint_limits_lower'][:3]}, upper={details['joint_limits_upper'][:3]} (FL; pattern repeats per leg with RL/RR thigh having different range)
 Per-component GRF limit: {grf_limit:.0f} N (fx,fy,fz each per foot) | Joint velocity limit: {jvel_limit:.1f} rad/s
 Ground friction coefficient: {mu}
 
 Physical capability limits (do NOT exceed):
-- Max COM height gain: ~0.15-0.25m (normal jump), ~0.3m (aggressive)
-- Max takeoff vz: ~1.8-2.5 m/s | Max flight duration: ~0.3-0.5s
-- Max peak GRF: ~6-8x body weight (~900-1200 N total across 4 feet)
-- Max COM acceleration: ~4-6g typical, up to ~13g solver-feasible
-- Peak angular velocity: 8-15 rad/s
-- vz_takeoff = g * flight_duration / 2, but flight_duration MUST be <= 0.5s
+- Max COM height gain: ~{cl['min_height_gain_normal']}-{cl['max_height_gain_normal']}m (normal jump), ~{cl['max_height_gain_aggressive']}m (aggressive)
+- Max takeoff vz: ~{cl['min_takeoff_vz']}-{cl['max_takeoff_vz']} m/s | Max flight duration: ~{cl['min_flight_duration']}-{cl['max_flight_duration']}s
+- Max peak GRF: ~{cl['min_peak_grf_bodyweight_multiple']:.0f}-{cl['max_peak_grf_bodyweight_multiple']:.0f}x body weight (~{cl['min_peak_grf_total']:.0f}-{cl['max_peak_grf_total']:.0f} N total across 4 feet)
+- Max COM acceleration: ~{cl['min_com_accel_typical_g']:.0f}-{cl['max_com_accel_typical_g']:.0f}g typical, up to ~{cl['max_com_accel_feasible_g']:.0f}g solver-feasible
+- Peak angular velocity: {cl['min_peak_angular_velocity']:.0f}-{cl['peak_angular_velocity']:.0f} rad/s
+- vz_takeoff = g * flight_duration / 2, but flight_duration MUST be <= {cl['max_flight_duration']}s
 
 Key physics:
 - Rotation: angle_change = angular_velocity × time
@@ -156,8 +106,8 @@ Input vector (u_k) index constants:
 
 Include these calls (items 4-6 are REQUIRED — solver FAILS without them):
   1. mpc.set_task_name("...")              # descriptive name (defaults to "unknown")
-  2. mpc.set_duration(seconds)            # typically 1.0-2.0s (defaults to 1.0)
-  3. mpc.set_time_step(0.02)              # defaults to 0.02
+  2. mpc.set_duration(seconds)            # typically 1.0-2.0s (defaults to {go2_config.mpc_config.duration})
+  3. mpc.set_time_step({mpc_dt})              # defaults to {mpc_dt}
   4. mpc.set_contact_sequence(array)       # ← REQUIRED — solver FAILS without this
   5. mpc.add_constraint(constraint_func)   # ← REQUIRED — solver FAILS without this
   6. mpc.set_reference_trajectory(func)    # ← REQUIRED — solver FAILS without this
@@ -175,8 +125,9 @@ Optional: mpc.set_slack_weights({{"your_constraint_func_name": weight, ...}})
   Controls how strictly YOUR constraints are enforced (higher = harder).
   Default weight for your constraints: 1e3. Physics constraints are always hard
   — you cannot soften them. Hard constraint names: friction_cone_constraints,
-  foot_height_constraints, foot_velocity_constraints, joint_limits_constraints,
+  foot_height_constraints, joint_limits_constraints,
   input_limits_constraints, body_clearance_constraints, complementarity_constraints.
+  (foot_velocity_constraints is also reserved but not active in complementarity mode.)
   IMPORTANT: Do NOT name your constraint functions with any of these names, or they
   will be treated as hard constraints (no slack) and solver failures become likely.
 
@@ -203,12 +154,12 @@ Parameters:
 
 Constraint application range:
   YOUR constraints are applied at k=1 through k=horizon-1 ONLY (never at k=0 or
-  k=horizon). The three system constraints (joint_limits, foot_height, body_clearance)
-  are additionally applied at k=horizon by the solver, but this does NOT apply to
-  any constraint you write. The initial state (k=0) is enforced separately by the
-  solver. Design terminal constraints to tighten as progress approaches 1.0 — the
-  last applied step is k=horizon-1 (progress = (horizon-1)/horizon, e.g. 0.98 for
-  horizon=50).
+  k=horizon). Three system constraints (joint_limits, foot_height, body_clearance)
+  are additionally applied at k=horizon by the solver using a hardcoded name check.
+  YOUR constraints are NEVER applied at k=horizon regardless of whether they use u_k.
+  The initial state (k=0) is enforced separately by the solver. Design
+  terminal constraints to tighten as progress approaches 1.0 — the last applied
+  step is k=horizon-1 (progress = (horizon-1)/horizon, e.g. 0.98 for horizon=50).
 
 P1 — SMOOTH BOUNDS: Bounds must be continuous across timesteps. NEVER use if/else
   branches, contact_k-based step functions, or anything that creates sudden jumps.
@@ -244,6 +195,18 @@ Constraint hardness guidance (for iteration 2+):
   - SYSTEM constraints with large slack: motion is physically difficult, adjust timing
   - body_clearance violations often mean too much rotation during ground contact
   - Use mpc.set_slack_weights() to prioritize which constraints matter most
+
+Solver failure causes (Invalid_Number = NaN, infeasible problem):
+  - Bounds that demand states unreachable given the current contact mode
+  - Conflicting constraints that leave no feasible region
+  - Fix by widening bounds 2-3×, NOT by removing constraints entirely — removing
+    all guidance produces degenerate solutions
+
+Body-link ground penetration:
+  - The solver only constrains foot heights and an approximate COM-based body
+    clearance. Individual body links can still go below ground.
+  - If body-link penetration is reported in feedback, raise the COM height floor
+    during the affected phase of your constraints.
 
 == 5. REFERENCE TRAJECTORY ==
 
@@ -288,8 +251,8 @@ NumPy (via np.*):
   np.array, np.zeros, np.ones, np.eye, np.concatenate, np.stack, np.linalg,
   np.maximum, np.minimum, np.pi, np.sin, np.cos, np.sqrt, np.inf
 
-Python builtins: abs, round, max, min, len, range, enumerate, zip, float, int,
-  str, list, tuple, dict, bool, hasattr, getattr, isinstance, type, print
+Python builtins: abs, sum, round, max, min, len, range, enumerate, zip, float,
+  int, str, list, tuple, dict, bool, hasattr, getattr, isinstance, type, print
 Constants: pi, inf
 Rotation: SO3 (from liecasadi)
 
@@ -299,15 +262,17 @@ ITERATION 1: Minimal viable constraints
   - Maximum 2-3 constraints, bounds 2-3x wider than you think necessary
   - Goal: Solver converges, motion happens (even if imperfect)
 
-LATER ITERATIONS: You decide the strategy based on iteration history and metrics.
-  - Solver failed (first 1-2 times) → remove constraints, widen bounds, simplify
-  - Solver failed 3+ consecutive times → structurally different approach (different
-    phases, total duration, contact sequence, interpolation method, or rewrite)
-  - Solver converged but motion weak → tighten bounds, add constraints
-  - Scores plateauing → structurally different approach
-  Reference the [BEST] iteration in the history for context, but don't anchor
-  on it — it may be unconverged or a poor solution. Pivoting away from its
-  structure is valid. Even if it converged well with a high score, trying a new
+LATER ITERATIONS: Use the iteration summary to see what was tried and why it
+  failed or succeeded. You decide whether to tweak or pivot but some guidance on when to do what.
+  - Solver failing for 2+ iterations or scores plateauing for 3+ iterations → pivot structurally (different phases,
+    duration, contact sequence, or rewrite). Start the new structure with wide
+    bounds and low slack weights. Keep at least one constraint for the primary
+    motion variable and one for height/stability.
+  - Solver converging and scores improving → tighten bounds, add constraints
+  A converged solution with imperfect task completion is far more valuable than
+  an unconverged one.
+  Reference the [BEST] iteration for context, but don't anchor on it — it may
+  be unconverged or a poor solution. Even if it scored well, trying a new
   structure may score higher.
 
 == 8. TASK ==
@@ -342,7 +307,7 @@ def create_repair_prompt(
     failed_code: str,
     error_message: str,
     attempt_number: int,
-    config: Any = None,
+    mpc_dt: float | None = None,
 ) -> str:
     """Create a prompt to ask the LLM to fix failed MPC configuration code.
 
@@ -351,12 +316,16 @@ def create_repair_prompt(
         failed_code: The code that failed.
         error_message: Error message from SafeExecutor/MPC.
         attempt_number: Which attempt this is (1-10).
-        config: Optional robot configuration object.
+        mpc_dt: The LLM's current time step. Falls back to base config only
+            on iteration 1 (before any LLM has changed dt).
 
     Returns:
         Repair prompt string.
     """
-    initial_height = get_robot_details(config)["initial_height"]
+    details = get_robot_details()
+    initial_height = details["initial_height"]
+    if mpc_dt is None:
+        mpc_dt = go2_config.mpc_config.mpc_dt
     code_snippet = failed_code
     if len(failed_code) > 800:
         code_snippet = (
@@ -374,8 +343,8 @@ FAILED CODE:
 
 ⚠️ MANDATORY CHECKLIST - Items 4-6 are REQUIRED (solver FAILS without them):
 □ mpc.set_task_name("...")              (recommended, defaults to "unknown")
-□ mpc.set_duration(...)                 (recommended, defaults to 1.0)
-□ mpc.set_time_step(0.02)              (recommended, defaults to 0.02)
+□ mpc.set_duration(...)                 (recommended, defaults to {go2_config.mpc_config.duration})
+□ mpc.set_time_step({mpc_dt})              (recommended, defaults to {mpc_dt})
 □ mpc.set_contact_sequence(...)  ← REQUIRED - THIS IS THE #1 MISSING CALL
 □ mpc.add_constraint(...)        ← REQUIRED
 □ mpc.set_reference_trajectory(...)  ← REQUIRED - cost target AND initial guess
@@ -384,6 +353,6 @@ Other requirements:
 - Constraint function must have 7 parameters: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)
 - Must return exactly 3 values: (constraint_expr, lower_bound, upper_bound)
 - All return values must be CasADi MX expressions (use vertcat for multiple constraints)
-- Constraints are applied at k=1 through k=horizon-1 (NOT at k=0). Bounds at k=1 must be reachable from the starting state (height={initial_height:.4f}m).
+- YOUR constraints are applied at k=1 through k=horizon-1 (NOT at k=0 or k=horizon). System constraints (joint_limits, foot_height, body_clearance) are also applied at k=horizon. Bounds at k=1 must be reachable from the starting state (height={initial_height:.4f}m).
 
 Return ONLY corrected Python code."""

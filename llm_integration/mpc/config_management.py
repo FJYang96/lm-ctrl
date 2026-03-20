@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any
 
+import go2_config
+
 if TYPE_CHECKING:
     from .llm_task_mpc import LLMTaskMPC
 
@@ -16,37 +18,37 @@ def create_task_config(mpc: "LLMTaskMPC") -> Any:
         mpc: The LLMTaskMPC instance
 
     Returns:
-        The modified task config
+        The modified go2_config (temporarily mutated)
     """
-    task_config = mpc.base_config
-
     # Store original values to restore after MPC build
-    mpc._original_duration = task_config.mpc_config.duration
-    mpc._original_dt = task_config.mpc_config.mpc_dt
-    mpc._original_contact_sequence = task_config.mpc_config._contact_sequence
+    mpc._original_duration = go2_config.mpc_config.duration
+    mpc._original_dt = go2_config.mpc_config.mpc_dt
+    mpc._original_contact_sequence = go2_config.mpc_config._contact_sequence
     # Make a copy of the original constraints list to prevent accumulation
-    mpc._original_constraints = list(task_config.mpc_config.path_constraints)
+    mpc._original_constraints = list(go2_config.mpc_config.path_constraints)
 
     # Temporarily override with LLM-specified parameters
-    task_config.mpc_config.duration = mpc.mpc_duration
-    task_config.mpc_config.mpc_dt = mpc.mpc_dt
-    task_config.mpc_config._contact_sequence = mpc.contact_sequence
+    go2_config.mpc_config.duration = mpc.mpc_duration
+    go2_config.mpc_config.mpc_dt = mpc.mpc_dt
+    go2_config.mpc_config._contact_sequence = mpc.contact_sequence
 
     # Add LLM constraints to path constraints (using copy of original)
-    task_config.mpc_config.path_constraints = (
+    go2_config.mpc_config.path_constraints = (
         list(mpc._original_constraints) + mpc.constraint_functions
     )
 
-    return task_config
+    return go2_config
 
 
 def restore_base_config(mpc: "LLMTaskMPC") -> None:
-    """Restore base config to original values after MPC build.
+    """Restore go2_config to original values after MPC build.
 
     Args:
         mpc: The LLMTaskMPC instance
     """
-    mpc.base_config.mpc_config.path_constraints = mpc._original_constraints
-    mpc.base_config.mpc_config.duration = mpc._original_duration
-    mpc.base_config.mpc_config.mpc_dt = mpc._original_dt
-    mpc.base_config.mpc_config._contact_sequence = mpc._original_contact_sequence
+    if mpc._original_duration is None:
+        return
+    go2_config.mpc_config.path_constraints = list(mpc._original_constraints)
+    go2_config.mpc_config.duration = mpc._original_duration
+    go2_config.mpc_config.mpc_dt = mpc._original_dt
+    go2_config.mpc_config._contact_sequence = mpc._original_contact_sequence

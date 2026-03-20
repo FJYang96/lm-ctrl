@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import go2_config
+
 from ..logging_config import logger
 from .format_hardness import format_hardness_report
 from .format_metrics import format_trajectory_metrics_text
@@ -66,48 +68,31 @@ def _save_prompt(
         f.write(user_message)
 
 
-def _format_robot_context(robot_details: dict[str, Any]) -> str:
+def _format_robot_context() -> str:
     """Format robot details into a context block for LLM prompts."""
-    mass = robot_details.get("mass", 15.019)
-    height = robot_details.get("initial_height", 0.2117)
-    lower = robot_details.get(
-        "joint_limits_lower",
-        [-0.8, -1.57, -2.6, -0.8, -1.57, -2.6, -0.8, -0.52, -2.6, -0.8, -0.52, -2.6],
-    )
-    upper = robot_details.get("joint_limits_upper", [0.8, 1.6, -0.84] * 4)
-    grf_limits = robot_details.get("grf_limits")
-    jvel_limits = robot_details.get("joint_velocity_limits")
-    mu = robot_details.get("mu_ground")
+    mass = go2_config.composite_mass
+    height = float(go2_config.initial_crouch_qpos[2])
+    lower = go2_config.urdf_joint_limits_lower.tolist()
+    upper = go2_config.urdf_joint_limits_upper.tolist()
+    grf_limit = float(go2_config.grf_limits)
+    jvel_limit = float(max(go2_config.urdf_joint_velocities))
+    mu = go2_config.experiment.mu_ground
+    cl = go2_config.capability_limits
 
     lines = [
         f"Unitree Go2 quadruped, mass {mass:.1f} kg, nominal standing height {height:.4f} m.",
+        f"Per-component GRF limit: {grf_limit:.0f} N (fx,fy,fz each per foot).",
+        f"Joint velocity limit: {jvel_limit:.1f} rad/s.",
+        f"Ground friction coefficient: {mu}.",
+        f"Joint limits: {lower[:3]} to {upper[:3]} (per leg, repeated x4).",
+        "",
+        "Physical capabilities (realistic for this robot):",
+        f"- Max COM height gain: ~{cl['min_height_gain_normal']}-{cl['max_height_gain_normal']}m normal, ~{cl['max_height_gain_aggressive']}m aggressive",
+        f"- Max realistic takeoff vz: ~{cl['min_takeoff_vz']}-{cl['max_takeoff_vz']} m/s",
+        f"- Max realistic flight duration: ~{cl['min_flight_duration']}-{cl['max_flight_duration']}s",
+        f"- Max realistic peak total GRF: ~{cl['min_peak_grf_total']:.0f}-{cl['max_peak_grf_total']:.0f} N ({cl['min_peak_grf_bodyweight_multiple']:.0f}-{cl['max_peak_grf_bodyweight_multiple']:.0f}x body weight)",
+        "- Trajectories exceeding these limits are physically unrealizable even if the solver converges.",
     ]
-    if grf_limits is not None:
-        if isinstance(grf_limits, (int, float)):
-            grf_limit = grf_limits
-        else:
-            grf_limit = grf_limits[2] if len(grf_limits) > 2 else max(grf_limits)
-        lines.append(
-            f"Per-component GRF limit: {grf_limit:.0f} N (fx,fy,fz each per foot)."
-        )
-    if jvel_limits is not None:
-        if isinstance(jvel_limits, (int, float)):
-            jvel_limit = abs(jvel_limits)
-        else:
-            jvel_limit = max(abs(v) for v in jvel_limits) if jvel_limits else 0
-        lines.append(f"Joint velocity limit: {jvel_limit:.1f} rad/s.")
-    if mu is not None:
-        lines.append(f"Ground friction coefficient: {mu}.")
-    lines.append(f"Joint limits: {lower[:3]} to {upper[:3]} (per leg, repeated x4).")
-    lines.append("")
-    lines.append("Physical capabilities (realistic for this robot):")
-    lines.append("- Max COM height gain: ~0.15-0.25m normal, ~0.3m aggressive")
-    lines.append("- Max realistic takeoff vz: ~1.8-2.5 m/s")
-    lines.append("- Max realistic flight duration: ~0.3-0.5s")
-    lines.append("- Max realistic peak total GRF: ~900-1200 N (6-8x body weight)")
-    lines.append(
-        "- Trajectories exceeding these limits are physically unrealizable even if the solver converges."
-    )
     return "\n".join(lines)
 
 
@@ -119,23 +104,34 @@ def evaluate_iteration_unified(
     error_info: dict[str, Any] | None = None,
     motion_quality_report: str = "",
     hardness_report: dict[str, Any] | None = None,
-    mpc_dt: float = 0.02,
+    mpc_dt: float | None = None,
     current_slack_weights: dict[str, float] | None = None,
     constraint_violations: dict[str, Any] | None = None,
     reference_analysis: str = "",
     run_dir: Path | None = None,
     iteration: int = 0,
-    robot_details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score a trajectory. Returns dict with: score, criteria, warnings, summary."""
+    if mpc_dt is None:
+        raise ValueError(
+            "evaluate_iteration_unified: 'mpc_dt' must be explicitly provided "
+            "(go2_config.mpc_config.mpc_dt may be stale after restore_base_config)."
+        )
 
     hardness_text = format_hardness_report(
         hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
     )
 
-    robot_context = ""
-    if robot_details:
-        robot_context = f"\n\n== ROBOT ==\n{_format_robot_context(robot_details)}\n"
+    robot_context = f"\n\n== ROBOT ==\n{_format_robot_context()}\n"
+
+    # Build capability threshold string from go2_config
+    _cl = go2_config.capability_limits
+    _cap_thresholds = (
+        f"COM height gain > {_cl['max_height_gain_aggressive']}m, "
+        f"takeoff vz > {_cl['max_takeoff_vz']} m/s, "
+        f"total GRF > {_cl['max_peak_grf_total']:.0f} N, "
+        f"or COM acceleration > {_cl['max_com_accel_typical_g']:.0f}g"
+    )
 
     system_prompt = f"""You are an expert robotics engineer scoring a quadruped robot trajectory. Your job is ONLY to score — do not suggest fixes.{robot_context}
 
@@ -158,7 +154,7 @@ MOTION QUALITY (is the trajectory physically plausible?):
 - The motion quality report provides raw metrics for each aspect of motion quality. Use these numbers to assess physical plausibility in the context of the task.
 - Consider what is physically unavoidable for the commanded task (e.g., a jump will have high landing impact velocity, high jerk at contact transitions, and energy injection during pushoff).
 - Penalize issues that indicate the optimizer is exploiting physics (phantom forces, energy appearing from nowhere during flight, feet below ground) or that the motion would fail in reality (robot tipping over, joints locked at limits for extended periods).
-- Penalize trajectories that exceed physical capability limits: COM height gain > 0.3m, takeoff vz > 2.5 m/s, total GRF > 1200 N, or COM acceleration > 6g indicate the optimizer is exploiting the model's lack of torque-based GRF limits. These trajectories cannot be reproduced on real hardware.
+- Penalize trajectories that exceed physical capability limits: {_cap_thresholds} indicate the optimizer is exploiting the model's lack of torque-based GRF limits. These trajectories cannot be reproduced on real hardware.
 
 SCORING GUIDE:
 - 0.9-1.0: Task fully achieved with physically plausible, smooth motion and stable landing
@@ -290,7 +286,7 @@ def generate_iteration_summary(
     error_info: dict[str, Any] | None = None,
     simulation_result: dict[str, Any] | None = None,
     hardness_report: dict[str, Any] | None = None,
-    mpc_dt: float = 0.02,
+    mpc_dt: float | None = None,
     current_slack_weights: dict[str, float] | None = None,
     reference_analysis: str = "",
     constraint_violations: dict[str, Any] | None = None,
@@ -301,6 +297,11 @@ def generate_iteration_summary(
 
     Returns a structured dict with multi-line fields (prose paragraphs).
     """
+    if mpc_dt is None:
+        raise ValueError(
+            "generate_iteration_summary: 'mpc_dt' must be explicitly provided "
+            "(go2_config.mpc_config.mpc_dt may be stale after restore_base_config)."
+        )
     hardness_text = format_hardness_report(
         hardness_report, dt=mpc_dt, current_slack_weights=current_slack_weights
     )

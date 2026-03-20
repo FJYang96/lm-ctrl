@@ -15,12 +15,14 @@ creating a cohesive optimization setup for each unique behavior.
 
 from __future__ import annotations
 
+import ast
 import logging
 from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 
+import go2_config
 from mpc.dynamics.model import KinoDynamic_Model
 from mpc.mpc_opti_slack import PHYSICS_CONSTRAINT_NAMES, QuadrupedMPCOptiSlack
 
@@ -36,6 +38,22 @@ from .contact_utils import (
 )
 
 logger = logging.getLogger("llm_integration")
+
+
+def _strip_imports(tree: ast.AST) -> None:
+    """Remove all Import/ImportFrom nodes at any nesting level in-place."""
+    import ast as _ast
+
+    for node in _ast.walk(tree):
+        # Only containers with a 'body' list can hold import statements
+        for field_name in ("body", "orelse", "finalbody", "handlers"):
+            stmts = getattr(node, field_name, None)
+            if isinstance(stmts, list):
+                stmts[:] = [
+                    s
+                    for s in stmts
+                    if not isinstance(s, (_ast.Import, _ast.ImportFrom))
+                ]
 
 
 class _LLMTaskMPCProxy:
@@ -82,7 +100,6 @@ class LLMTaskMPC:
     def __init__(
         self,
         kindyn_model: KinoDynamic_Model,
-        base_config: Any,
         use_slack: bool = True,
     ):
         """
@@ -90,19 +107,17 @@ class LLMTaskMPC:
 
         Args:
             kindyn_model: Robot kinodynamic model
-            base_config: Base configuration (will be modified by LLM)
             use_slack: Whether to use slack formulation for robust optimization
         """
         self.kindyn_model = kindyn_model
-        self.base_config = base_config
         self.use_slack = use_slack
 
         # LLM-configurable parameters
         self.task_name = "unknown"
         self.contact_sequence: np.ndarray | None = None
         self.constraint_functions: list[Any] = []
-        self.mpc_duration = 1.0
-        self.mpc_dt = 0.02
+        self.mpc_duration = go2_config.mpc_config.duration
+        self.mpc_dt = go2_config.mpc_config.mpc_dt
         self.phases: dict[str, dict[str, float | list[int]]] = {}
 
         # Slack formulation settings
@@ -144,6 +159,11 @@ class LLMTaskMPC:
 
             safe_executor = SafeConstraintExecutor()
 
+            # Validate code safety (AST-level check for dunder access, dangerous calls, etc.)
+            is_safe, safety_error = safe_executor.validate_code_safety(llm_config_code)
+            if not is_safe:
+                return False, f"Code validation failed: {safety_error}"
+
             # Extract imports from LLM code for dynamic processing, then strip
             # them from the code.  process_dynamic_imports pre-populates the
             # namespace so the import statements are no longer needed at exec
@@ -151,15 +171,13 @@ class LLMTaskMPC:
             imports_needed = safe_executor.extract_imports_from_code(llm_config_code)
             exec_globals = safe_executor._create_restricted_globals(imports_needed)
 
-            # Strip import statements from code — symbols already in exec_globals
+            # Strip ALL import statements from code (including those nested
+            # inside function bodies) — symbols already in exec_globals
             import ast as _ast
 
             _tree = _ast.parse(llm_config_code)
-            _tree.body = [
-                node
-                for node in _tree.body
-                if not isinstance(node, (_ast.Import, _ast.ImportFrom))
-            ]
+            _strip_imports(_tree)
+            _ast.fix_missing_locations(_tree)
             exec_code = _ast.unparse(_tree)
 
             # Add MPC-specific objects to the execution environment
@@ -227,7 +245,14 @@ class LLMTaskMPC:
                 f"LLM constraint '{func_name}' collides with a physics constraint "
                 f"name — renaming to '{safe_name}' to preserve soft enforcement."
             )
-            constraint_func.__name__ = safe_name
+            # Wrap instead of mutating the original function object in-place
+            import functools
+
+            renamed = functools.wraps(constraint_func)(
+                lambda *a, _f=constraint_func, **kw: _f(*a, **kw)
+            )
+            renamed.__name__ = safe_name
+            constraint_func = renamed
 
         # Wrap the constraint function to be contact-aware for jumping tasks
         wrapped_constraint = wrap_constraint_for_contact_phases(constraint_func)
@@ -304,7 +329,7 @@ class LLMTaskMPC:
         """
         try:
             # Create modified config for this task
-            task_config = create_task_config(self)
+            _task_config = create_task_config(self)
 
             # Build MPC with slack formulation — always required for LLM tasks
             if not self.use_slack:
@@ -314,7 +339,6 @@ class LLMTaskMPC:
                 )
             self.mpc = QuadrupedMPCOptiSlack(
                 model=self.kindyn_model,
-                config=task_config,
                 build=True,
                 use_slack=True,
                 slack_weights=self.slack_weights if self.slack_weights else None,
@@ -375,7 +399,7 @@ class LLMTaskMPC:
         # Execute reference trajectory function (required — validated in configure_from_llm)
         assert self.ref_trajectory_func is not None
         horizon = self.mpc.horizon
-        robot_mass = self.base_config.robot_data.mass
+        robot_mass = go2_config.robot_data.mass
 
         X_ref, U_ref = self.ref_trajectory_func(
             initial_state, horizon, self.contact_sequence, self.mpc_dt, robot_mass
@@ -473,7 +497,6 @@ class LLMTaskMPC:
             self.constraint_functions,
             self.contact_sequence,
             self.kindyn_model,
-            self.base_config,
             X_debug,
             U_debug,
         )

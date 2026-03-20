@@ -15,15 +15,14 @@ import os
 from pathlib import Path
 
 import imageio
-import jax.numpy as jnp
 import numpy as np
 
-import config
+import go2_config as config
 from mpc.dynamics.model import KinoDynamic_Model
 from utils.conversion import sim_to_mpc
 
 from .callbacks import diagnose_termination, get_log, set_log_dir
-from .ppo import ActorCritic, NormalizerState, load_checkpoint
+from .ppo import ActorCritic, load_checkpoint
 from .rollout import execute_policy_rollout
 
 
@@ -60,7 +59,7 @@ def evaluate(args: argparse.Namespace) -> None:
     joint_vel_traj = np.load(args.joint_vel_traj)
     contact_seq = np.load(args.contact_sequence) if args.contact_sequence else None
 
-    kindyn = KinoDynamic_Model(config)
+    kindyn = KinoDynamic_Model()
 
     # Load JAX policy
     log.info(f"Loading JAX policy from {args.model_path}...")
@@ -71,23 +70,40 @@ def evaluate(args: argparse.Namespace) -> None:
 
     # Diagnostic: termination analysis
     diagnose_termination(
-        state_traj, grf_traj, joint_vel_traj,
-        kindyn, params, apply_fn, normalizer=normalizer,
+        state_traj,
+        grf_traj,
+        joint_vel_traj,
+        kindyn,
+        params,
+        apply_fn,
+        normalizer=normalizer,
         contact_sequence=contact_seq,
     )
 
     # Full rollout
     config.experiment.render = True
     qpos_rl, qvel_rl, grf_rl, images = execute_policy_rollout(
-        state_traj, grf_traj, joint_vel_traj,
-        kindyn, params, apply_fn, normalizer=normalizer, render=True,
+        state_traj,
+        grf_traj,
+        joint_vel_traj,
+        kindyn,
+        params,
+        apply_fn,
+        normalizer=normalizer,
+        render=True,
     )
 
     # Tracking errors
     n_tracked = len(qpos_rl)
-    err = compute_tracking_error(state_traj, qpos_rl, qvel_rl) if n_tracked > 0 else {
-        "pos_rms": float("nan"), "ori_rms": float("nan"), "joint_rms": float("nan")
-    }
+    err = (
+        compute_tracking_error(state_traj, qpos_rl, qvel_rl)
+        if n_tracked > 0
+        else {
+            "pos_rms": float("nan"),
+            "ori_rms": float("nan"),
+            "joint_rms": float("nan"),
+        }
+    )
 
     log.info("")
     log.info("=" * 40)

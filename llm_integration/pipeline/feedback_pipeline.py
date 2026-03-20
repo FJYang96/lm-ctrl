@@ -10,7 +10,6 @@ from typing import Any
 from mpc.dynamics.model import KinoDynamic_Model
 
 from ..code_generation.prompts import (
-    get_robot_details,
     get_system_prompt,
     get_user_prompt,
 )
@@ -34,7 +33,7 @@ try:
 except ImportError:
     logger.warning("gym_quadruped not available. Simulation features may be limited.")
     QuadrupedEnv = None
-import config
+import go2_config as config
 
 
 class FeedbackPipeline:
@@ -48,23 +47,20 @@ class FeedbackPipeline:
     4. Scoring and iteration summary
     """
 
-    def __init__(self, config_obj: Any = None, use_slack: bool = True):
+    def __init__(self, use_slack: bool = True):
         """
         Initialize the feedback pipeline.
 
         Args:
-            config_obj: Configuration object (uses default config if None)
             use_slack: Whether to use slack formulation for robust optimization
         """
-        self.config = config_obj if config_obj is not None else config
         self.use_slack = use_slack
 
         # Initialize components
-        self.robot_details = get_robot_details(self.config)
         self.safe_executor = SafeConstraintExecutor()
 
         # Initialize kinodynamic model
-        self.kindyn_model = KinoDynamic_Model(self.config)
+        self.kindyn_model = KinoDynamic_Model()
 
         # Task-specific MPC tracking
         self.current_task_mpc: LLMTaskMPC | None = None
@@ -72,11 +68,11 @@ class FeedbackPipeline:
         # Initialize simulation environment
         if QuadrupedEnv is not None:
             self.env = QuadrupedEnv(
-                robot=self.config.robot,
+                robot=config.robot,
                 scene="flat",
-                ground_friction_coeff=self.config.experiment.mu_ground,
+                ground_friction_coeff=config.experiment.mu_ground,
                 state_obs_names=QuadrupedEnv._DEFAULT_OBS + ("contact_forces:base",),
-                sim_dt=self.config.experiment.sim_dt,
+                sim_dt=config.experiment.sim_dt,
             )
         else:
             logger.warning("Simulation environment not available")
@@ -101,7 +97,7 @@ class FeedbackPipeline:
         self.all_scores: list[float] = []
 
         # Last LLM-requested mpc_dt (survives restore_base_config resets)
-        self._last_mpc_dt: float = float(self.config.mpc_config.mpc_dt)
+        self._last_mpc_dt: float = float(config.mpc_config.mpc_dt)
 
     def _extract_constraint_violations(
         self, optimization_result: dict[str, Any]
@@ -163,7 +159,7 @@ class FeedbackPipeline:
         self.all_scores = []
 
         # Algorithm 1: Iterative Refinement Pipeline
-        system_prompt = get_system_prompt(self.config)
+        system_prompt = get_system_prompt()
         initial_user_message = get_user_prompt(command)
 
         for iteration in range(1, self.max_iterations + 1):
@@ -239,14 +235,10 @@ class FeedbackPipeline:
                         mpc_dt=mpc_dt,
                         contact_sequence=self.current_task_mpc.contact_sequence,  # type: ignore[union-attr]
                         kindyn_model=self.kindyn_model,
-                        joint_limits_lower=np.array(
-                            self.robot_details["joint_limits_lower"]
-                        ),
-                        joint_limits_upper=np.array(
-                            self.robot_details["joint_limits_upper"]
-                        ),
-                        robot_mass=self.robot_details["mass"],
-                        mu_friction=float(self.config.experiment.mu_ground),
+                        joint_limits_lower=np.array(config.urdf_joint_limits_lower),
+                        joint_limits_upper=np.array(config.urdf_joint_limits_upper),
+                        robot_mass=config.composite_mass,
+                        mu_friction=float(config.experiment.mu_ground),
                     )
                     if not opt_success:
                         report = (
@@ -274,7 +266,6 @@ class FeedbackPipeline:
                     reference_analysis=ref_analysis,
                     run_dir=run_dir,
                     iteration=iteration,
-                    robot_details=self.robot_details,
                 )
                 score = llm_eval.get("score", 0.0 if not opt_success else 0.5)
 

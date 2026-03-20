@@ -10,12 +10,17 @@ import numpy as np
 def _compute_reference_metrics(
     ref_trajectory_data: dict[str, Any] | None,
     state_trajectory: np.ndarray | None,
-    mpc_dt: float = 0.02,
+    mpc_dt: float | None = None,
 ) -> str:
     """Compute metrics comparing reference trajectory to actual result.
 
     Returns a formatted text string with RMSE and plausibility checks.
     """
+    if mpc_dt is None:
+        raise ValueError(
+            "_compute_reference_metrics: 'mpc_dt' must be explicitly provided "
+            "(go2_config.mpc_config.mpc_dt may be stale after restore_base_config)."
+        )
     if ref_trajectory_data is None:
         return "No reference trajectory data available."
 
@@ -75,12 +80,13 @@ def _compute_reference_metrics(
     # Raw plausibility metrics (LLM interprets these)
     lines.append("\nPlausibility metrics:")
     ref_vz_diff = np.diff(ref_vz)
-    lines.append(
-        f"  Max vertical velocity increase between timesteps: {ref_vz_diff.max():.4f} m/s"
-    )
-    lines.append(
-        f"  Max vertical velocity decrease between timesteps: {ref_vz_diff.min():.4f} m/s"
-    )
+    if len(ref_vz_diff) > 0:
+        lines.append(
+            f"  Max vertical velocity increase between timesteps: {ref_vz_diff.max():.4f} m/s"
+        )
+        lines.append(
+            f"  Max vertical velocity decrease between timesteps: {ref_vz_diff.min():.4f} m/s"
+        )
 
     ref_z_diff = np.diff(ref_height)
     if X_ref.shape[1] > 1:

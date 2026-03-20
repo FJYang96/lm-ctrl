@@ -231,7 +231,7 @@ def run_pipeline_thread(
 
         # Import and configure
         add_log("Loading pipeline components...", "info")
-        import config
+        import go2_config as config
         from llm_integration import FeedbackPipeline
 
         config.CONSTRAINT_MODE = config_mode
@@ -246,7 +246,7 @@ def run_pipeline_thread(
 
         # Initialize pipeline
         add_log("Initializing feedback pipeline...", "info")
-        pipeline = FeedbackPipeline(config)
+        pipeline = FeedbackPipeline()
 
         # Override max_iterations directly on the pipeline instance
         pipeline.max_iterations = max_iterations

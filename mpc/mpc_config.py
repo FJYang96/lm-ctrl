@@ -7,7 +7,10 @@ from typing import Any
 import casadi as cs
 import numpy as np
 
+import go2_config
+
 from .constraints import (
+    body_clearance_constraints,
     foot_height_constraints,
     foot_velocity_constraints,
     friction_cone_constraints,
@@ -53,8 +56,8 @@ class MPCConfig:
 
 @dataclass
 class HoppingMPCConfig(MPCConfig):
-    pre_flight_stance_duration: float = 0.3
-    flight_duration: float = 0.4
+    pre_flight_stance_duration: float = go2_config.default_pre_flight_stance_duration
+    flight_duration: float = go2_config.default_flight_duration
     path_constraints: list[
         Callable[
             [cs.MX, cs.MX, KinoDynamic_Model, Any, cs.MX], tuple[cs.MX, cs.MX, cs.MX]
@@ -66,6 +69,7 @@ class HoppingMPCConfig(MPCConfig):
             foot_velocity_constraints,
             joint_limits_constraints,
             input_limits_constraints,
+            body_clearance_constraints,
         ]
     )
     path_constraint_params: dict[str, float] = field(

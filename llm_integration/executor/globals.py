@@ -6,31 +6,37 @@ import ast
 import logging
 from typing import Any
 
+import go2_config
+
 # Use module-level logger
 logger = logging.getLogger("llm_integration.executor.globals")
 
 
 # ── State / input index constants (exposed to LLM code) ──
-STATES_DIM = 30
-INPUTS_DIM = 24
+# Derived from go2_config structural constants
+_N_JOINTS = go2_config.N_JOINTS  # 12
+_N_LEGS = go2_config.N_LEGS  # 4
+
+STATES_DIM = go2_config.STATES_DIM  # 30
+INPUTS_DIM = go2_config.INPUTS_DIM  # 24
 
 # State vector slices
 IDX_POS = slice(0, 3)  # COM position [x, y, z]
 IDX_VEL = slice(3, 6)  # COM velocity [vx, vy, vz]
 IDX_EULER = slice(6, 9)  # Euler angles [roll, pitch, yaw]
 IDX_ANG_VEL = slice(9, 12)  # Angular velocity [wx, wy, wz]
-IDX_JOINTS = slice(12, 24)  # Joint angles (12 joints)
-IDX_INTEGRALS = slice(24, 30)  # Integral states (padding/zeros)
+IDX_JOINTS = slice(12, 12 + _N_JOINTS)  # Joint angles (12 joints)
+IDX_INTEGRALS = slice(12 + _N_JOINTS, STATES_DIM)  # Integral states (padding/zeros)
 
 # Scalar pitch index (row 7 in state vector)
 IDX_PITCH = 7
 
 # Input vector slices
-IDX_U_JOINT_VEL = slice(0, 12)  # Joint velocities
-IDX_U_GRF = slice(12, 24)  # Ground reaction forces (4 legs × 3)
+IDX_U_JOINT_VEL = slice(0, _N_JOINTS)  # Joint velocities
+IDX_U_GRF = slice(_N_JOINTS, INPUTS_DIM)  # Ground reaction forces (4 legs × 3)
 
 # GRF z-component indices (one per foot: FL, FR, RL, RR)
-IDX_GRF_Z = [14, 17, 20, 23]
+IDX_GRF_Z = [_N_JOINTS + f_idx * 3 + 2 for f_idx in range(_N_LEGS)]
 
 
 # Allowed imports for constraint generation
@@ -123,6 +129,8 @@ class _RestrictedNumpy:
         object.__setattr__(self, "_mod", mod)
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(f"Access to private attribute '{name}' is not allowed")
         if name in self._BLOCKED:
             raise AttributeError(f"Access to np.{name} is not allowed")
         return getattr(object.__getattribute__(self, "_mod"), name)
@@ -145,6 +153,8 @@ class _RestrictedCasadi:
         object.__setattr__(self, "_mod", mod)
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(f"Access to private attribute '{name}' is not allowed")
         if name in self._BLOCKED:
             raise AttributeError(f"Access to cs.{name} is not allowed")
         return getattr(object.__getattribute__(self, "_mod"), name)
@@ -159,6 +169,8 @@ class _RestrictedLiecasadi:
         object.__setattr__(self, "_mod", mod)
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(f"Access to private attribute '{name}' is not allowed")
         if name not in self._ALLOWED:
             raise AttributeError(f"Access to liecasadi.{name} is not allowed")
         return getattr(object.__getattribute__(self, "_mod"), name)
@@ -174,6 +186,13 @@ def _safe_getattr(obj: Any, name: str, *default: Any) -> Any:
     if isinstance(name, str) and name.startswith("__") and name.endswith("__"):
         raise AttributeError(f"Access to dunder attribute '{name}' is not allowed")
     return getattr(obj, name, *default)
+
+
+def _safe_hasattr(obj: Any, name: str) -> bool:
+    """hasattr wrapper that blocks probing of dunder attributes."""
+    if isinstance(name, str) and name.startswith("__") and name.endswith("__"):
+        return False
+    return hasattr(obj, name)
 
 
 def create_restricted_globals(
@@ -209,7 +228,8 @@ def create_restricted_globals(
             "tuple": tuple,
             "dict": dict,
             "bool": bool,
-            "hasattr": hasattr,
+            "sum": sum,
+            "hasattr": _safe_hasattr,
             "getattr": _safe_getattr,
             "isinstance": isinstance,
             "type": _safe_type,
@@ -276,11 +296,6 @@ def create_restricted_globals(
         restricted_globals["SX"] = cs.SX
         restricted_globals["DM"] = cs.DM
 
-        # Matrix creation functions
-        restricted_globals["eye"] = cs.MX.eye
-        restricted_globals["zeros"] = cs.MX.zeros
-        restricted_globals["ones"] = cs.MX.ones
-
         # State/input index constants
         restricted_globals["STATES_DIM"] = STATES_DIM
         restricted_globals["INPUTS_DIM"] = INPUTS_DIM
@@ -300,6 +315,12 @@ def create_restricted_globals(
             process_dynamic_imports(
                 restricted_globals, additional_imports, allowed_imports
             )
+
+        # CasADi matrix creation functions — set AFTER process_dynamic_imports
+        # so numpy zeros/ones/eye don't overwrite the CasADi MX versions.
+        restricted_globals["eye"] = cs.MX.eye
+        restricted_globals["zeros"] = cs.MX.zeros
+        restricted_globals["ones"] = cs.MX.ones
 
     except ImportError as e:
         logger.warning(f"Could not import required modules: {e}")
@@ -332,10 +353,19 @@ def process_dynamic_imports(
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name in allowed_imports:
-                            # Import the module
-                            module = __import__(alias.name)
                             alias_name = alias.asname if alias.asname else alias.name
-                            globals_dict[alias_name] = module
+                            # Always wrap allowed modules in their restricted proxy
+                            # to prevent bypassing restrictions via aliasing
+                            # (e.g. "import casadi" instead of "import casadi as cs")
+                            module = __import__(alias.name)
+                            if alias.name == "numpy":
+                                globals_dict[alias_name] = _RestrictedNumpy(module)
+                            elif alias.name == "casadi":
+                                globals_dict[alias_name] = _RestrictedCasadi(module)
+                            elif alias.name == "liecasadi":
+                                globals_dict[alias_name] = _RestrictedLiecasadi(module)
+                            else:
+                                globals_dict[alias_name] = module
 
                 elif isinstance(node, ast.ImportFrom):
                     if node.module and node.module in allowed_imports:

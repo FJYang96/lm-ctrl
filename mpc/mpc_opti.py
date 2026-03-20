@@ -6,6 +6,8 @@ from typing import Any
 import casadi as cs
 import numpy as np
 
+import go2_config
+
 from .dynamics.model import KinoDynamic_Model
 
 logger = logging.getLogger("llm_integration")
@@ -24,19 +26,17 @@ class QuadrupedMPCOpti:
     terminal pitch ~0).
     """
 
-    def __init__(
-        self, model: KinoDynamic_Model, config: Any, build: bool = True
-    ) -> None:
+    def __init__(self, model: KinoDynamic_Model, build: bool = True) -> None:
         """
         Initializes the hopping MPC solver using CasADi Opti.
 
         Args:
             model: KinoDynamic_Model instance
-            config: Configuration object with MPC parameters
             build: Whether to build the solver (kept for compatibility)
         """
-        self.horizon = int(config.mpc_config.duration / config.mpc_config.mpc_dt)
-        self.config = config
+        self.horizon = int(
+            go2_config.mpc_config.duration / go2_config.mpc_config.mpc_dt
+        )
         self.kindyn_model = model
 
         # Get dimensions from the kinodynamic model
@@ -46,10 +46,11 @@ class QuadrupedMPCOpti:
 
         # Compute phase boundaries for jumping motion
         self.pre_flight_steps = int(
-            config.mpc_config.pre_flight_stance_duration / config.mpc_config.mpc_dt
+            go2_config.mpc_config.pre_flight_stance_duration
+            / go2_config.mpc_config.mpc_dt
         )
         self.flight_steps = int(
-            config.mpc_config.flight_duration / config.mpc_config.mpc_dt
+            go2_config.mpc_config.flight_duration / go2_config.mpc_config.mpc_dt
         )
         self.landing_start = self.pre_flight_steps + self.flight_steps
 
@@ -129,7 +130,7 @@ class QuadrupedMPCOpti:
             )
 
             # Dynamics constraint: x_{k+1} = x_k + dt * f(x_k, u_k, p_k)
-            dt = self.config.mpc_config.mpc_dt
+            dt = go2_config.mpc_config.mpc_dt
             f_k = self._dynamics_fun(x_k, u_k, param_k)
 
             # Integration constraint (explicit Euler for now)
@@ -157,12 +158,12 @@ class QuadrupedMPCOpti:
         3. Post-landing stance: Land safely (reference = terminal/initial state)
         """
         # Cost weights from config
-        q_base = self.config.mpc_config.q_base
-        q_joint = self.config.mpc_config.q_joint
-        r_joint_vel = self.config.mpc_config.r_joint_vel
-        r_forces = self.config.mpc_config.r_forces
-        q_terminal_base = self.config.mpc_config.q_terminal_base
-        q_terminal_joint = self.config.mpc_config.q_terminal_joint
+        q_base = go2_config.mpc_config.q_base
+        q_joint = go2_config.mpc_config.q_joint
+        r_joint_vel = go2_config.mpc_config.r_joint_vel
+        r_forces = go2_config.mpc_config.r_forces
+        q_terminal_base = go2_config.mpc_config.q_terminal_base
+        q_terminal_joint = go2_config.mpc_config.q_terminal_joint
 
         # Initialize cost
         cost = 0
@@ -230,14 +231,14 @@ class QuadrupedMPCOpti:
             u_k = self.U[:, k]
             x_k = self.X[:, k]
 
-            for constraint in self.config.mpc_config.path_constraints:
+            for constraint in go2_config.mpc_config.path_constraints:
                 # Try new signature with k and horizon first, fall back to old signature
                 try:
                     constraint_expr, constraint_l, constraint_u = constraint(
                         x_k,
                         u_k,
                         self.kindyn_model,
-                        self.config,
+                        go2_config,
                         contact_k,
                         k,
                         self.horizon,
@@ -245,7 +246,7 @@ class QuadrupedMPCOpti:
                 except TypeError:
                     # Fall back to old 5-argument signature for backward compatibility
                     constraint_expr, constraint_l, constraint_u = constraint(
-                        x_k, u_k, self.kindyn_model, self.config, contact_k
+                        x_k, u_k, self.kindyn_model, go2_config, contact_k
                     )
                 self.opti.subject_to(constraint_expr >= constraint_l)
                 self.opti.subject_to(constraint_expr <= constraint_u)
@@ -256,7 +257,7 @@ class QuadrupedMPCOpti:
         contact_terminal = self.P_contact[:, self.horizon - 1]
         u_zero = cs.MX.zeros(self.inputs_dim)
 
-        for constraint in self.config.mpc_config.path_constraints:
+        for constraint in go2_config.mpc_config.path_constraints:
             constraint_name = constraint.__name__
             if constraint_name not in self.STATE_ONLY_CONSTRAINT_NAMES:
                 continue
@@ -266,14 +267,14 @@ class QuadrupedMPCOpti:
                     x_terminal,
                     u_zero,
                     self.kindyn_model,
-                    self.config,
+                    go2_config,
                     contact_terminal,
                     self.horizon,
                     self.horizon,
                 )
             except TypeError:
                 constraint_expr, constraint_l, constraint_u = constraint(
-                    x_terminal, u_zero, self.kindyn_model, self.config, contact_terminal
+                    x_terminal, u_zero, self.kindyn_model, go2_config, contact_terminal
                 )
             self.opti.subject_to(constraint_expr >= constraint_l)
             self.opti.subject_to(constraint_expr <= constraint_u)
@@ -283,7 +284,7 @@ class QuadrupedMPCOpti:
 
     def _setup_solver(self) -> None:
         """Setup the solver options."""
-        self.opti.solver("ipopt", self.config.solver_config)
+        self.opti.solver("ipopt", go2_config.solver_config)
 
     def solve_trajectory(
         self,
@@ -322,9 +323,9 @@ class QuadrupedMPCOpti:
         self.opti.set_value(self.P_terminal_state, terminal_state)
 
         # Robot parameters
-        self.opti.set_value(self.P_mu, self.config.experiment.mu_ground)
-        self.opti.set_value(self.P_mass, self.config.robot_data.mass)
-        self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
+        self.opti.set_value(self.P_mu, go2_config.experiment.mu_ground)
+        self.opti.set_value(self.P_mass, go2_config.robot_data.mass)
+        self.opti.set_value(self.P_inertia, go2_config.robot_data.inertia.flatten())
 
         # Determine initial guess: ref_trajectory or heuristic
         if ref_trajectory is not None:
@@ -336,7 +337,7 @@ class QuadrupedMPCOpti:
             logger.info("Cold-starting with heuristic initial guess")
             # Better initial guess with phase-aware trajectory
             X_init = np.zeros((self.states_dim, self.horizon + 1))
-            dt = self.config.mpc_config.mpc_dt
+            dt = go2_config.mpc_config.mpc_dt
 
             for i in range(self.horizon + 1):
                 X_init[:, i] = initial_state.copy()
@@ -376,11 +377,17 @@ class QuadrupedMPCOpti:
                     if contact_i[foot] > 0.5:
                         if i >= self.landing_start:
                             U_init[12 + foot * 3 + 2, i] = (
-                                self.config.robot_data.mass * 9.81 / 4 * 1.2
+                                go2_config.robot_data.mass
+                                * go2_config.experiment.gravity_constant
+                                / 4
+                                * 1.2
                             )
                         else:
                             U_init[12 + foot * 3 + 2, i] = (
-                                self.config.robot_data.mass * 9.81 / 4 * 0.8
+                                go2_config.robot_data.mass
+                                * go2_config.experiment.gravity_constant
+                                / 4
+                                * 0.8
                             )
                     else:
                         U_init[12 + foot * 3 : 12 + foot * 3 + 3, i] = 0.0

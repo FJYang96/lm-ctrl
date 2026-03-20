@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+import go2_config
+
 from ._helpers import _build_H, _eval_fk, _eval_jacobian
 
 # Foot names in order matching the 4x3 GRF layout and contact_sequence rows
@@ -120,7 +122,12 @@ def _section_contact_quality(
         lines.append(f"  Landing foot placement (step {landing_step}):")
         for f_idx in range(4):
             z = foot_positions[f_idx, 2]
-            status = "OK" if abs(z) < 0.01 else f"OFF ({z:.4f}m)"
+            status = (
+                "OK"
+                if abs(z)
+                < go2_config.analysis_thresholds["landing_foot_height_tolerance"]
+                else f"OFF ({z:.4f}m)"
+            )
             lines.append(
                 f"    {_FOOT_NAMES[f_idx]}: x={foot_positions[f_idx, 0]:.3f} "
                 f"y={foot_positions[f_idx, 1]:.3f} z={z:.4f}m [{status}]"
@@ -144,9 +151,11 @@ def _section_contact_quality(
             if nominal < 1e-6:
                 return "N/A"
             ratio = current / nominal
-            if 0.7 <= ratio <= 1.3:
+            lo = go2_config.analysis_thresholds["foot_spread_ratio_min"]
+            hi = go2_config.analysis_thresholds["foot_spread_ratio_max"]
+            if lo <= ratio <= hi:
                 return "OK"
-            return f"{'wide' if ratio > 1.3 else 'narrow'} ({ratio:.2f}x nominal)"
+            return f"{'wide' if ratio > hi else 'narrow'} ({ratio:.2f}x nominal)"
 
         lines.append(
             f"  Foot spread: FL-RR={diag_fl_rr:.3f}m "
@@ -169,7 +178,9 @@ def _section_contact_quality(
             min_dist = np.minimum(dist_lower, dist_upper)
             proximity = min_dist / (joint_range / 2)  # 0 = at limit, 1 = centered
 
-            near_limit_threshold = 0.05
+            near_limit_threshold = go2_config.analysis_thresholds[
+                "joint_limit_proximity"
+            ]
             near_limit_joints = []
             for j in range(len(proximity)):
                 if proximity[j] < near_limit_threshold:
@@ -277,7 +288,10 @@ def _section_joint_quality(
 
             for f_idx, jac_fun in enumerate(jac_funs):
                 grf_foot = grf_traj[t, f_idx * 3 : (f_idx + 1) * 3]
-                if np.linalg.norm(grf_foot) < 1.0:
+                if (
+                    np.linalg.norm(grf_foot)
+                    < go2_config.analysis_thresholds["negligible_force_threshold"]
+                ):
                     continue
 
                 J_full = _eval_jacobian(jac_fun, H, joint_pos)
@@ -324,7 +338,8 @@ def _section_manipulability(
     min_manip = float("inf")
     min_manip_foot = 0
     min_manip_step = 0
-    warning_threshold = 0.001
+
+    warning_threshold = go2_config.analysis_thresholds["manipulability_warning"]
     below_threshold_count = 0
     total_count = 0
 
