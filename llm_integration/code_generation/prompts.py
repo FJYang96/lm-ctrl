@@ -265,17 +265,41 @@ ITERATION 1: Minimal viable constraints
   - Maximum 2-3 constraints, bounds 2-3x wider than you think necessary
   - Goal: Solver converges, motion happens (even if imperfect)
 
-LATER ITERATIONS: Use the iteration history to count consecutive failures and
-  score trends. You decide whether to tweak or pivot but here's some guidance.
+LATER ITERATIONS: You receive the previous iteration's FULL constraint code,
+  detailed trajectory metrics, motion quality report, constraint hardness,
+  constraint violations, reference analysis, and a history of all prior
+  iterations(iteration summary can be very useful!). Read all of this carefully. Cross-reference the metrics and
+  violations with the constraint code to diagnose the specific issue, then
+  fix it.
+
+  You decide whether to tweak or pivot but here's some guidance.
   Pivot = drastic structural change (phases, contact sequence, reference
   trajectory shape, or full rewrite).
+
+  WHEN TO PIVOT:
   - Solver failing → first try shorter duration and wider bounds (simplify the
-    problem). If still failing after 2 attempts, pivot.
-  - Scores plateauing for 3+ converged iterations → pivot structurally.
-  - Solver converging and scores improving → tighten bounds, add constraints,
-    or extend duration if the motion needs more time.
+    problem). If still failing after 2 consecutive attempts, pivot.
+  - Scores plateauing below 0.7 for 3+ converged iterations → pivot.
+
+  WHEN TO TWEAK:
+  - Solver converging and scores improving → keep iterating, focus on the
+    weakest metric.
+  - Scores plateauing at 0.7+ → the solution is good but can be improved.
+    Target the single weakest metric. Do NOT pivot — you risk losing a
+    working solution.
+
+  HOW TO TWEAK:
+  - Tighten at most one constraint bound per iteration; freely update the
+    reference trajectory, phase timing, and other code to match. Compound
+    bound tightening (multiple bounds at once) is the #1 cause of solver
+    failure. Terminal bounds are the most sensitive — leave room for the
+    solver to find a feasible terminal state. Do not increase slack weights
+    and tighten bounds in the same iteration.
+
   A converged solution with imperfect task completion is far more valuable than
-  an unconverged one.
+  an unconverged one. If your tweak causes a solver failure, revert to the last
+  converging approach with minimal changes.
+
   Reference the [BEST] iteration for context, but don't anchor on it — it may
   be unconverged or a poor solution. Even if it scored well, trying a new
   structure may score higher.

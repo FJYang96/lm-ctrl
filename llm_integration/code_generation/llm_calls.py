@@ -259,19 +259,48 @@ def generate_constraints(
     lines.append("")
     lines.append("=" * 60)
     lines.append("Generate improved constraints and reference trajectory.")
+
+    # --- Diagnosis first, then strategy ---
     lines.append(
-        "You have the full diagnosis above — metrics, physics analysis, "
-        "constraint hardness, violations, and iteration history. "
-        "You decide the strategy: tweak or pivot "
-        "(pivot = drastic structural change: phases, contact sequence, reference "
-        "trajectory shape, or full rewrite) but here's some guidance on when. "
-        "If the solver is failing, first try shorter duration and wider bounds. "
-        "If still failing after 2 attempts, pivot. "
-        "If scores are plateauing for 3+ iterations, pivot. "
-        "If converging and improving, tighten or extend duration. "
-        "A converged solution with imperfect task completion is far more "
-        "valuable than an unconverged one."
+        "DIAGNOSIS: You have been given the previous iteration's FULL constraint "
+        "code, detailed trajectory metrics, motion quality report, constraint "
+        "hardness analysis, constraint violations, and reference trajectory "
+        "analysis. You also have the iteration history showing what was tried "
+        "before and how it scored. Read all of this carefully before writing "
+        "code. Diagnose exactly what went wrong (or what's limiting the score) "
+        "by cross-referencing the metrics, violations, and the code that "
+        "produced them — then fix the specific issue in the code. Do NOT "
+        "repeat strategies that already failed in previous iterations. If a "
+        "previous iteration converged well and scored high, understand WHY it worked and "
+        "possibly preserve those structural choices. However, you don't have "
+        "to anchor on good iterations — trying a new structure may score higher."
     )
+
+    # --- Score-aware strategy guidance ---
+    if opt_success and score >= 0.7:
+        lines.append(
+            "STRATEGY: The solver converged with a GOOD score (>= 0.70). "
+            "Focus on the single weakest metric and improve it. You can "
+            "change constraint bounds, reference trajectory, and phase "
+            "structure freely, but do NOT tighten multiple constraint bounds "
+            "simultaneously — compound bound tightening is the #1 cause of "
+            "solver failure. If you tighten a bound, update the reference "
+            "trajectory to match. Terminal bounds "
+            "are the most sensitive — leave enough room for the solver to "
+            "find a feasible landing. Do NOT increase slack weights while "
+            "also tightening bounds."
+        )
+    else:
+        lines.append(
+            "STRATEGY: The solver failed or the score is low. "
+            "Diagnose WHY from the data above — was the problem infeasible "
+            "constraints, bad reference trajectory, or loopholes that don't "
+            "force the desired motion? If the solver failed or scored low, try recovering "
+            "first: widen bounds, shorten duration, or revert toward the last "
+            "converging iteration's structure. If still failing or score low after 2 "
+            "consecutive attempts(you can check from iteration summary), pivot (drastic structural change: phases, "
+            "contact sequence, reference trajectory shape, or full rewrite)."
+        )
     lines.append("Return ONLY Python code.")
     lines.append("=" * 60)
 
