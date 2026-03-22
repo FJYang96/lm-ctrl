@@ -21,10 +21,16 @@ import os
 import sys
 import types
 
-# Force EGL rendering and block broken GLFW (Isaac Lab Docker has a broken glfw package)
+# Block broken GLFW and mujoco.viewer so gym_quadruped doesn't crash on headless Docker.
 os.environ.setdefault("MUJOCO_GL", "egl")
+if "mujoco.viewer" not in sys.modules:
+    _fake_viewer = types.ModuleType("mujoco.viewer")
+    _fake_viewer.Handle = type("Handle", (), {})
+    sys.modules["mujoco.viewer"] = _fake_viewer
 if "glfw" not in sys.modules:
-    sys.modules["glfw"] = types.ModuleType("glfw")
+    _fake_glfw = types.ModuleType("glfw")
+    _fake_glfw._glfw = True
+    sys.modules["glfw"] = _fake_glfw
     sys.modules["glfw.library"] = types.ModuleType("glfw.library")
 
 import mujoco

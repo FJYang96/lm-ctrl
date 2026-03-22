@@ -3,9 +3,14 @@
 #
 # Usage (from project root):
 #   docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash \
-#       lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_smoke_test.sh [TIMESTEPS] [NUM_ENVS]
+#       lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_smoke_test.sh [TIMESTEPS] [NUM_ENVS] [GPU_ID]
 
 set -e
+
+# GPU selection (default: GPU 1). Set via GPU_ID env var or defaults to 1.
+GPU_ID=${GPU_ID:-1}
+export CUDA_VISIBLE_DEVICES=$GPU_ID
+echo "Using GPU: $GPU_ID"
 
 ISAAC_PYTHON="${ISAAC_PYTHON:-/workspace/isaaclab/_isaac_sim/python.sh}"
 if [ ! -f "$ISAAC_PYTHON" ]; then

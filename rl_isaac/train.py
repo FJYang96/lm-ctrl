@@ -40,6 +40,23 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 # --- Now safe to import isaaclab and other modules ---
+import os
+import sys
+import types
+
+# Block broken GLFW and mujoco.viewer so gym_quadruped doesn't crash on headless Docker.
+# We only need mujoco.Renderer (EGL), not the GLFW-based viewer.
+os.environ.setdefault("MUJOCO_GL", "egl")
+if "mujoco.viewer" not in sys.modules:
+    _fake_viewer = types.ModuleType("mujoco.viewer")
+    _fake_viewer.Handle = type("Handle", (), {})  # gym_quadruped.utils.mujoco.visual imports this
+    sys.modules["mujoco.viewer"] = _fake_viewer
+if "glfw" not in sys.modules:
+    _fake_glfw = types.ModuleType("glfw")
+    _fake_glfw._glfw = True
+    sys.modules["glfw"] = _fake_glfw
+    sys.modules["glfw.library"] = types.ModuleType("glfw.library")
+
 import numpy as np
 import torch
 
@@ -67,14 +84,18 @@ def train(args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Logger (created early so all messages go to experiment.log)
+    logger = TrainingLogger(output_dir, args.total_timesteps, args.num_envs, 0)
+
     # Create environment
-    print("Creating environment...")
+    logger.info("Creating environment...")
     env = make_env(args)
     max_phase = env._max_phase
     num_envs = env.num_envs
     device = env.device
 
-    print(f"Environment: {num_envs} envs, max_phase={max_phase}")
+    logger.info(f"Environment: {num_envs} envs, max_phase={max_phase}")
+    logger.update_header(args.total_timesteps, num_envs, max_phase)
 
     # PPO config
     ppo_cfg = OPTMimicPPOCfg()
@@ -90,9 +111,9 @@ def train(args):
     n_minibatches = max(1, (n_steps * num_envs) // 5000)
     ppo_cfg.num_mini_batches = n_minibatches
 
-    print(f"Training: {args.total_timesteps} total steps")
-    print(f"  {n_steps} steps/update, {n_updates} updates")
-    print(f"  {ppo_cfg.num_learning_epochs} epochs, {n_minibatches} minibatches")
+    logger.info(f"Training: {args.total_timesteps} total steps")
+    logger.info(f"  {n_steps} steps/update, {n_updates} updates")
+    logger.info(f"  {ppo_cfg.num_learning_epochs} epochs, {n_minibatches} minibatches")
 
     # Create actor-critic network
     actor_critic = OPTMimicActorCritic(
@@ -117,9 +138,6 @@ def train(args):
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-    # Logger
-    logger = TrainingLogger(output_dir, args.total_timesteps, num_envs, max_phase)
-
     # Storage for rollout
     obs_buf = torch.zeros(n_steps, num_envs, 39, device=device)
     act_buf = torch.zeros(n_steps, num_envs, 12, device=device)
@@ -137,7 +155,7 @@ def train(args):
     next_video_step = 1_000_000  # render video every 1M steps (matches MJX train.py)
     t_start = time.time()
 
-    print(f"\nStarting training ({n_updates} updates)...\n")
+    logger.info(f"Starting training ({n_updates} updates)...")
 
     for update_idx in range(n_updates):
         t_update = time.time()
@@ -329,8 +347,8 @@ def train(args):
 
         # Periodic video rendering (every 1M steps, matches MJX train.py)
         if total_steps >= next_video_step:
-            print(f"  Rendering tracking video at step {total_steps:,}...")
-            _render_video(actor_critic, obs_normalizer, args, output_dir, total_steps)
+            logger.info(f"  Rendering tracking video at step {total_steps:,}...")
+            _render_video(actor_critic, obs_normalizer, args, output_dir, total_steps, logger)
             next_video_step = (total_steps // 1_000_000 + 1) * 1_000_000
 
         # Periodic plots
@@ -338,15 +356,15 @@ def train(args):
             logger.save_reward_curve(str(output_dir), total_steps)
 
     elapsed = time.time() - t_start
-    print(f"\nTraining complete in {elapsed:.1f}s ({total_steps:,} steps)")
-    print(f"Best ep_return: {best_ep_return:.2f}")
+    logger.info(f"Training complete in {elapsed:.1f}s ({total_steps:,} steps)")
+    logger.info(f"Best ep_return: {best_ep_return:.2f}")
 
     _save_checkpoint(output_dir / "final_model", actor_critic, obs_normalizer, total_steps)
     logger.save_reward_curve(str(output_dir), total_steps)
 
     # Final best model video
-    print("Rendering final best model video...")
-    _render_video(actor_critic, obs_normalizer, args, output_dir, total_steps, label="best_model")
+    logger.info("Rendering final best model video...")
+    _render_video(actor_critic, obs_normalizer, args, output_dir, total_steps, logger, label="best_model")
 
     env.close()
     simulation_app.close()
@@ -363,19 +381,17 @@ def _save_checkpoint(path: Path, actor_critic, obs_normalizer, step: int):
 
 
 def _render_video(
-    actor_critic, obs_normalizer, args, output_dir: Path, total_steps: int, label: str = ""
+    actor_critic, obs_normalizer, args, output_dir: Path, total_steps: int,
+    logger=None, label: str = "",
 ):
     """Render a tracking video using CPU MuJoCo rollout.
 
     Runs the current best policy on the reference trajectory and saves an MP4.
     This matches rl/train.py's periodic video rendering (every 1M steps).
     """
-    import os, sys, types
-    os.environ.setdefault("MUJOCO_GL", "egl")
-    # Block broken GLFW in Isaac Lab Docker
-    if "glfw" not in sys.modules:
-        sys.modules["glfw"] = types.ModuleType("glfw")
-        sys.modules["glfw.library"] = types.ModuleType("glfw.library")
+    def _log(msg):
+        if logger:
+            logger.info(msg)
 
     try:
         from rl_isaac.evaluate import execute_rollout
@@ -416,12 +432,14 @@ def _render_video(
             fps = 50  # 50Hz control
             imageio.mimsave(str(video_path), images, fps=fps)
             n_tracked = len(qpos_rl)
-            print(f"  Video saved: {video_path} ({n_tracked}/{state_traj.shape[0]-1} steps tracked)")
+            _log(f"  Video saved: {video_path} ({n_tracked}/{state_traj.shape[0]-1} steps tracked)")
         else:
-            print(f"  No frames captured for video at step {total_steps}")
+            _log(f"  No frames captured for video at step {total_steps}")
 
     except Exception as e:
-        print(f"  Video render failed: {e}")
+        import traceback
+        _log(f"  Video render failed: {e}")
+        _log(traceback.format_exc())
 
 
 if __name__ == "__main__":
