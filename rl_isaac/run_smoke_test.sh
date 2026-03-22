@@ -5,6 +5,8 @@
 #   docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash \
 #       lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_smoke_test.sh [TIMESTEPS] [NUM_ENVS] [GPU_ID]
 
+# end command: docker run:  docker ps -q | xargs -r docker stop; docker ps -qa | xargs -r docker rm
+#start command: docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_smoke_test.sh
 set -e
 
 # Clean previous runs

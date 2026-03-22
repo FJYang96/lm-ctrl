@@ -396,8 +396,6 @@ class Go2TrackingEnv(DirectRLEnv):
         # Increment phase (MJX: new_state.phase = state.phase + 1)
         self._phase += 1
         self._first_step[:] = False
-        # Store previous action for smoothness reward
-        self._prev_action = self.actions.clone() * ACTION_LIMIT
 
         phase = self._phase.clamp(0, self._max_phase - 1)
 
@@ -415,8 +413,12 @@ class Go2TrackingEnv(DirectRLEnv):
         ori_err_sq = (ori_err ** 2).sum(dim=-1)
         joint_err_sq = ((ref_joint - actual_joint) ** 2).sum(dim=-1)
 
-        action_scaled = self.actions * ACTION_LIMIT if hasattr(self, 'actions') and self.actions is not None else self._prev_action
+        # Compute action rate BEFORE updating _prev_action
+        action_scaled = self.actions * ACTION_LIMIT
         rate_sq = ((action_scaled - self._prev_action) ** 2).sum(dim=-1)
+
+        # Now update _prev_action for next step
+        self._prev_action = action_scaled.clone()
 
         max_torque = self._last_torque.abs().max(dim=-1).values
 

@@ -346,9 +346,10 @@ def train(args):
             )
 
         # Periodic video rendering (every 1M steps, matches MJX train.py)
+        # Always renders the best model so far (loaded from checkpoint on disk)
         if total_steps >= next_video_step:
-            logger.info(f"  Rendering tracking video at step {total_steps:,}...")
-            _render_video(actor_critic, obs_normalizer, args, output_dir, total_steps, logger)
+            logger.info(f"  Rendering best model video at step {total_steps:,}...")
+            _render_video(args, output_dir, total_steps, logger)
             next_video_step = (total_steps // 1_000_000 + 1) * 1_000_000
 
         # Periodic plots
@@ -362,9 +363,9 @@ def train(args):
     _save_checkpoint(output_dir / "final_model", actor_critic, obs_normalizer, total_steps)
     logger.save_reward_curve(str(output_dir), total_steps)
 
-    # Final best model video
+    # Final best model video — always loaded from best checkpoint on disk
     logger.info("Rendering final best model video...")
-    _render_video(actor_critic, obs_normalizer, args, output_dir, total_steps, logger, label="best_model")
+    _render_video(args, output_dir, total_steps, logger, label="best_model")
 
     env.close()
     simulation_app.close()
@@ -380,14 +381,24 @@ def _save_checkpoint(path: Path, actor_critic, obs_normalizer, step: int):
     }, path / "checkpoint.pt")
 
 
+def _load_best_model(ckpt_path: Path):
+    """Load the best model from a checkpoint file for video rendering."""
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    ac = OPTMimicActorCritic(num_obs=39, num_privileged_obs=0, num_actions=12)
+    ac.load_state_dict(ckpt["model_state_dict"])
+    ac.eval()
+    norm_state = ckpt.get("normalizer_state_dict", None)
+    return ac, norm_state
+
+
 def _render_video(
-    actor_critic, obs_normalizer, args, output_dir: Path, total_steps: int,
+    args, output_dir: Path, total_steps: int,
     logger=None, label: str = "",
 ):
-    """Render a tracking video using CPU MuJoCo rollout.
+    """Render a tracking video using the best model checkpoint.
 
-    Runs the current best policy on the reference trajectory and saves an MP4.
-    This matches rl/train.py's periodic video rendering (every 1M steps).
+    Always loads from best_model/checkpoint.pt on disk to ensure we render
+    the actual best policy, not whatever the live training weights are.
     """
     def _log(msg):
         if logger:
@@ -396,27 +407,19 @@ def _render_video(
     try:
         from rl_isaac.evaluate import execute_rollout
 
+        # Load best model from checkpoint
+        best_ac, best_norm = _load_best_model(output_dir / "best_model" / "checkpoint.pt")
+
         # Load trajectory data
         state_traj = np.load(args.state_traj)
         grf_traj = np.load(args.grf_traj)
         joint_vel_traj = np.load(args.joint_vel_traj)
         contact_seq = np.load(args.contact_sequence) if args.contact_sequence else None
 
-        # Create a CPU copy of actor_critic for evaluation
-        ac_cpu = OPTMimicActorCritic(num_obs=39, num_privileged_obs=0, num_actions=12)
-        ac_cpu.load_state_dict({
-            k: v.cpu() for k, v in actor_critic.state_dict().items()
-        })
-        ac_cpu.eval()
-
-        # Get normalizer state for CPU
-        norm_state = obs_normalizer.state_dict()
-        norm_state_cpu = {k: v.cpu() for k, v in norm_state.items()}
-
         # Run rollout
         qpos_rl, qvel_rl, grf_rl, images = execute_rollout(
             state_traj, grf_traj, joint_vel_traj,
-            ac_cpu, norm_state_cpu, contact_seq,
+            best_ac, best_norm, contact_seq,
             render=True,
         )
 
