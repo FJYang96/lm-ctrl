@@ -12,7 +12,7 @@ rm -rf rl_isaac/trained_models/* rl_isaac/eval_output/* 2>/dev/null
 echo "Cleaned rl_isaac/trained_models/ and rl_isaac/eval_output/"
 
 # GPU selection (default: GPU 1). Set via GPU_ID env var or defaults to 1.
-GPU_ID=${GPU_ID:-1}
+GPU_ID=${GPU_ID:-2}
 export CUDA_VISIBLE_DEVICES=$GPU_ID
 echo "Using GPU: $GPU_ID"
 
