@@ -78,8 +78,14 @@ MODEL_PATH="$OUTPUT_DIR/best_model"
 $ISAAC_PYTHON -c "
 import os, sys, types
 os.environ['MUJOCO_GL'] = 'egl'
+if 'mujoco.viewer' not in sys.modules:
+    _fv = types.ModuleType('mujoco.viewer')
+    _fv.Handle = type('Handle', (), {})
+    sys.modules['mujoco.viewer'] = _fv
 if 'glfw' not in sys.modules:
-    sys.modules['glfw'] = types.ModuleType('glfw')
+    _fg = types.ModuleType('glfw')
+    _fg._glfw = True
+    sys.modules['glfw'] = _fg
     sys.modules['glfw.library'] = types.ModuleType('glfw.library')
 
 sys.argv = ['evaluate',
@@ -92,7 +98,7 @@ sys.argv = ['evaluate',
 ]
 from rl_isaac.evaluate import main
 main()
-"
+" 2>&1 | tee -a "$LOG_FILE"
 
 # ── Step 3: Generate comparison frames ──
 echo "[3/3] Generating comparison frames..."
