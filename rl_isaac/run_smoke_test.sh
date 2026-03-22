@@ -99,7 +99,7 @@ echo "[3/3] Generating comparison frames..."
 $ISAAC_PYTHON -c "
 import sys; sys.modules['glfw'] = type(sys)('glfw'); sys.modules['glfw.library'] = type(sys)('glfw.library')
 sys.argv = ['generate_frames', '--planned', '$PLANNED_VIDEO', '--rl', '$OUTPUT_DIR/rl_tracking.mp4', '--output-dir', '$OUTPUT_DIR/comparison', '--num-frames', '20']
-from rl.generate_frames import main; main()
+from rl_isaac.generate_frames import main; main()
 " 2>/dev/null || echo "Frame generation skipped (no video or cv2 missing)"
 
 EXPERIMENT_ELAPSED=$(( SECONDS - EXPERIMENT_START ))

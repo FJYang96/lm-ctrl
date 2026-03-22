@@ -39,8 +39,8 @@ import torch
 
 import config
 from mpc.dynamics.model import KinoDynamic_Model
-from rl.feedforward import FeedforwardComputer
-from rl.reference import ReferenceTrajectory
+from rl_isaac.feedforward import FeedforwardComputer
+from rl_isaac.reference import ReferenceTrajectory
 from utils.conversion import sim_to_mpc
 
 from rl_isaac.network import OPTMimicActorCritic
