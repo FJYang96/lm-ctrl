@@ -20,11 +20,11 @@ if [ ! -f "$ISAAC_PYTHON" ]; then
     exit 1
 fi
 
-ITER_DIR="results/llm_iterations/jump_180_degrees_entirely_and_land_1772942532"
-STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_7.npy}
-GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_7.npy}
-JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_7.npy}
-CONTACT_SEQ=${4:-$ITER_DIR/contact_sequence_iter_7.npy}
+ITER_DIR="results/jump"
+STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_9.npy}
+GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_9.npy}
+JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_9.npy}
+CONTACT_SEQ=${4:-$ITER_DIR/contact_sequence_iter_9.npy}
 
 OUTPUT_DIR="rl_isaac/eval_output/baseline_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"

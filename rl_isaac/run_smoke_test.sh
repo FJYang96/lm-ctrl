@@ -10,8 +10,8 @@
 set -e
 
 # Clean previous runs
-rm -rf rl_isaac/trained_models/* rl_isaac/eval_output/* 2>/dev/null
-echo "Cleaned rl_isaac/trained_models/ and rl_isaac/eval_output/"
+rm -rf rl_isaac/trained_models/* 2>/dev/null
+echo "Cleaned rl_isaac/trained_models/"
 
 # GPU selection (default: GPU 1). Set via GPU_ID env var or defaults to 1.
 GPU_ID=${GPU_ID:-2}
@@ -27,15 +27,15 @@ if [ ! -f "$ISAAC_PYTHON" ]; then
     exit 1
 fi
 
-TIMESTEPS=${1:-50000000}
+TIMESTEPS=${1:-100000000}
 NUM_ENVS=${2:-4096}
 
-ITER_DIR="results/llm_iterations/jump_180_degrees_entirely_and_land_1772942532"
-STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_7.npy}
-GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_7.npy}
-JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_7.npy}
-PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_7.mp4}
-CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_7.npy}
+ITER_DIR="results/jump"
+STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_9.npy}
+GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_9.npy}
+JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_9.npy}
+PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_9.mp4}
+CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_9.npy}
 
 RUN_TAG="isaaclab_run_$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="rl_isaac/trained_models/$RUN_TAG"
@@ -88,14 +88,16 @@ if 'glfw' not in sys.modules:
     sys.modules['glfw'] = _fg
     sys.modules['glfw.library'] = types.ModuleType('glfw.library')
 
-sys.argv = ['evaluate',
+args = ['evaluate',
     '--model-path', '$MODEL_PATH',
     '--state-traj', '$STATE_TRAJ',
     '--grf-traj', '$GRF_TRAJ',
     '--joint-vel-traj', '$JOINT_VEL_TRAJ',
     '--output-video', '$OUTPUT_DIR/rl_tracking.mp4',
-    $( [ -n '$CONTACT_SEQ_FLAG' ] && echo \"'--contact-sequence', '$CONTACT_SEQ',\" )
 ]
+if os.path.exists('$CONTACT_SEQ'):
+    args += ['--contact-sequence', '$CONTACT_SEQ']
+sys.argv = args
 from rl_isaac.evaluate import main
 main()
 " 2>&1 | tee -a "$LOG_FILE"

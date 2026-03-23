@@ -1,9 +1,9 @@
 """RSL-RL training configuration for OPT-Mimic.
 
-All hyperparameters match rl/train.py exactly:
-  gamma=0.995, lambda=0.95, clip=0.2, vf_coef=0.5, max_grad_norm=0.5
-  LR: 1e-3 with 0.999^(step/denom) decay
-  Entropy: 0.002 -> 0.0005 (annealed)
+Tuned for training stability on dynamic motions (180-degree jump):
+  gamma=0.995, lambda=0.95, clip=0.1, vf_coef=0.5, max_grad_norm=0.5
+  LR: 5e-4 with 0.999^(step/denom) decay
+  Entropy: 0.002 (constant, no annealing)
   Network: actor [128,128], critic [512,512]
 """
 
@@ -29,12 +29,12 @@ class OPTMimicPPOCfg:
     # Algorithm
     value_loss_coef: float = 0.5
     use_clipped_value_loss: bool = False  # MJX code does NOT clip value loss
-    clip_param: float = 0.2
-    entropy_coef: float = 0.002  # start value, annealed to 0.0005
-    entropy_coef_end: float = 0.0005
-    num_learning_epochs: int = 10
+    clip_param: float = 0.1  # tighter trust region to prevent KL explosion
+    entropy_coef: float = 0.002  # constant, no annealing — prevents entropy collapse
+    entropy_coef_end: float = 0.002  # same as start — no annealing
+    num_learning_epochs: int = 5  # reduced from 10 to prevent KL drift with clip=0.1
     num_mini_batches: int = 0  # computed at runtime: per_device_samples // 5000
-    learning_rate: float = 1e-3
+    learning_rate: float = 5e-4  # lower LR for stable updates
     gamma: float = 0.995
     lam: float = 0.95
     max_grad_norm: float = 0.5
