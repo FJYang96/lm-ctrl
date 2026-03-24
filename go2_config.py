@@ -316,7 +316,7 @@ def __getattr__(name: str) -> Any:
 solver_config: dict[str, Any] = {
     "ipopt.print_level": 5,
     "print_time": True,
-    "ipopt.max_iter": 1000,
+    "ipopt.max_iter": 2000,
     "ipopt.tol": 1e-4,
     "ipopt.acceptable_tol": 1e-3,
     "ipopt.mu_init": 1e-2,

@@ -236,6 +236,72 @@ def body_clearance_constraints(
     return effective_clearance, min_clearance, INF
 
 
+def torque_feasibility_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """
+    Constrain joint torques implied by planned GRFs to stay within actuator limits.
+
+    For each leg: tau = J_leg^T @ f_foot, then -tau_max <= tau_i <= tau_max.
+    During swing (contact_flag=0), bounds are relaxed to (-INF, INF).
+    """
+    com_position = x_k[0:3]
+    roll = x_k[6]
+    pitch = x_k[7]
+    yaw = x_k[8]
+    joint_positions = x_k[12:24]
+
+    forces = u_k[12:24]
+
+    # Build homogeneous transformation matrix
+    w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
+    H = cs.MX.eye(4)
+    H[0:3, 0:3] = w_R_b
+    H[0:3, 3] = com_position
+
+    # Per-joint torque limits from URDF (12,)
+    torque_limits = go2_config.robot_data.joint_efforts
+
+    jacobian_funs = [
+        kindyn_model.jacobian_FL_fun,
+        kindyn_model.jacobian_FR_fun,
+        kindyn_model.jacobian_RL_fun,
+        kindyn_model.jacobian_RR_fun,
+    ]
+
+    expr_list = []
+    min_list = []
+    max_list = []
+
+    for leg_idx in range(4):
+        f_foot = forces[leg_idx * 3 : leg_idx * 3 + 3]
+        contact_flag = contact_k[leg_idx]
+
+        # Translational Jacobian: (3, 18) — first 3 rows of full (6, 18)
+        J_full = jacobian_funs[leg_idx](H, joint_positions)[0:3, :]
+        # Extract this leg's 3 joint columns
+        j_start = 6 + leg_idx * 3
+        J_leg = J_full[:, j_start : j_start + 3]  # (3, 3)
+
+        # Implied joint torques: tau = J_leg^T @ f_foot  (3,)
+        tau_leg = J_leg.T @ f_foot
+
+        # Per-joint effort limits for this leg
+        leg_efforts = torque_limits[leg_idx * 3 : (leg_idx + 1) * 3]
+
+        for j in range(3):
+            expr_list.append(tau_leg[j])
+            # During stance: [-effort, +effort]; during swing: [-INF, INF]
+            min_list.append(-leg_efforts[j] * contact_flag - INF * (1 - contact_flag))
+            max_list.append(leg_efforts[j] * contact_flag + INF * (1 - contact_flag))
+
+    return cs.vertcat(*expr_list), cs.vertcat(*min_list), cs.vertcat(*max_list)
+
+
 def complementarity_constraints(
     x_k: cs.MX,
     u_k: cs.MX,

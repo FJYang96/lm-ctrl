@@ -26,6 +26,7 @@ from .constraints import (
     friction_cone_constraints,
     input_limits_constraints,
     joint_limits_constraints,
+    torque_feasibility_constraints,
 )
 from .dynamics.model import KinoDynamic_Model
 from .mpc_config import MPCConfig
@@ -55,6 +56,7 @@ class ComplementarityMPCConfig(MPCConfig):
             joint_limits_constraints,
             input_limits_constraints,
             body_clearance_constraints,  # Ensure body stays above ground
+            torque_feasibility_constraints,
         ]
     )
     path_constraint_params: dict[str, float] = field(

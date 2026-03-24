@@ -16,6 +16,7 @@ from .constraints import (
     friction_cone_constraints,
     input_limits_constraints,
     joint_limits_constraints,
+    torque_feasibility_constraints,
 )
 from .dynamics.model import KinoDynamic_Model
 
@@ -70,6 +71,7 @@ class HoppingMPCConfig(MPCConfig):
             joint_limits_constraints,
             input_limits_constraints,
             body_clearance_constraints,
+            torque_feasibility_constraints,
         ]
     )
     path_constraint_params: dict[str, float] = field(

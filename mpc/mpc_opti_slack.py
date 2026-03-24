@@ -30,6 +30,7 @@ PHYSICS_CONSTRAINT_NAMES: set[str] = {
     "input_limits_constraints",
     "body_clearance_constraints",
     "complementarity_constraints",
+    "torque_feasibility_constraints",
 }
 
 
@@ -349,7 +350,7 @@ class QuadrupedMPCOptiSlack:
         solver_opts = dict(go2_config.solver_config)
         # Cap solve time to prevent excessive runtime with slack variables
         if "ipopt.max_wall_time" not in solver_opts:
-            solver_opts["ipopt.max_wall_time"] = 300.0
+            solver_opts["ipopt.max_wall_time"] = 600.0
         self.opti.solver("ipopt", solver_opts)
 
     def solve_trajectory(
