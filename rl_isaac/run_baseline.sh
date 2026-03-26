@@ -20,11 +20,11 @@ if [ ! -f "$ISAAC_PYTHON" ]; then
     exit 1
 fi
 
-ITER_DIR="results/jump"
-STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_9.npy}
-GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_9.npy}
-JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_9.npy}
-CONTACT_SEQ=${4:-$ITER_DIR/contact_sequence_iter_9.npy}
+ITER_DIR="results/test"
+STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_20.npy}
+GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_20.npy}
+JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_20.npy}
+CONTACT_SEQ=${4:-$ITER_DIR/contact_sequence_iter_20.npy}
 
 OUTPUT_DIR="rl_isaac/eval_output/baseline_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"
@@ -54,7 +54,7 @@ if 'glfw' not in sys.modules:
 
 import mujoco
 import numpy as np
-import config
+import go2_config
 from mpc.dynamics.model import KinoDynamic_Model
 from rl_isaac.feedforward import FeedforwardComputer
 from rl_isaac.reference import ReferenceTrajectory
@@ -68,11 +68,11 @@ grf_traj = np.load('$GRF_TRAJ')
 joint_vel_traj = np.load('$JOINT_VEL_TRAJ')
 contact_seq = np.load('$CONTACT_SEQ') if os.path.exists('$CONTACT_SEQ') else None
 
-control_dt = config.mpc_config.mpc_dt
+control_dt = go2_config.mpc_config.mpc_dt
 sim_dt = 0.001
 substeps = int(control_dt / sim_dt)
 
-kindyn = KinoDynamic_Model(config)
+kindyn = KinoDynamic_Model()
 ref = ReferenceTrajectory(
     state_traj=state_traj, joint_vel_traj=joint_vel_traj,
     grf_traj=grf_traj, contact_sequence=contact_seq, control_dt=control_dt,

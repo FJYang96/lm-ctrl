@@ -30,12 +30,12 @@ fi
 TIMESTEPS=${1:-100000000}
 NUM_ENVS=${2:-4096}
 
-ITER_DIR="results/jump"
-STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_9.npy}
-GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_9.npy}
-JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_9.npy}
-PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_9.mp4}
-CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_9.npy}
+ITER_DIR="results/test"
+STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_20.npy}
+GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_20.npy}
+JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_20.npy}
+PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_20.mp4}
+CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_20.npy}
 
 RUN_TAG="isaaclab_run_$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="rl_isaac/trained_models/$RUN_TAG"

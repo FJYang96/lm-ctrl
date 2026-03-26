@@ -37,7 +37,7 @@ import mujoco
 import numpy as np
 import torch
 
-import config
+import go2_config
 from mpc.dynamics.model import KinoDynamic_Model
 from rl_isaac.feedforward import FeedforwardComputer
 from rl_isaac.reference import ReferenceTrajectory
@@ -80,10 +80,10 @@ def execute_rollout(
     Uses gym_quadruped directly (no JAX dependency).
     """
     sim_dt = 0.001
-    control_dt = config.mpc_config.mpc_dt
+    control_dt = go2_config.mpc_config.mpc_dt
     substeps = int(control_dt / sim_dt)
 
-    kindyn = KinoDynamic_Model(config)
+    kindyn = KinoDynamic_Model()
     ref = ReferenceTrajectory(
         state_traj=state_traj,
         joint_vel_traj=joint_vel_traj,

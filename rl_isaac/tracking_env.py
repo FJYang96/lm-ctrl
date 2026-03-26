@@ -164,7 +164,6 @@ class Go2TrackingEnv(DirectRLEnv):
 
     def _load_reference_data(self):
         """Load reference trajectory from numpy files and convert to GPU tensors."""
-        import config
         from rl_isaac.reference import ReferenceTrajectory
         from rl_isaac.feedforward import FeedforwardComputer
         from mpc.dynamics.model import KinoDynamic_Model
@@ -180,7 +179,7 @@ class Go2TrackingEnv(DirectRLEnv):
         )
 
         # Precompute feedforward torques
-        kindyn = KinoDynamic_Model(config)
+        kindyn = KinoDynamic_Model()
         ff = FeedforwardComputer(kindyn)
         ref.set_feedforward(ff.precompute_trajectory(ref))
 
