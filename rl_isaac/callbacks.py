@@ -1,0 +1,141 @@
+"""Logging and plotting callbacks for Isaac Lab OPT-Mimic training.
+
+Matches rl/callbacks.py output format: experiment.log with same metrics,
+reward_curve.png with same smoothing.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+class TrainingLogger:
+    """Logs training metrics to experiment.log and tracks reward history."""
+
+    def __init__(
+        self, output_dir: Path, total_timesteps: int, num_envs: int, max_phase: int
+    ):
+        self.output_dir = Path(output_dir)
+        self.log_path = self.output_dir / "experiment.log"
+        self.reward_history: list[float] = []
+        self.timestep_history: list[int] = []
+
+        # Setup logger
+        self._logger = logging.getLogger("rl_isaac.diagnostics")
+        for h in self._logger.handlers[:]:
+            self._logger.removeHandler(h)
+            h.close()
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(self.log_path, mode="a")
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        self._logger.addHandler(handler)
+        self._logger.setLevel(logging.DEBUG)
+
+        # Also log to stdout
+        stdout_handler = logging.StreamHandler()
+        stdout_handler.setFormatter(logging.Formatter("%(message)s"))
+        self._logger.addHandler(stdout_handler)
+
+        # Header
+        if max_phase > 0:
+            self._write_header(total_timesteps, num_envs, max_phase)
+
+    def _write_header(self, total_timesteps, num_envs, max_phase):
+        self._logger.info("")
+        self._logger.info("=" * 60)
+        self._logger.info("TRAINING: ISAAC LAB PPO LEARNING LOG (OPT-MIMIC)")
+        self._logger.info("=" * 60)
+        self._logger.info(f"Timesteps: {total_timesteps}  Envs: {num_envs}")
+        self._logger.info(f"Trajectory: {max_phase} steps, {max_phase * 0.02:.2f}s")
+        self._logger.info("=" * 60)
+
+    def update_header(self, total_timesteps, num_envs, max_phase):
+        """Rewrite header once we know the actual max_phase from the env."""
+        self._write_header(total_timesteps, num_envs, max_phase)
+
+    def info(self, msg: str):
+        """Log an info message to both file and stdout."""
+        self._logger.info(msg)
+
+    def log_update(
+        self,
+        update_idx: int,
+        total_steps: int,
+        ep_return: float,
+        ep_length: float,
+        r_pos: float,
+        r_ori: float,
+        r_joint: float,
+        r_smooth: float,
+        r_torque: float,
+        mean_std: float,
+        grad_norm: float,
+        pg_loss: float,
+        vf_loss: float,
+        approx_kl: float,
+        clip_frac: float,
+        entropy: float,
+        ent_coef: float,
+        dt: float,
+        term_info: dict | None = None,
+    ):
+        self.reward_history.append(ep_return)
+        self.timestep_history.append(total_steps)
+
+        # Termination breakdown
+        term_str = ""
+        if term_info:
+            t_thresh = term_info.get("term_thresh", 0)
+            t_body = term_info.get("term_body", 0)
+            t_contact = term_info.get("term_contact", 0)
+            t_nan = term_info.get("term_nan", 0)
+            t_trunc = term_info.get("term_trunc", 0)
+            term_str = (
+                f"term: thresh={t_thresh:.0f} body={t_body:.0f} "
+                f"cntct={t_contact:.0f} nan={t_nan:.0f} trunc={t_trunc:.0f}"
+            )
+
+        msg = (
+            f"[step {total_steps:>9,}  update {update_idx + 1:>5}]  "
+            f"ep_return={ep_return:.2f}  ep_len={ep_length:.1f}  "
+            f"r_pos={r_pos:.3f}  r_ori={r_ori:.3f}  r_joint={r_joint:.3f}  "
+            f"r_smooth={r_smooth:.3f}  r_torque={r_torque:.3f}  "
+            f"std={mean_std:.3f}  grad_norm={grad_norm:.3f}  "
+            f"pg={pg_loss:.4g}  vf={vf_loss:.4g}  kl={approx_kl:.4g}  "
+            f"clip={clip_frac:.3f}  ent={entropy:.2f}  "
+            f"ent_c={ent_coef:.4f}  dt={dt:.1f}s  "
+            f"{term_str}"
+        )
+        self._logger.info(msg)
+
+    def save_reward_curve(self, plot_dir: str, total_steps: int):
+        """Save reward curve plot (same as rl/callbacks.py)."""
+        rewards = np.array(self.reward_history)
+        timesteps = np.array(self.timestep_history)
+        if len(rewards) < 2:
+            return
+
+        plot_path = Path(plot_dir)
+        plot_path.mkdir(parents=True, exist_ok=True)
+
+        window = max(1, min(50, len(rewards) // 4))
+        kernel = np.ones(window) / window
+        smooth_r = np.convolve(rewards, kernel, mode="valid")
+        smooth_s = timesteps[window - 1 :]
+
+        fig, ax = plt.subplots(1, 1, figsize=(10, 4))
+        ax.plot(smooth_s, smooth_r, linewidth=0.8)
+        ax.set_ylabel("Episode Return")
+        ax.set_xlabel("Timesteps")
+        ax.set_title(f"Training Progress ({total_steps:,} steps) [Isaac Lab]")
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(plot_path / "reward_curve.png", dpi=100)
+        plt.close(fig)
