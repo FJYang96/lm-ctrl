@@ -7,9 +7,10 @@ randomization match the MJX implementation exactly.
 
 from __future__ import annotations
 
-import isaaclab.sim as sim_utils
-import numpy as np
 import torch
+import numpy as np
+
+import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor
@@ -21,23 +22,12 @@ from .env_cfg import Go2TrackingEnvCfg
 # ---------------------------------------------------------------------------
 KP = 25.0
 KD = 1.5
-TORQUE_LIMITS = torch.tensor(
-    [
-        23.7,
-        23.7,
-        45.43,  # FL
-        23.7,
-        23.7,
-        45.43,  # FR
-        23.7,
-        23.7,
-        45.43,  # RL
-        23.7,
-        23.7,
-        45.43,  # RR
-    ],
-    dtype=torch.float32,
-)
+TORQUE_LIMITS = torch.tensor([
+    23.7, 23.7, 45.43,  # FL
+    23.7, 23.7, 45.43,  # FR
+    23.7, 23.7, 45.43,  # RL
+    23.7, 23.7, 45.43,  # RR
+], dtype=torch.float32)
 ACTION_LIMIT = 0.2
 
 SIGMA_POS = 0.10
@@ -68,14 +58,11 @@ def _quat_error_vec(q_ref: torch.Tensor, q_actual: torch.Tensor) -> torch.Tensor
     w1, x1, y1, z1 = q_ref[:, 0], q_ref[:, 1], q_ref[:, 2], q_ref[:, 3]
     w2, x2, y2, z2 = q_inv[:, 0], q_inv[:, 1], q_inv[:, 2], q_inv[:, 3]
 
-    return torch.stack(
-        [
-            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-        ],
-        dim=-1,
-    )
+    return torch.stack([
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    ], dim=-1)
 
 
 class Go2TrackingEnv(DirectRLEnv):
@@ -86,9 +73,7 @@ class Go2TrackingEnv(DirectRLEnv):
 
     cfg: Go2TrackingEnvCfg
 
-    def __init__(
-        self, cfg: Go2TrackingEnvCfg, render_mode: str | None = None, **kwargs
-    ):
+    def __init__(self, cfg: Go2TrackingEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         self._torque_limits = TORQUE_LIMITS.to(self.device)
@@ -100,9 +85,7 @@ class Go2TrackingEnv(DirectRLEnv):
         self._phase = torch.zeros(self.num_envs, dtype=torch.int32, device=self.device)
         self._prev_action = torch.zeros(self.num_envs, 12, device=self.device)
         self._last_torque = torch.zeros(self.num_envs, 12, device=self.device)
-        self._first_step = torch.ones(
-            self.num_envs, dtype=torch.bool, device=self.device
-        )
+        self._first_step = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         self._joint_offset = torch.zeros(self.num_envs, 12, device=self.device)
         self._torque_scale = torch.ones(self.num_envs, device=self.device)
 
@@ -122,9 +105,7 @@ class Go2TrackingEnv(DirectRLEnv):
         # Joint ordering verification
         joint_names = self._robot.joint_names
         print(f"[Go2TrackingEnv] Joint names: {joint_names}")
-        print(
-            f"[Go2TrackingEnv] Num envs: {self.num_envs}, max_phase: {self._max_phase}"
-        )
+        print(f"[Go2TrackingEnv] Num envs: {self.num_envs}, max_phase: {self._max_phase}")
 
         # Build joint reorder map if needed (Isaac Lab order -> MPC order)
         self._joint_reorder = self._build_joint_reorder(joint_names)
@@ -136,18 +117,10 @@ class Go2TrackingEnv(DirectRLEnv):
                    RL_hip, RL_thigh, RL_calf, RR_hip, RR_thigh, RR_calf
         """
         mpc_order = [
-            "FL_hip_joint",
-            "FL_thigh_joint",
-            "FL_calf_joint",
-            "FR_hip_joint",
-            "FR_thigh_joint",
-            "FR_calf_joint",
-            "RL_hip_joint",
-            "RL_thigh_joint",
-            "RL_calf_joint",
-            "RR_hip_joint",
-            "RR_thigh_joint",
-            "RR_calf_joint",
+            "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+            "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+            "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+            "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
         ]
         if joint_names == mpc_order:
             print("[Go2TrackingEnv] Joint ordering matches MPC — no reorder needed.")
@@ -192,10 +165,9 @@ class Go2TrackingEnv(DirectRLEnv):
     def _load_reference_data(self):
         """Load reference trajectory from numpy files and convert to GPU tensors."""
         import config
-
-        from mpc.dynamics.model import KinoDynamic_Model
-        from rl_isaac.feedforward import FeedforwardComputer
         from rl_isaac.reference import ReferenceTrajectory
+        from rl_isaac.feedforward import FeedforwardComputer
+        from mpc.dynamics.model import KinoDynamic_Model
 
         cfg = self.cfg
 
@@ -203,9 +175,7 @@ class Go2TrackingEnv(DirectRLEnv):
             cfg.state_traj_path,
             cfg.joint_vel_traj_path,
             cfg.grf_traj_path,
-            contact_sequence_path=cfg.contact_sequence_path
-            if cfg.contact_sequence_path
-            else None,
+            contact_sequence_path=cfg.contact_sequence_path if cfg.contact_sequence_path else None,
             control_dt=0.02,
         )
 
@@ -251,7 +221,7 @@ class Go2TrackingEnv(DirectRLEnv):
                     current = ref.contact_sequence[foot, k]
                     lo = max(0, k - CONTACT_GRACE_WINDOW)
                     hi = min(N - 1, k + CONTACT_GRACE_WINDOW)
-                    if np.any(ref.contact_sequence[foot, lo : hi + 1] != current):
+                    if np.any(ref.contact_sequence[foot, lo:hi + 1] != current):
                         near_transition[foot, k] = 1.0
 
         # Convert to GPU tensors
@@ -275,25 +245,16 @@ class Go2TrackingEnv(DirectRLEnv):
         self._foot_body_ids, _ = self._contact_sensor.find_bodies("|".join(foot_names))
         # All body IDs
         all_body_ids = list(range(self._contact_sensor.num_bodies))
-        foot_set = (
-            set(self._foot_body_ids.tolist())
-            if isinstance(self._foot_body_ids, torch.Tensor)
-            else set(self._foot_body_ids)
-        )
+        foot_set = set(self._foot_body_ids.tolist()) if isinstance(self._foot_body_ids, torch.Tensor) else set(self._foot_body_ids)
         self._non_foot_body_ids = torch.tensor(
             [i for i in all_body_ids if i not in foot_set],
-            dtype=torch.long,
-            device=self.device,
+            dtype=torch.long, device=self.device,
         )
         self._foot_body_ids_t = torch.tensor(
-            list(foot_set),
-            dtype=torch.long,
-            device=self.device,
+            list(foot_set), dtype=torch.long, device=self.device,
         )
         print(f"[Go2TrackingEnv] Foot body IDs: {self._foot_body_ids_t.tolist()}")
-        print(
-            f"[Go2TrackingEnv] Non-foot body IDs: {self._non_foot_body_ids.tolist()} ({len(self._non_foot_body_ids)} bodies)"
-        )
+        print(f"[Go2TrackingEnv] Non-foot body IDs: {self._non_foot_body_ids.tolist()} ({len(self._non_foot_body_ids)} bodies)")
 
     # ------------------------------------------------------------------
     # Scene setup
@@ -332,9 +293,9 @@ class Go2TrackingEnv(DirectRLEnv):
         phase = self._phase.clamp(0, self._max_phase - 1)
 
         # Reference targets (in MPC joint order)
-        ref_joint_pos = self._ref_joint_pos[phase]  # (N, 12)
-        ref_joint_vel = self._ref_joint_vel[phase]  # (N, 12)
-        ff_torque = self._ref_ff_torques[phase]  # (N, 12)
+        ref_joint_pos = self._ref_joint_pos[phase]    # (N, 12)
+        ref_joint_vel = self._ref_joint_vel[phase]    # (N, 12)
+        ff_torque = self._ref_ff_torques[phase]       # (N, 12)
 
         # Actual state (in Isaac Lab joint order -> convert to MPC order)
         actual_joint_pos = self._to_mpc_order(self._robot.data.joint_pos)  # (N, 12)
@@ -362,13 +323,11 @@ class Go2TrackingEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         phase = self._phase.clamp(0, self._max_phase - 1)
 
-        root_pos = (
-            self._robot.data.root_pos_w - self._env_origins
-        )  # (N, 3) local position
-        root_quat = self._robot.data.root_quat_w  # (N, 4) [w,x,y,z]
+        root_pos = self._robot.data.root_pos_w - self._env_origins  # (N, 3) local position
+        root_quat = self._robot.data.root_quat_w                    # (N, 4) [w,x,y,z]
         joint_pos = self._to_mpc_order(self._robot.data.joint_pos)  # (N, 12)
-        root_lin_vel = self._robot.data.root_lin_vel_w  # (N, 3)
-        root_ang_vel = self._robot.data.root_ang_vel_w  # (N, 3)
+        root_lin_vel = self._robot.data.root_lin_vel_w           # (N, 3)
+        root_ang_vel = self._robot.data.root_ang_vel_w           # (N, 3)
         joint_vel = self._to_mpc_order(self._robot.data.joint_vel)  # (N, 12)
 
         # Apply joint offset (domain randomization)
@@ -378,18 +337,11 @@ class Go2TrackingEnv(DirectRLEnv):
         angle = 2.0 * torch.pi * phase.float() / float(self._max_phase)
         phase_enc = torch.stack([torch.cos(angle), torch.sin(angle)], dim=-1)
 
-        obs = torch.cat(
-            [
-                root_pos,
-                root_quat,
-                joint_pos_observed,
-                root_lin_vel,
-                root_ang_vel,
-                joint_vel,
-                phase_enc,
-            ],
-            dim=-1,
-        )  # (N, 39)
+        obs = torch.cat([
+            root_pos, root_quat, joint_pos_observed,
+            root_lin_vel, root_ang_vel, joint_vel,
+            phase_enc,
+        ], dim=-1)  # (N, 39)
 
         # Replace NaN with 0
         obs = torch.nan_to_num(obs, nan=0.0)
@@ -404,19 +356,13 @@ class Go2TrackingEnv(DirectRLEnv):
         # Use precomputed tracking errors from _compute_tracking_errors()
         te = self._tracking_errors
 
-        r_pos = torch.exp(-te["pos_err_sq"] / (2.0 * SIGMA_POS**2))
-        r_ori = torch.exp(-te["ori_err_sq"] / (2.0 * SIGMA_ORI**2))
-        r_joint = torch.exp(-te["joint_err_sq"] / (2.0 * SIGMA_JOINT**2))
-        r_smooth = torch.exp(-te["rate_sq"] / (2.0 * SIGMA_SMOOTH**2))
-        r_torque = torch.exp(-(te["max_torque"] ** 2) / (2.0 * SIGMA_TORQUE**2))
+        r_pos = torch.exp(-te["pos_err_sq"] / (2.0 * SIGMA_POS ** 2))
+        r_ori = torch.exp(-te["ori_err_sq"] / (2.0 * SIGMA_ORI ** 2))
+        r_joint = torch.exp(-te["joint_err_sq"] / (2.0 * SIGMA_JOINT ** 2))
+        r_smooth = torch.exp(-te["rate_sq"] / (2.0 * SIGMA_SMOOTH ** 2))
+        r_torque = torch.exp(-(te["max_torque"] ** 2) / (2.0 * SIGMA_TORQUE ** 2))
 
-        total = (
-            W_POS * r_pos
-            + W_ORI * r_ori
-            + W_JOINT * r_joint
-            + W_SMOOTH * r_smooth
-            + W_TORQUE * r_torque
-        )
+        total = W_POS * r_pos + W_ORI * r_ori + W_JOINT * r_joint + W_SMOOTH * r_smooth + W_TORQUE * r_torque
 
         # Force reward to 0 if NaN
         total = torch.nan_to_num(total, nan=0.0)
@@ -426,15 +372,13 @@ class Go2TrackingEnv(DirectRLEnv):
         # Log reward components via extras
         if "log" not in self.extras:
             self.extras["log"] = {}
-        self.extras["log"].update(
-            {
-                "r_pos": r_pos.mean().item(),
-                "r_ori": r_ori.mean().item(),
-                "r_joint": r_joint.mean().item(),
-                "r_smooth": r_smooth.mean().item(),
-                "r_torque": r_torque.mean().item(),
-            }
-        )
+        self.extras["log"].update({
+            "r_pos": r_pos.mean().item(),
+            "r_ori": r_ori.mean().item(),
+            "r_joint": r_joint.mean().item(),
+            "r_smooth": r_smooth.mean().item(),
+            "r_torque": r_torque.mean().item(),
+        })
 
         return total
 
@@ -466,7 +410,7 @@ class Go2TrackingEnv(DirectRLEnv):
 
         pos_err_sq = ((ref_pos - actual_pos) ** 2).sum(dim=-1)
         ori_err = _quat_error_vec(ref_quat, actual_quat)
-        ori_err_sq = (ori_err**2).sum(dim=-1)
+        ori_err_sq = (ori_err ** 2).sum(dim=-1)
         joint_err_sq = ((ref_joint - actual_joint) ** 2).sum(dim=-1)
 
         # Compute action rate BEFORE updating _prev_action
@@ -503,10 +447,7 @@ class Go2TrackingEnv(DirectRLEnv):
             (ri["pos_error"] > TERM_MULTIPLIER * SIGMA_POS)
             | (ri["ori_error"] > TERM_MULTIPLIER * SIGMA_ORI)
             | (ri["joint_error"] > TERM_MULTIPLIER * SIGMA_JOINT)
-            | (
-                (~self._first_step)
-                & (ri["action_rate"] > TERM_MULTIPLIER * SIGMA_SMOOTH)
-            )
+            | ((~self._first_step) & (ri["action_rate"] > TERM_MULTIPLIER * SIGMA_SMOOTH))
             | (ri["max_torque"] > TERM_MULTIPLIER * SIGMA_TORQUE)
         )
 
@@ -543,9 +484,7 @@ class Go2TrackingEnv(DirectRLEnv):
         if len(self._non_foot_body_ids) == 0:
             return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
-        net_forces = (
-            self._contact_sensor.data.net_forces_w_history
-        )  # (N, history, num_bodies, 3)
+        net_forces = self._contact_sensor.data.net_forces_w_history  # (N, history, num_bodies, 3)
         # Take max over history
         non_foot_forces = torch.max(
             torch.norm(net_forces[:, :, self._non_foot_body_ids], dim=-1), dim=1
@@ -592,14 +531,10 @@ class Go2TrackingEnv(DirectRLEnv):
 
         # Domain randomization
         self._joint_offset[env_ids] = torch.randn(n, 12, device=self.device) * 0.02
-        self._torque_scale[env_ids] = (
-            1.0 + torch.randn(n, device=self.device) * 0.1
-        ).clamp(0.5, 1.5)
+        self._torque_scale[env_ids] = (1.0 + torch.randn(n, device=self.device) * 0.1).clamp(0.5, 1.5)
 
         # Random start phase
-        start_phase = torch.randint(
-            0, self._max_phase, (n,), device=self.device, dtype=torch.int32
-        )
+        start_phase = torch.randint(0, self._max_phase, (n,), device=self.device, dtype=torch.int32)
         self._phase[env_ids] = start_phase
 
         phase_clamped = start_phase.clamp(0, self._max_phase - 1).long()
@@ -626,8 +561,7 @@ class Go2TrackingEnv(DirectRLEnv):
         self._robot.write_joint_state_to_sim(
             self._to_isaac_order(ref_jpos),
             self._to_isaac_order(ref_jvel),
-            None,
-            env_ids,
+            None, env_ids,
         )
 
         # Reset per-env state

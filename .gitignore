@@ -327,6 +327,11 @@ quadruped_pympc/controllers/gradient/nominal/c_generated_code_gait_adaptive/
 # RL trained models
 rl/trained_models/
 
+# Isaac Lab RL outputs
+rl_isaac/trained_models/
+rl_isaac/eval_output/
+rl_isaac/policy_output/
+
 # ROS2
 ros2/msgs_ws/build/
 ros2/msgs_ws/install/

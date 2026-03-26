@@ -10,7 +10,6 @@ import logging
 from pathlib import Path
 
 import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,9 +18,7 @@ import numpy as np
 class TrainingLogger:
     """Logs training metrics to experiment.log and tracks reward history."""
 
-    def __init__(
-        self, output_dir: Path, total_timesteps: int, num_envs: int, max_phase: int
-    ):
+    def __init__(self, output_dir: Path, total_timesteps: int, num_envs: int, max_phase: int):
         self.output_dir = Path(output_dir)
         self.log_path = self.output_dir / "experiment.log"
         self.reward_history: list[float] = []
@@ -128,7 +125,7 @@ class TrainingLogger:
         window = max(1, min(50, len(rewards) // 4))
         kernel = np.ones(window) / window
         smooth_r = np.convolve(rewards, kernel, mode="valid")
-        smooth_s = timesteps[window - 1 :]
+        smooth_s = timesteps[window - 1:]
 
         fig, ax = plt.subplots(1, 1, figsize=(10, 4))
         ax.plot(smooth_s, smooth_r, linewidth=0.8)

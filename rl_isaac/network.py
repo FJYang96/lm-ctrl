@@ -134,9 +134,7 @@ class OPTMimicActorCritic(nn.Module):
             raise RuntimeError("Call act() first to set up distribution")
         return self._distribution.log_prob(actions).sum(dim=-1)
 
-    def evaluate(
-        self, obs: torch.Tensor, **kwargs
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def evaluate(self, obs: torch.Tensor, **kwargs) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute value estimate. Returns (value, None) — second element unused by RSL-RL for non-privileged."""
         value = self.critic(obs).squeeze(-1)
         return value

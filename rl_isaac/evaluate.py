@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
+
+import os
 import sys
 import types
-from pathlib import Path
 
 # Block broken GLFW and mujoco.viewer so gym_quadruped doesn't crash on headless Docker.
 os.environ.setdefault("MUJOCO_GL", "egl")
@@ -31,16 +33,17 @@ if "glfw" not in sys.modules:
     sys.modules["glfw"] = _fake_glfw
     sys.modules["glfw.library"] = types.ModuleType("glfw.library")
 
-import config
 import mujoco
 import numpy as np
 import torch
 
+import config
 from mpc.dynamics.model import KinoDynamic_Model
 from rl_isaac.feedforward import FeedforwardComputer
-from rl_isaac.network import OPTMimicActorCritic
 from rl_isaac.reference import ReferenceTrajectory
 from utils.conversion import sim_to_mpc
+
+from rl_isaac.network import OPTMimicActorCritic
 
 # OPT-Mimic constants (same as tracking_env.py)
 KP = 25.0
@@ -93,10 +96,8 @@ def execute_rollout(
 
     # Create CPU MuJoCo env via gym_quadruped
     from gym_quadruped.quadruped_env import QuadrupedEnv
-
     quad_env = QuadrupedEnv(
-        robot="go2",
-        scene="flat",
+        robot="go2", scene="flat",
         ground_friction_coeff=0.8,
         state_obs_names=QuadrupedEnv._DEFAULT_OBS + ("contact_forces:base",),
         sim_dt=sim_dt,
@@ -150,17 +151,7 @@ def execute_rollout(
         joint_vel = sim_obs["qvel"][6:18]
         angle = 2.0 * np.pi * phase / ref.max_phase
         phase_enc = np.array([np.cos(angle), np.sin(angle)])
-        obs = np.concatenate(
-            [
-                body_pos,
-                body_quat,
-                joint_pos,
-                body_vel,
-                body_ang_vel,
-                joint_vel,
-                phase_enc,
-            ]
-        ).astype(np.float32)
+        obs = np.concatenate([body_pos, body_quat, joint_pos, body_vel, body_ang_vel, joint_vel, phase_enc]).astype(np.float32)
 
         obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
 
@@ -233,19 +224,13 @@ def compute_tracking_error(planned_state, qpos_traj, qvel_traj):
         sim_state, _ = sim_to_mpc(qpos_traj[i], qvel_traj[i])
         sim_states.append(sim_state)
     if not sim_states:
-        return {
-            "pos_rms": float("nan"),
-            "ori_rms": float("nan"),
-            "joint_rms": float("nan"),
-        }
+        return {"pos_rms": float("nan"), "ori_rms": float("nan"), "joint_rms": float("nan")}
     sim_traj = np.array(sim_states)
     n = min(planned_state.shape[0], sim_traj.shape[0])
     return {
         "pos_rms": np.sqrt(np.mean((planned_state[:n, 0:3] - sim_traj[:n, 0:3]) ** 2)),
         "ori_rms": np.sqrt(np.mean((planned_state[:n, 6:9] - sim_traj[:n, 6:9]) ** 2)),
-        "joint_rms": np.sqrt(
-            np.mean((planned_state[:n, 12:24] - sim_traj[:n, 12:24]) ** 2)
-        ),
+        "joint_rms": np.sqrt(np.mean((planned_state[:n, 12:24] - sim_traj[:n, 12:24]) ** 2)),
     }
 
 
@@ -256,9 +241,7 @@ def main():
     parser.add_argument("--grf-traj", type=str, required=True)
     parser.add_argument("--joint-vel-traj", type=str, required=True)
     parser.add_argument("--contact-sequence", type=str, default=None)
-    parser.add_argument(
-        "--output-video", type=str, default="results/rl_isaac_tracking.mp4"
-    )
+    parser.add_argument("--output-video", type=str, default="results/rl_isaac_tracking.mp4")
     args = parser.parse_args()
 
     os.environ.setdefault("MUJOCO_GL", "egl")
@@ -274,25 +257,15 @@ def main():
 
     print("Running rollout...")
     qpos_rl, qvel_rl, grf_rl, images = execute_rollout(
-        state_traj,
-        grf_traj,
-        joint_vel_traj,
-        actor_critic,
-        normalizer_state,
-        contact_seq,
+        state_traj, grf_traj, joint_vel_traj,
+        actor_critic, normalizer_state, contact_seq,
         render=True,
     )
 
     n_tracked = len(qpos_rl)
-    err = (
-        compute_tracking_error(state_traj, qpos_rl, qvel_rl)
-        if n_tracked > 0
-        else {
-            "pos_rms": float("nan"),
-            "ori_rms": float("nan"),
-            "joint_rms": float("nan"),
-        }
-    )
+    err = compute_tracking_error(state_traj, qpos_rl, qvel_rl) if n_tracked > 0 else {
+        "pos_rms": float("nan"), "ori_rms": float("nan"), "joint_rms": float("nan")
+    }
 
     print("")
     print("=" * 40)
@@ -306,7 +279,6 @@ def main():
 
     if images:
         import imageio
-
         output_path = Path(args.output_video)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         fps = int(1.0 / config.mpc_config.mpc_dt)

@@ -20,7 +20,7 @@ class OPTMimicPPOCfg:
 
     # Runner
     num_steps_per_env: int = 80  # overridden to max_phase at runtime
-    max_iterations: int = 1000  # overridden at runtime
+    max_iterations: int = 1000   # overridden at runtime
     save_interval: int = 100
     experiment_name: str = "opt_mimic_go2"
     run_name: str = ""

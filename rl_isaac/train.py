@@ -13,6 +13,7 @@ Usage (inside Docker):
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -21,9 +22,7 @@ from pathlib import Path
 # --- Isaac Lab AppLauncher must be called BEFORE any other isaaclab imports ---
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(
-    description="Train OPT-Mimic tracking policy (Isaac Lab)"
-)
+parser = argparse.ArgumentParser(description="Train OPT-Mimic tracking policy (Isaac Lab)")
 parser.add_argument("--state-traj", type=str, required=True)
 parser.add_argument("--grf-traj", type=str, required=True)
 parser.add_argument("--joint-vel-traj", type=str, required=True)
@@ -41,6 +40,8 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 # --- Now safe to import isaaclab and other modules ---
+import os
+import sys
 import types
 
 # Block broken GLFW and mujoco.viewer so gym_quadruped doesn't crash on headless Docker.
@@ -48,9 +49,7 @@ import types
 os.environ.setdefault("MUJOCO_GL", "egl")
 if "mujoco.viewer" not in sys.modules:
     _fake_viewer = types.ModuleType("mujoco.viewer")
-    _fake_viewer.Handle = type(
-        "Handle", (), {}
-    )  # gym_quadruped.utils.mujoco.visual imports this
+    _fake_viewer.Handle = type("Handle", (), {})  # gym_quadruped.utils.mujoco.visual imports this
     sys.modules["mujoco.viewer"] = _fake_viewer
 if "glfw" not in sys.modules:
     _fake_glfw = types.ModuleType("glfw")
@@ -60,13 +59,14 @@ if "glfw" not in sys.modules:
 
 import numpy as np
 import torch
+
 from rsl_rl.modules import EmpiricalNormalization
 
-from rl_isaac.callbacks import TrainingLogger
 from rl_isaac.env_cfg import Go2TrackingEnvCfg
-from rl_isaac.network import OPTMimicActorCritic
 from rl_isaac.tracking_env import Go2TrackingEnv
+from rl_isaac.network import OPTMimicActorCritic
 from rl_isaac.train_cfg import OPTMimicPPOCfg
+from rl_isaac.callbacks import TrainingLogger
 
 
 def make_env(args) -> Go2TrackingEnv:
@@ -162,10 +162,7 @@ def train(args):
 
         # Entropy annealing (matching MJX: linear from 0.002 to 0.0005)
         frac = update_idx / max(1, n_updates - 1)
-        ent_coef = (
-            ppo_cfg.entropy_coef
-            + (ppo_cfg.entropy_coef_end - ppo_cfg.entropy_coef) * frac
-        )
+        ent_coef = ppo_cfg.entropy_coef + (ppo_cfg.entropy_coef_end - ppo_cfg.entropy_coef) * frac
 
         # ------ Rollout collection ------
         ep_returns = []
@@ -221,14 +218,8 @@ def train(args):
             else:
                 next_values = val_buf[t + 1]
             next_non_terminal = (~done_buf[t]).float()
-            delta = (
-                rew_buf[t]
-                + ppo_cfg.gamma * next_values * next_non_terminal
-                - val_buf[t]
-            )
-            last_gae = (
-                delta + ppo_cfg.gamma * ppo_cfg.lam * next_non_terminal * last_gae
-            )
+            delta = rew_buf[t] + ppo_cfg.gamma * next_values * next_non_terminal - val_buf[t]
+            last_gae = delta + ppo_cfg.gamma * ppo_cfg.lam * next_non_terminal * last_gae
             advantages[t] = last_gae
         returns = advantages + val_buf
 
@@ -242,19 +233,13 @@ def train(args):
 
         # PPO epochs
         batch_size = total_samples // n_minibatches
-        ppo_metrics = {
-            "pg_loss": 0,
-            "vf_loss": 0,
-            "entropy": 0,
-            "approx_kl": 0,
-            "clip_frac": 0,
-        }
+        ppo_metrics = {"pg_loss": 0, "vf_loss": 0, "entropy": 0, "approx_kl": 0, "clip_frac": 0}
         n_updates_inner = 0
 
         for epoch in range(ppo_cfg.num_learning_epochs):
             perm = torch.randperm(total_samples, device=device)
             for mb in range(n_minibatches):
-                idx = perm[mb * batch_size : (mb + 1) * batch_size]
+                idx = perm[mb * batch_size:(mb + 1) * batch_size]
 
                 mb_obs = obs_flat[idx]
                 mb_act = act_flat[idx]
@@ -274,9 +259,7 @@ def train(args):
                 # Policy loss
                 ratio = torch.exp(new_lp - mb_old_lp)
                 pg_loss1 = -mb_adv * ratio
-                pg_loss2 = -mb_adv * ratio.clamp(
-                    1.0 - ppo_cfg.clip_param, 1.0 + ppo_cfg.clip_param
-                )
+                pg_loss2 = -mb_adv * ratio.clamp(1.0 - ppo_cfg.clip_param, 1.0 + ppo_cfg.clip_param)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                 # Value loss
@@ -288,18 +271,14 @@ def train(args):
                 # Optimize
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    actor_critic.parameters(), ppo_cfg.max_grad_norm
-                )
+                torch.nn.utils.clip_grad_norm_(actor_critic.parameters(), ppo_cfg.max_grad_norm)
                 optimizer.step()
                 scheduler.step()
 
                 # Metrics
                 with torch.no_grad():
                     approx_kl = 0.5 * ((new_lp - mb_old_lp) ** 2).mean()
-                    clip_frac = (
-                        ((ratio - 1.0).abs() > ppo_cfg.clip_param).float().mean()
-                    )
+                    clip_frac = ((ratio - 1.0).abs() > ppo_cfg.clip_param).float().mean()
 
                 ppo_metrics["pg_loss"] += pg_loss.item()
                 ppo_metrics["vf_loss"] += vf_loss.item()
@@ -327,7 +306,7 @@ def train(args):
         for p in actor_critic.parameters():
             if p.grad is not None:
                 grad_norm += p.grad.data.norm(2).item() ** 2
-        grad_norm = grad_norm**0.5
+        grad_norm = grad_norm ** 0.5
 
         mean_std = actor_critic.action_std.mean().item()
 
@@ -357,19 +336,13 @@ def train(args):
         # Save best
         if mean_ep_return > best_ep_return:
             best_ep_return = mean_ep_return
-            _save_checkpoint(
-                output_dir / "best_model", actor_critic, obs_normalizer, total_steps
-            )
+            _save_checkpoint(output_dir / "best_model", actor_critic, obs_normalizer, total_steps)
 
         # Periodic checkpoints
-        if (update_idx + 1) % max(
-            1, n_updates // 10
-        ) == 0 or update_idx == n_updates - 1:
+        if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:
             _save_checkpoint(
                 output_dir / "checkpoints" / f"step_{total_steps}",
-                actor_critic,
-                obs_normalizer,
-                total_steps,
+                actor_critic, obs_normalizer, total_steps,
             )
 
         # Periodic video rendering (every 1M steps, matches MJX train.py)
@@ -380,18 +353,14 @@ def train(args):
             next_video_step = (total_steps // 1_000_000 + 1) * 1_000_000
 
         # Periodic plots
-        if (update_idx + 1) % max(
-            1, n_updates // 5
-        ) == 0 or update_idx == n_updates - 1:
+        if (update_idx + 1) % max(1, n_updates // 5) == 0 or update_idx == n_updates - 1:
             logger.save_reward_curve(str(output_dir), total_steps)
 
     elapsed = time.time() - t_start
     logger.info(f"Training complete in {elapsed:.1f}s ({total_steps:,} steps)")
     logger.info(f"Best ep_return: {best_ep_return:.2f}")
 
-    _save_checkpoint(
-        output_dir / "final_model", actor_critic, obs_normalizer, total_steps
-    )
+    _save_checkpoint(output_dir / "final_model", actor_critic, obs_normalizer, total_steps)
     logger.save_reward_curve(str(output_dir), total_steps)
 
     # Final best model video — always loaded from best checkpoint on disk
@@ -405,14 +374,11 @@ def train(args):
 def _save_checkpoint(path: Path, actor_critic, obs_normalizer, step: int):
     """Save checkpoint compatible with evaluation."""
     path.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "model_state_dict": actor_critic.state_dict(),
-            "normalizer_state_dict": obs_normalizer.state_dict(),
-            "step": step,
-        },
-        path / "checkpoint.pt",
-    )
+    torch.save({
+        "model_state_dict": actor_critic.state_dict(),
+        "normalizer_state_dict": obs_normalizer.state_dict(),
+        "step": step,
+    }, path / "checkpoint.pt")
 
 
 def _load_best_model(ckpt_path: Path):
@@ -426,18 +392,14 @@ def _load_best_model(ckpt_path: Path):
 
 
 def _render_video(
-    args,
-    output_dir: Path,
-    total_steps: int,
-    logger=None,
-    label: str = "",
+    args, output_dir: Path, total_steps: int,
+    logger=None, label: str = "",
 ):
     """Render a tracking video using the best model checkpoint.
 
     Always loads from best_model/checkpoint.pt on disk to ensure we render
     the actual best policy, not whatever the live training weights are.
     """
-
     def _log(msg):
         if logger:
             logger.info(msg)
@@ -446,9 +408,7 @@ def _render_video(
         from rl_isaac.evaluate import execute_rollout
 
         # Load best model from checkpoint
-        best_ac, best_norm = _load_best_model(
-            output_dir / "best_model" / "checkpoint.pt"
-        )
+        best_ac, best_norm = _load_best_model(output_dir / "best_model" / "checkpoint.pt")
 
         # Load trajectory data
         state_traj = np.load(args.state_traj)
@@ -458,12 +418,8 @@ def _render_video(
 
         # Run rollout
         qpos_rl, qvel_rl, grf_rl, images = execute_rollout(
-            state_traj,
-            grf_traj,
-            joint_vel_traj,
-            best_ac,
-            best_norm,
-            contact_seq,
+            state_traj, grf_traj, joint_vel_traj,
+            best_ac, best_norm, contact_seq,
             render=True,
         )
 
@@ -476,19 +432,15 @@ def _render_video(
                 video_path = video_dir / f"step_{total_steps:07d}.mp4"
 
             import imageio
-
             fps = 50  # 50Hz control
             imageio.mimsave(str(video_path), images, fps=fps)
             n_tracked = len(qpos_rl)
-            _log(
-                f"  Video saved: {video_path} ({n_tracked}/{state_traj.shape[0]-1} steps tracked)"
-            )
+            _log(f"  Video saved: {video_path} ({n_tracked}/{state_traj.shape[0]-1} steps tracked)")
         else:
             _log(f"  No frames captured for video at step {total_steps}")
 
     except Exception as e:
         import traceback
-
         _log(f"  Video render failed: {e}")
         _log(traceback.format_exc())
 
