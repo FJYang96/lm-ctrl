@@ -55,7 +55,7 @@ def render_and_save_planned_trajectory(
     """
     import imageio
 
-    import config
+    import go2_config as config
 
     if not config.experiment.render:
         return None

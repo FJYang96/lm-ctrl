@@ -1,4 +1,4 @@
-"""Reference-trajectory-specific LLM feedback generation."""
+"""Reference trajectory metrics computation."""
 
 from __future__ import annotations
 
@@ -6,20 +6,21 @@ from typing import Any
 
 import numpy as np
 
-from ..logging_config import logger
-from .format_metrics import format_trajectory_metrics_text
-from .llm_evaluation import get_evaluator
-
 
 def _compute_reference_metrics(
     ref_trajectory_data: dict[str, Any] | None,
     state_trajectory: np.ndarray | None,
-    mpc_dt: float = 0.02,
+    mpc_dt: float | None = None,
 ) -> str:
     """Compute metrics comparing reference trajectory to actual result.
 
     Returns a formatted text string with RMSE and plausibility checks.
     """
+    if mpc_dt is None:
+        raise ValueError(
+            "_compute_reference_metrics: 'mpc_dt' must be explicitly provided "
+            "(go2_config.mpc_config.mpc_dt may be stale after restore_base_config)."
+        )
     if ref_trajectory_data is None:
         return "No reference trajectory data available."
 
@@ -79,12 +80,13 @@ def _compute_reference_metrics(
     # Raw plausibility metrics (LLM interprets these)
     lines.append("\nPlausibility metrics:")
     ref_vz_diff = np.diff(ref_vz)
-    lines.append(
-        f"  Max vertical velocity increase between timesteps: {ref_vz_diff.max():.4f} m/s"
-    )
-    lines.append(
-        f"  Max vertical velocity decrease between timesteps: {ref_vz_diff.min():.4f} m/s"
-    )
+    if len(ref_vz_diff) > 0:
+        lines.append(
+            f"  Max vertical velocity increase between timesteps: {ref_vz_diff.max():.4f} m/s"
+        )
+        lines.append(
+            f"  Max vertical velocity decrease between timesteps: {ref_vz_diff.min():.4f} m/s"
+        )
 
     ref_z_diff = np.diff(ref_height)
     if X_ref.shape[1] > 1:
@@ -95,122 +97,3 @@ def _compute_reference_metrics(
         )
 
     return "\n".join(lines)
-
-
-def generate_reference_feedback(
-    command: str,
-    constraint_code: str,
-    images: list[str] | None,
-    visual_summary: str,
-    ref_trajectory_data: dict[str, Any] | None,
-    trajectory_analysis: dict[str, Any],
-    state_trajectory: np.ndarray | None,
-    opt_success: bool,
-    pivot_signal: str | None,
-    mpc_dt: float = 0.02,
-) -> str:
-    """Generate reference-trajectory-specific feedback via LLM.
-
-    Args:
-        command: The task command
-        constraint_code: Full constraint code (for context)
-        images: Video frames from the trajectory
-        visual_summary: Text summary of the video frames
-        ref_trajectory_data: Dict with X_ref, U_ref arrays
-        trajectory_analysis: Trajectory metrics dict
-        state_trajectory: Actual state trajectory (horizon+1, states_dim)
-        opt_success: Whether the solver converged
-        pivot_signal: "pivot", "tweak", or None
-        mpc_dt: MPC time step in seconds
-
-    Returns:
-        Multi-paragraph analysis text for the code-gen LLM
-    """
-    system_prompt = """You are an expert analyzing reference trajectory design for quadruped MPC trajectory optimization.
-
-The reference trajectory is used ONLY as an initial guess (warmstart) for the solver.
-It does NOT change the cost function — the phase-aware cost and slack constraints remain unchanged.
-A good reference helps the solver converge faster and find better solutions.
-
-=== CONSTRAINT-REFERENCE INTERPLAY ===
-
-The reference trajectory should sit roughly in the CENTER of the constraint bounds.
-If constraints force a specific rotation, the reference must show that rotation.
-If constraints define a flight phase, the reference must have ballistic motion during that phase.
-Phase timing in the reference must match the contact sequence exactly.
-
-Key principles:
-- Reference should be physically plausible (respect gravity, momentum conservation)
-- Velocities must be consistent with positions (no teleportation)
-- GRF should be zero during flight phases, ~mg/n_feet during stance
-- Angular velocity during flight should be constant (momentum conservation)
-- Angles should integrate from angular velocities
-
-=== PLAUSIBILITY DATA ===
-
-You will receive raw plausibility metrics: velocity changes between timesteps, position-velocity
-consistency values, and RMSE comparisons. YOU must interpret these numbers to determine whether
-the reference trajectory is physically plausible. There are no pre-classified warnings or OK labels.
-For example, a large positive vertical velocity increase may indicate a gravity violation during flight.
-A high position-velocity inconsistency may indicate the reference has discontinuities.
-
-=== OUTPUT FORMAT ===
-
-Write multi-paragraph analysis. Be specific about:
-1. How well the reference matches the task requirements
-2. Physics plausibility assessment from the raw metrics (gravity, momentum, velocity-position consistency)
-3. Phase timing alignment with contact sequence
-4. Specific parameter changes (peak height, rotation rate, timing) with concrete numbers
-
-Do NOT return JSON. Return readable analysis text."""
-
-    mode_text = ""
-    if pivot_signal == "pivot":
-        mode_text = """MODE: MANDATORY PIVOT
-The current approach has stagnated. Suggest a fundamentally different reference trajectory
-shape — different peak values, different phase timing, different interpolation strategy."""
-    elif pivot_signal == "tweak":
-        mode_text = """MODE: ADJUSTMENT SUGGESTED
-The current reference shows some promise. Suggest incremental changes — adjust peak values,
-shift timing, tune interpolation parameters."""
-    else:
-        mode_text = """MODE: FIRST ITERATION
-This is the first attempt. Analyze the reference trajectory design and suggest improvements."""
-
-    # Compute reference metrics
-    ref_metrics = _compute_reference_metrics(
-        ref_trajectory_data, state_trajectory, mpc_dt
-    )
-
-    # Format trajectory metrics (comprehensive shared formatter)
-    metrics_text = format_trajectory_metrics_text(trajectory_analysis)
-
-    user_message = f"""COMMAND: {command}
-
-{mode_text}
-
-SOLVER STATUS: {"CONVERGED" if opt_success else "FAILED"}
-
-CONSTRAINT CODE (for context):
-```python
-{constraint_code}
-```
-
-ACTUAL TRAJECTORY METRICS:
-{metrics_text}
-
-REFERENCE TRAJECTORY ANALYSIS:
-{ref_metrics}
-
-VISUAL SUMMARY:
-{visual_summary if visual_summary else "Not available"}
-
-Provide targeted feedback on the reference trajectory design."""
-
-    try:
-        evaluator = get_evaluator()
-        response = evaluator._call_llm(system_prompt, user_message, images)
-        return response.strip()
-    except Exception as e:
-        logger.error(f"Reference feedback generation failed: {e}")
-        return ""

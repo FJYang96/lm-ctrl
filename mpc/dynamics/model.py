@@ -12,6 +12,8 @@ import casadi as cs
 import gym_quadruped
 import numpy as np
 
+import go2_config
+
 try:
     from acados_template import AcadosModel
 
@@ -39,23 +41,10 @@ else:
 
 # Class that defines the prediction model of the NMPC
 class KinoDynamic_Model:
-    def __init__(self, config: Any) -> None:
-        urdf_filename = config.robot_data.urdf_filename
+    def __init__(self) -> None:
+        urdf_filename = go2_config.robot_data.urdf_filename
 
-        joint_list = [
-            "FL_hip_joint",
-            "FL_thigh_joint",
-            "FL_calf_joint",
-            "FR_hip_joint",
-            "FR_thigh_joint",
-            "FR_calf_joint",
-            "RL_hip_joint",
-            "RL_thigh_joint",
-            "RL_calf_joint",
-            "RR_hip_joint",
-            "RR_thigh_joint",
-            "RR_calf_joint",
-        ]
+        joint_list = list(go2_config.JOINT_ORDER)
 
         self.kindyn = KinDynComputations(
             urdfstring=urdf_filename, joints_name_list=joint_list
@@ -114,13 +103,13 @@ class KinoDynamic_Model:
 
             RL_foot_id = model_pin.getFrameId("RL_foot_fixed")
             # self.RL_foot_id = self.model.getJointId("RL_foot_fixed")
-            self.forward_kinematics_RR_fun = cs.Function(
+            self.forward_kinematics_RL_fun = cs.Function(
                 "RL_foot_pos", [cq_pin], [cdata_pin.oMf[RL_foot_id].translation]
             )
 
             RR_foot_id = model_pin.getFrameId("RR_foot_fixed")
             # self.RR_foot_id = self.model.getJointId("RR_foot_fixed")
-            self.forwabase_transformrd_kinematics_RL_fun = cs.Function(
+            self.forward_kinematics_RR_fun = cs.Function(
                 "RR_foot_pos", [cq_pin], [cdata_pin.oMf[RR_foot_id].translation]
             )
 
@@ -255,7 +244,7 @@ class KinoDynamic_Model:
 
         self.inertia = cs.SX.sym("inertia", 9, 1)
         self.mass = cs.SX.sym("mass", 1, 1)
-        self.gravity_constant = config.experiment.gravity_constant
+        self.gravity_constant = go2_config.experiment.gravity_constant
 
     def forward_dynamics(
         self, states: np.ndarray, inputs: np.ndarray, param: np.ndarray
@@ -266,12 +255,12 @@ class KinoDynamic_Model:
         self.states_dot.
 
         Args:
-            states: A numpy array of shape (29,) representing the current state of the robot.
-            inputs: A numpy array of shape (29,) representing the inputs to the robot.
+            states: A numpy array of shape (30,) representing the current state of the robot.
+            inputs: A numpy array of shape (24,) representing the inputs to the robot.
             param: A numpy array of shape (4,) representing the parameters (contact status) of the robot.
 
         Returns:
-            A CasADi SX object of shape (29,) representing the predicted state of the robot.
+            A CasADi SX object of shape (30,) representing the predicted state of the robot.
         """
 
         # Saving for clarity a bunch of variables

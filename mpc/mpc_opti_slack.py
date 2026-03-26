@@ -14,9 +14,24 @@ from typing import Any
 import casadi as cs
 import numpy as np
 
+import go2_config
+
 from .dynamics.model import KinoDynamic_Model
 
 logger = logging.getLogger("llm_integration")
+
+# Module-level alias so that ``from mpc.mpc_opti_slack import
+# PHYSICS_CONSTRAINT_NAMES`` works (the canonical set lives on the class).
+PHYSICS_CONSTRAINT_NAMES: set[str] = {
+    "friction_cone_constraints",
+    "foot_height_constraints",
+    "foot_velocity_constraints",
+    "joint_limits_constraints",
+    "input_limits_constraints",
+    "body_clearance_constraints",
+    "complementarity_constraints",
+    "torque_feasibility_constraints",
+}
 
 
 class QuadrupedMPCOptiSlack:
@@ -30,26 +45,20 @@ class QuadrupedMPCOptiSlack:
     With penalty in cost: J += weight * (||s_lower||² + ||s_upper||²)
     """
 
-    # Default slack penalty weights for each constraint type
-    # Lower weights = faster convergence (solver uses slack more freely)
-    # Higher weights = harder constraints (solver avoids using slack)
-    # For trajectory EXPLORATION, use lower weights to find feasible regions quickly
-    DEFAULT_SLACK_WEIGHTS = {
-        "friction_cone_constraints": 1e5,  # Reduced: allow quick convergence
-        "foot_height_constraints": 1e4,  # Reduced: allow exploration
-        "foot_velocity_constraints": 1e3,  # Reduced
-        "joint_limits_constraints": 1e5,  # Reduced: hardware can handle some overrun
-        "input_limits_constraints": 1e5,  # Reduced
-        "body_clearance_constraints": 1e4,  # Reduced: allow body tilt during flips
-        "complementarity_constraints": 1e2,  # Very low: non-convex constraint, hard to satisfy
-        # LLM-generated constraints are wrapped and named "contact_aware_constraint"
-        "contact_aware_constraint": 1e5,  # LLM constraints (after wrapping)
-    }
+    # Physics constraints that must always be hard (no slack).
+    # References the module-level set so there is a single source of truth.
+    PHYSICS_CONSTRAINT_NAMES = PHYSICS_CONSTRAINT_NAMES
+
+    # Default slack penalty weights for soft (LLM) constraints.
+    # LLM constraint names come from the original function (e.g. "height_constraint").
+    # If a name is not found here, the fallback weight is 1e3
+    # (see _add_constraint_with_slack).
+    DEFAULT_SLACK_WEIGHTS: dict[str, float] = {}
 
     def __init__(
         self,
         model: KinoDynamic_Model,
-        config: Any,
+        config: Any = None,
         build: bool = True,
         use_slack: bool = True,
         slack_weights: dict[str, float] | None = None,
@@ -59,13 +68,14 @@ class QuadrupedMPCOptiSlack:
 
         Args:
             model: KinoDynamic_Model instance
-            config: Configuration object with MPC parameters
+            config: Deprecated — ignored. go2_config is used directly.
             build: Whether to build the solver
             use_slack: Whether to use slack formulation
             slack_weights: Custom weights for slack penalties per constraint type
         """
-        self.horizon = int(config.mpc_config.duration / config.mpc_config.mpc_dt)
-        self.config = config
+        self.horizon = int(
+            go2_config.mpc_config.duration / go2_config.mpc_config.mpc_dt
+        )
         self.kindyn_model = model
         self.use_slack = use_slack
 
@@ -81,10 +91,11 @@ class QuadrupedMPCOptiSlack:
 
         # Compute phase boundaries for jumping motion
         self.pre_flight_steps = int(
-            config.mpc_config.pre_flight_stance_duration / config.mpc_config.mpc_dt
+            go2_config.mpc_config.pre_flight_stance_duration
+            / go2_config.mpc_config.mpc_dt
         )
         self.flight_steps = int(
-            config.mpc_config.flight_duration / config.mpc_config.mpc_dt
+            go2_config.mpc_config.flight_duration / go2_config.mpc_config.mpc_dt
         )
         self.landing_start = self.pre_flight_steps + self.flight_steps
 
@@ -114,10 +125,11 @@ class QuadrupedMPCOptiSlack:
 
         # Parameters that can be set at runtime
         self.P_contact = self.opti.parameter(4, self.horizon)  # Contact sequence
-        self.P_ref_state = self.opti.parameter(self.states_dim)  # Reference state
-        self.P_ref_input = self.opti.parameter(self.inputs_dim)  # Reference input
         self.P_initial_state = self.opti.parameter(self.states_dim)  # Initial state
-        self.P_terminal_state = self.opti.parameter(self.states_dim)  # Terminal state
+
+        # Per-timestep reference trajectory (cost tracking target + initial guess)
+        self.P_X_ref = self.opti.parameter(self.states_dim, self.horizon + 1)
+        self.P_U_ref = self.opti.parameter(self.inputs_dim, self.horizon)
 
         # Robot parameters
         self.P_mu = self.opti.parameter()  # Friction coefficient
@@ -163,7 +175,7 @@ class QuadrupedMPCOptiSlack:
                 self.P_mass,
             )
 
-            dt = self.config.mpc_config.mpc_dt
+            dt = go2_config.mpc_config.mpc_dt
             f_k = self._dynamics_fun(x_k, u_k, param_k)
             self.opti.subject_to(x_next == x_k + dt * f_k)
 
@@ -190,8 +202,8 @@ class QuadrupedMPCOptiSlack:
         Hard constraint: lb <= expr <= ub
         Slack formulation: lb - s_l <= expr <= ub + s_u, s_l >= 0, s_u >= 0
         """
-        if not self.use_slack:
-            # Original hard constraints
+        if not self.use_slack or constraint_name in self.PHYSICS_CONSTRAINT_NAMES:
+            # Hard constraints: physics constraints are always hard
             self.opti.subject_to(expr >= lb)
             self.opti.subject_to(expr <= ub)
             return
@@ -221,15 +233,25 @@ class QuadrupedMPCOptiSlack:
         weight = self.slack_weights.get(constraint_name, 1e3)
         self.slack_penalty_cost += weight * (cs.sumsqr(s_lower) + cs.sumsqr(s_upper))
 
+    # Constraints that only depend on state (x_k), not inputs (u_k).
+    # These can be applied at the terminal state where no inputs exist.
+    STATE_ONLY_CONSTRAINT_NAMES = {
+        "foot_height_constraints",
+        "joint_limits_constraints",
+        "body_clearance_constraints",
+    }
+
     def _setup_path_constraints_with_slack(self) -> None:
         """Setup path constraints with slack formulation."""
-        # Begin imposing path constraints only after the first timestep
+        # Apply all constraints at k=1..horizon-1.
+        # k=0 is skipped: the initial state is fixed and the solver needs
+        # unconstrained forces at the first timestep to drive dynamics.
         for k in range(1, self.horizon):
             contact_k = self.P_contact[:, k]
             u_k = self.U[:, k]
             x_k = self.X[:, k]
 
-            for constraint_fn in self.config.mpc_config.path_constraints:
+            for constraint_fn in go2_config.mpc_config.path_constraints:
                 constraint_name = constraint_fn.__name__
 
                 # Try new signature with k and horizon first, fall back to old signature
@@ -238,7 +260,7 @@ class QuadrupedMPCOptiSlack:
                         x_k,
                         u_k,
                         self.kindyn_model,
-                        self.config,
+                        go2_config,
                         contact_k,
                         k,
                         self.horizon,
@@ -246,36 +268,57 @@ class QuadrupedMPCOptiSlack:
                 except TypeError:
                     # Fall back to old 5-argument signature
                     expr, lb, ub = constraint_fn(
-                        x_k, u_k, self.kindyn_model, self.config, contact_k
+                        x_k, u_k, self.kindyn_model, go2_config, contact_k
                     )
 
                 self._add_constraint_with_slack(constraint_name, k, expr, lb, ub)
 
+        # Apply state-only constraints at the terminal state (k=horizon).
+        # No inputs exist at this timestep, so input-dependent constraints are skipped.
+        x_terminal = self.X[:, self.horizon]
+        # Use last contact column for terminal contact state
+        contact_terminal = self.P_contact[:, self.horizon - 1]
+        u_zero = cs.MX.zeros(self.inputs_dim)
+
+        for constraint_fn in go2_config.mpc_config.path_constraints:
+            constraint_name = constraint_fn.__name__
+            if constraint_name not in self.STATE_ONLY_CONSTRAINT_NAMES:
+                continue
+
+            try:
+                expr, lb, ub = constraint_fn(
+                    x_terminal,
+                    u_zero,
+                    self.kindyn_model,
+                    go2_config,
+                    contact_terminal,
+                    self.horizon,
+                    self.horizon,
+                )
+            except TypeError:
+                expr, lb, ub = constraint_fn(
+                    x_terminal, u_zero, self.kindyn_model, go2_config, contact_terminal
+                )
+
+            self._add_constraint_with_slack(constraint_name, self.horizon, expr, lb, ub)
+
     def _setup_cost_function_with_slack(self) -> None:
         """Setup the cost function including slack penalties."""
-        q_base = self.config.mpc_config.q_base
-        q_joint = self.config.mpc_config.q_joint
-        r_joint_vel = self.config.mpc_config.r_joint_vel
-        r_forces = self.config.mpc_config.r_forces
-        q_terminal_base = self.config.mpc_config.q_terminal_base
-        q_terminal_joint = self.config.mpc_config.q_terminal_joint
+        q_base = go2_config.mpc_config.q_base
+        q_joint = go2_config.mpc_config.q_joint
+        r_joint_vel = go2_config.mpc_config.r_joint_vel
+        r_forces = go2_config.mpc_config.r_forces
+        q_terminal_base = go2_config.mpc_config.q_terminal_base
+        q_terminal_joint = go2_config.mpc_config.q_terminal_joint
 
         cost = 0
 
-        # Stage costs with phase-aware reference selection
+        # Stage costs: track per-timestep LLM reference trajectory
         for k in range(self.horizon):
-            # Determine which reference to use based on phase
-            if k < self.pre_flight_steps:
-                ref_state = self.P_initial_state
-            elif k < self.landing_start:
-                ref_state = self.P_ref_state
-            else:
-                ref_state = self.P_terminal_state
-
-            state_error_base = self.X[0:12, k] - ref_state[0:12]
-            state_error_joint = self.X[12:24, k] - ref_state[12:24]
-            input_error_vel = self.U[0:12, k] - self.P_ref_input[0:12]
-            input_error_forces = self.U[12:24, k] - self.P_ref_input[12:24]
+            state_error_base = self.X[0:12, k] - self.P_X_ref[0:12, k]
+            state_error_joint = self.X[12:24, k] - self.P_X_ref[12:24, k]
+            input_error_vel = self.U[0:12, k] - self.P_U_ref[0:12, k]
+            input_error_forces = self.U[12:24, k] - self.P_U_ref[12:24, k]
 
             cost += cs.mtimes([state_error_base.T, q_base, state_error_base])
             cost += cs.mtimes([state_error_joint.T, q_joint, state_error_joint])
@@ -283,9 +326,11 @@ class QuadrupedMPCOptiSlack:
             cost += cs.mtimes([input_error_forces.T, r_forces, input_error_forces])
 
         # Terminal cost
-        terminal_error_base = self.X[0:12, self.horizon] - self.P_terminal_state[0:12]
+        terminal_error_base = (
+            self.X[0:12, self.horizon] - self.P_X_ref[0:12, self.horizon]
+        )
         terminal_error_joint = (
-            self.X[12:24, self.horizon] - self.P_terminal_state[12:24]
+            self.X[12:24, self.horizon] - self.P_X_ref[12:24, self.horizon]
         )
         cost += 2.0 * cs.mtimes(
             [terminal_error_base.T, q_terminal_base, terminal_error_base]
@@ -302,10 +347,10 @@ class QuadrupedMPCOptiSlack:
 
     def _setup_solver(self) -> None:
         """Setup the solver options."""
-        solver_opts = dict(self.config.solver_config)
+        solver_opts = dict(go2_config.solver_config)
         # Cap solve time to prevent excessive runtime with slack variables
         if "ipopt.max_wall_time" not in solver_opts:
-            solver_opts["ipopt.max_wall_time"] = 300.0
+            solver_opts["ipopt.max_wall_time"] = 600.0
         self.opti.solver("ipopt", solver_opts)
 
     def solve_trajectory(
@@ -322,18 +367,48 @@ class QuadrupedMPCOptiSlack:
             ref: Reference trajectory (shape: states_dim + inputs_dim)
             contact_sequence: Contact sequence array (shape: 4 x horizon)
             ref_trajectory: Optional dict with 'X_ref' (states_dim, horizon+1) and
-                'U_ref' (inputs_dim, horizon) used as solver initial guess.
+                'U_ref' (inputs_dim, horizon) used as cost tracking target and
+                solver initial guess.
         """
         # Set parameter values
         self.opti.set_value(self.P_initial_state, initial_state)
-        self.opti.set_value(self.P_ref_state, ref[: self.states_dim])
-        self.opti.set_value(self.P_ref_input, ref[self.states_dim :])
-        self.opti.set_value(self.P_terminal_state, initial_state)  # Land at start
         self.opti.set_value(self.P_contact, contact_sequence)
 
-        self.opti.set_value(self.P_mu, self.config.experiment.mu_ground)
-        self.opti.set_value(self.P_mass, self.config.robot_data.mass)
-        self.opti.set_value(self.P_inertia, self.config.robot_data.inertia.flatten())
+        # Build per-timestep reference arrays for the cost function
+        if ref_trajectory is not None:
+            # Use LLM-generated per-timestep reference as cost target
+            X_ref_param = ref_trajectory["X_ref"]
+            U_ref_param = ref_trajectory["U_ref"]
+        else:
+            # Fallback: replicate old phase-based static reference logic
+            ref_state = ref[: self.states_dim]
+            ref_input = ref[self.states_dim :]
+
+            terminal_state = initial_state.copy()
+            terminal_state[0] = ref[0]  # X position from reference
+            terminal_state[1] = ref[1]  # Y position from reference
+            terminal_state[2] = initial_state[2]  # Z back to initial height
+            terminal_state[3:6] = 0.0  # Linear velocity
+            terminal_state[9:12] = 0.0  # Angular velocity
+            terminal_state[12:24] = initial_state[12:24]  # Joint positions
+
+            X_ref_param = np.zeros((self.states_dim, self.horizon + 1))
+            for k in range(self.horizon + 1):
+                if k < self.pre_flight_steps:
+                    X_ref_param[:, k] = initial_state
+                elif k < self.landing_start:
+                    X_ref_param[:, k] = ref_state
+                else:
+                    X_ref_param[:, k] = terminal_state
+
+            U_ref_param = np.tile(ref_input.reshape(-1, 1), (1, self.horizon))
+
+        self.opti.set_value(self.P_X_ref, X_ref_param)
+        self.opti.set_value(self.P_U_ref, U_ref_param)
+
+        self.opti.set_value(self.P_mu, go2_config.experiment.mu_ground)
+        self.opti.set_value(self.P_mass, go2_config.robot_data.mass)
+        self.opti.set_value(self.P_inertia, go2_config.robot_data.inertia.flatten())
 
         # Determine initial guess: ref_trajectory or heuristic
         if ref_trajectory is not None:
@@ -359,7 +434,10 @@ class QuadrupedMPCOptiSlack:
                 for foot in range(4):
                     if contact_i[foot] > 0.5:
                         U_init[12 + foot * 3 + 2, i] = (
-                            self.config.robot_data.mass * 9.81 / 4 * 0.8
+                            go2_config.robot_data.mass
+                            * go2_config.experiment.gravity_constant
+                            / 4
+                            * 0.8
                         )
 
         self.opti.set_initial(self.X, X_init)

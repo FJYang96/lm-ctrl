@@ -58,7 +58,12 @@ def execute_simulation(
             import imageio
 
             video_dir = get_video_dir(run_dir)
-            fps = 1 / self.config.mpc_config.mpc_dt
+            mpc_dt = (
+                self.current_task_mpc.mpc_dt
+                if self.current_task_mpc is not None
+                else self._last_mpc_dt
+            )
+            fps = 1 / mpc_dt
             video_path = video_dir / f"planned_traj_iter_{iteration}.mp4"
             imageio.mimsave(str(video_path), planned_traj_images, fps=fps)
 
@@ -94,9 +99,8 @@ def render_failed_trajectory(
             "debug_video_saved": False,
         }
 
-    # Check if we have a debug trajectory
     state_traj = optimization_result.get("state_trajectory")
-    if state_traj is None or (hasattr(state_traj, "size") and state_traj.size == 0):
+    if state_traj is None or state_traj.size == 0:
         return {
             "success": False,
             "error": "Optimization failed - no debug trajectory available",
@@ -112,10 +116,13 @@ def render_failed_trajectory(
         }
 
     try:
-        # Get whatever trajectory data we have
-        joint_vel_traj = optimization_result.get(
-            "joint_vel_trajectory", np.zeros((max(1, state_traj.shape[0] - 1), 12))
-        )
+        joint_vel_traj = optimization_result.get("joint_vel_trajectory")
+        if joint_vel_traj is None:
+            return {
+                "success": False,
+                "error": "Optimization failed - no joint velocity trajectory available",
+                "debug_video_saved": False,
+            }
 
         # Render the debug trajectory (what solver was attempting)
         logger.info("Rendering debug trajectory from failed optimization...")
@@ -130,12 +137,16 @@ def render_failed_trajectory(
         if debug_traj_images and len(debug_traj_images) > 0:
             import imageio
 
-            fps = 1 / self.config.mpc_config.mpc_dt
+            mpc_dt = (
+                self.current_task_mpc.mpc_dt
+                if self.current_task_mpc is not None
+                else self._last_mpc_dt
+            )
+            fps = 1 / mpc_dt
             video_path = video_dir / f"debug_trajectory_iter_{iteration}.mp4"
             imageio.mimsave(str(video_path), debug_traj_images, fps=fps)
             logger.info(f"Saved debug trajectory video: {video_path}")
 
-        # Extract trajectory metrics for the feedback
         trajectory_analysis = optimization_result.get("trajectory_analysis", {})
         pitch_achieved = abs(trajectory_analysis.get("total_pitch_rotation", 0))
         height_gain = trajectory_analysis.get("height_gain", 0)

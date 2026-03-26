@@ -6,88 +6,37 @@ import ast
 import logging
 from typing import Any
 
-import numpy as np
+import go2_config
 
 # Use module-level logger
 logger = logging.getLogger("llm_integration.executor.globals")
 
 
 # ── State / input index constants (exposed to LLM code) ──
-STATES_DIM = 30
-INPUTS_DIM = 24
+# Derived from go2_config structural constants
+_N_JOINTS = go2_config.N_JOINTS  # 12
+_N_LEGS = go2_config.N_LEGS  # 4
+
+STATES_DIM = go2_config.STATES_DIM  # 30
+INPUTS_DIM = go2_config.INPUTS_DIM  # 24
 
 # State vector slices
 IDX_POS = slice(0, 3)  # COM position [x, y, z]
 IDX_VEL = slice(3, 6)  # COM velocity [vx, vy, vz]
 IDX_EULER = slice(6, 9)  # Euler angles [roll, pitch, yaw]
 IDX_ANG_VEL = slice(9, 12)  # Angular velocity [wx, wy, wz]
-IDX_JOINTS = slice(12, 24)  # Joint angles (12 joints)
-IDX_INTEGRALS = slice(24, 30)  # Integral states (padding/zeros)
+IDX_JOINTS = slice(12, 12 + _N_JOINTS)  # Joint angles (12 joints)
+IDX_INTEGRALS = slice(12 + _N_JOINTS, STATES_DIM)  # Integral states (padding/zeros)
 
 # Scalar pitch index (row 7 in state vector)
 IDX_PITCH = 7
 
 # Input vector slices
-IDX_U_JOINT_VEL = slice(0, 12)  # Joint velocities
-IDX_U_GRF = slice(12, 24)  # Ground reaction forces (4 legs × 3)
+IDX_U_JOINT_VEL = slice(0, _N_JOINTS)  # Joint velocities
+IDX_U_GRF = slice(_N_JOINTS, INPUTS_DIM)  # Ground reaction forces (4 legs × 3)
 
 # GRF z-component indices (one per foot: FL, FR, RL, RR)
-IDX_GRF_Z = [14, 17, 20, 23]
-
-
-def _min_jerk_scalar(t: float) -> float:
-    """Min-jerk basis for a scalar t in [0,1]. Returns smooth s in [0,1]."""
-    return 10 * t**3 - 15 * t**4 + 6 * t**5
-
-
-def min_jerk_trajectory(
-    start: float | np.ndarray, end: float | np.ndarray, num_steps: int
-) -> np.ndarray:
-    """
-    Generate a minimum-jerk (5th-order polynomial) smooth interpolation.
-
-    Produces a trajectory from `start` to `end` over `num_steps` points
-    with zero velocity and acceleration at both endpoints.
-
-    Args:
-        start: Starting value (scalar or array)
-        end: Ending value (scalar or array)
-        num_steps: Number of points in the trajectory
-
-    Returns:
-        Array of shape (num_steps,) or (num_steps, dim) with smooth trajectory
-    """
-    t = np.linspace(0, 1, num_steps)
-    # 5th order polynomial: 10t^3 - 15t^4 + 6t^5
-    s = 10 * t**3 - 15 * t**4 + 6 * t**5
-    start_arr = np.asarray(start)
-    end_arr = np.asarray(end)
-    if start_arr.ndim == 0:
-        return np.asarray(start_arr + (end_arr - start_arr) * s)
-    else:
-        return np.asarray(start_arr[None, :] + np.outer(s, end_arr - start_arr))
-
-
-def ballistic_trajectory(
-    z0: float, vz0: float, g: float, dt: float, num_steps: int
-) -> np.ndarray:
-    """
-    Generate a ballistic (projectile) height trajectory under gravity.
-
-    z(t) = z0 + vz0*t - 0.5*g*t^2
-
-    Args:
-        z0: Initial height (m)
-        vz0: Initial vertical velocity (m/s, positive = upward)
-        g: Gravitational acceleration (m/s^2, positive value e.g. 9.81)
-        dt: Time step (s)
-        num_steps: Number of points in the trajectory
-
-    Returns:
-        Array of shape (num_steps,) with height values
-    """
-    t = np.arange(num_steps) * dt
-    return z0 + vz0 * t - 0.5 * g * t**2
+IDX_GRF_Z = [_N_JOINTS + f_idx * 3 + 2 for f_idx in range(_N_LEGS)]
 
 
 # Allowed imports for constraint generation
@@ -96,28 +45,40 @@ ALLOWED_IMPORTS = {
         "cs",
         "MX",
         "SX",
+        "DM",
         "vertcat",
+        "horzcat",
         "mtimes",
-        "fabs",
+        "dot",
+        "cross",
+        "norm_2",
+        "sum1",
+        "transpose",
+        "inv",
+        "reshape",
+        "repmat",
         "sin",
         "cos",
-        "sqrt",
-        "exp",
-        "sum1",
-        "fmax",
-        "fmin",
-        "inf",
-        "horzcat",
-        "DM",
-        "transpose",
-        "norm_2",
-        "atan2",
         "tan",
         "asin",
         "acos",
+        "atan2",
+        "sqrt",
+        "exp",
+        "log",
+        "fabs",
+        "fmax",
+        "fmin",
         "tanh",
         "sinh",
         "cosh",
+        "if_else",
+        "logic_and",
+        "logic_or",
+        "inf",
+        "eye",
+        "zeros",
+        "ones",
     ],
     "numpy": [
         "np",
@@ -159,6 +120,81 @@ ALLOWED_IMPORTS = {
 }
 
 
+class _RestrictedNumpy:
+    """Proxy that blocks dangerous numpy submodules."""
+
+    _BLOCKED = frozenset({"ctypeslib", "testing", "distutils", "f2py", "core"})
+
+    def __init__(self, mod: Any) -> None:
+        object.__setattr__(self, "_mod", mod)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(f"Access to private attribute '{name}' is not allowed")
+        if name in self._BLOCKED:
+            raise AttributeError(f"Access to np.{name} is not allowed")
+        return getattr(object.__getattribute__(self, "_mod"), name)
+
+
+class _RestrictedCasadi:
+    """Proxy that blocks CasADi code-generation and file I/O facilities."""
+
+    _BLOCKED = frozenset(
+        {
+            "CodeGenerator",
+            "cse",
+            "external",
+            "load_library",
+            "import_plugin",
+        }
+    )
+
+    def __init__(self, mod: Any) -> None:
+        object.__setattr__(self, "_mod", mod)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(f"Access to private attribute '{name}' is not allowed")
+        if name in self._BLOCKED:
+            raise AttributeError(f"Access to cs.{name} is not allowed")
+        return getattr(object.__getattribute__(self, "_mod"), name)
+
+
+class _RestrictedLiecasadi:
+    """Proxy that only exposes SO3 and SE3 from liecasadi."""
+
+    _ALLOWED = frozenset({"SO3", "SE3"})
+
+    def __init__(self, mod: Any) -> None:
+        object.__setattr__(self, "_mod", mod)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(f"Access to private attribute '{name}' is not allowed")
+        if name not in self._ALLOWED:
+            raise AttributeError(f"Access to liecasadi.{name} is not allowed")
+        return getattr(object.__getattribute__(self, "_mod"), name)
+
+
+def _safe_type(obj: Any) -> type:
+    """type() for checking types only — no metaclass construction."""
+    return type(obj)
+
+
+def _safe_getattr(obj: Any, name: str, *default: Any) -> Any:
+    """getattr wrapper that blocks access to dunder attributes."""
+    if isinstance(name, str) and name.startswith("__") and name.endswith("__"):
+        raise AttributeError(f"Access to dunder attribute '{name}' is not allowed")
+    return getattr(obj, name, *default)
+
+
+def _safe_hasattr(obj: Any, name: str) -> bool:
+    """hasattr wrapper that blocks probing of dunder attributes."""
+    if isinstance(name, str) and name.startswith("__") and name.endswith("__"):
+        return False
+    return hasattr(obj, name)
+
+
 def create_restricted_globals(
     allowed_imports: dict[str, list[str]] | None = None,
     additional_imports: list[str] | None = None,
@@ -177,6 +213,7 @@ def create_restricted_globals(
         "__builtins__": {
             # Basic Python built-ins needed for constraint functions
             "abs": abs,
+            "round": round,
             "max": max,
             "min": min,
             "len": len,
@@ -190,11 +227,12 @@ def create_restricted_globals(
             "list": list,
             "tuple": tuple,
             "dict": dict,
-            "hasattr": hasattr,
-            "getattr": getattr,
+            "bool": bool,
+            "sum": sum,
+            "hasattr": _safe_hasattr,
+            "getattr": _safe_getattr,
             "isinstance": isinstance,
-            "type": type,
-            "__import__": __import__,  # Needed for dynamic imports
+            "type": _safe_type,
         }
     }
 
@@ -208,15 +246,15 @@ def create_restricted_globals(
         from liecasadi import SO3
 
         # Add main module references
-        restricted_globals["cs"] = cs
-        restricted_globals["np"] = np
+        restricted_globals["cs"] = _RestrictedCasadi(cs)
+        restricted_globals["np"] = _RestrictedNumpy(np)
         restricted_globals["math"] = math
         restricted_globals["SO3"] = SO3
 
         # Make liecasadi module available too
         import liecasadi
 
-        restricted_globals["liecasadi"] = liecasadi
+        restricted_globals["liecasadi"] = _RestrictedLiecasadi(liecasadi)
 
         # Add ALL commonly used CasADi functions directly
         restricted_globals["vertcat"] = cs.vertcat
@@ -258,16 +296,6 @@ def create_restricted_globals(
         restricted_globals["SX"] = cs.SX
         restricted_globals["DM"] = cs.DM
 
-        # Matrix creation functions
-        restricted_globals["eye"] = cs.MX.eye
-        restricted_globals["zeros"] = cs.MX.zeros
-        restricted_globals["ones"] = cs.MX.ones
-
-        # Helper functions for reference trajectory generation
-        restricted_globals["min_jerk_trajectory"] = min_jerk_trajectory
-        restricted_globals["ballistic_trajectory"] = ballistic_trajectory
-        restricted_globals["_min_jerk_scalar"] = _min_jerk_scalar
-
         # State/input index constants
         restricted_globals["STATES_DIM"] = STATES_DIM
         restricted_globals["INPUTS_DIM"] = INPUTS_DIM
@@ -287,6 +315,12 @@ def create_restricted_globals(
             process_dynamic_imports(
                 restricted_globals, additional_imports, allowed_imports
             )
+
+        # CasADi matrix creation functions — set AFTER process_dynamic_imports
+        # so numpy zeros/ones/eye don't overwrite the CasADi MX versions.
+        restricted_globals["eye"] = cs.MX.eye
+        restricted_globals["zeros"] = cs.MX.zeros
+        restricted_globals["ones"] = cs.MX.ones
 
     except ImportError as e:
         logger.warning(f"Could not import required modules: {e}")
@@ -319,10 +353,19 @@ def process_dynamic_imports(
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name in allowed_imports:
-                            # Import the module
-                            module = __import__(alias.name)
                             alias_name = alias.asname if alias.asname else alias.name
-                            globals_dict[alias_name] = module
+                            # Always wrap allowed modules in their restricted proxy
+                            # to prevent bypassing restrictions via aliasing
+                            # (e.g. "import casadi" instead of "import casadi as cs")
+                            module = __import__(alias.name)
+                            if alias.name == "numpy":
+                                globals_dict[alias_name] = _RestrictedNumpy(module)
+                            elif alias.name == "casadi":
+                                globals_dict[alias_name] = _RestrictedCasadi(module)
+                            elif alias.name == "liecasadi":
+                                globals_dict[alias_name] = _RestrictedLiecasadi(module)
+                            else:
+                                globals_dict[alias_name] = module
 
                 elif isinstance(node, ast.ImportFrom):
                     if node.module and node.module in allowed_imports:

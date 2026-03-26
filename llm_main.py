@@ -31,6 +31,8 @@ from typing import Any
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+import go2_config
+
 
 def main() -> int:
     """Main entry point for LLM-enhanced quadruped control."""
@@ -70,8 +72,8 @@ Examples:
         "--config",
         type=str,
         choices=["standard", "complementarity"],
-        default="complementarity",
-        help="MPC configuration mode (default: complementarity)",
+        default=go2_config.CONSTRAINT_MODE,
+        help="MPC configuration mode (default: %(default)s)",
     )
 
     parser.add_argument(
@@ -111,16 +113,15 @@ Examples:
     try:
         # Import and run pipeline
         print("Loading pipeline components...")
-        import config
         from llm_integration import FeedbackPipeline
 
         # Update config for the selected mode
-        config.CONSTRAINT_MODE = args.config
+        go2_config.CONSTRAINT_MODE = args.config
 
         # Initialize and run pipeline
         use_slack = not args.no_slack
         print("Initializing feedback pipeline...")
-        pipeline = FeedbackPipeline(config, use_slack=use_slack)
+        pipeline = FeedbackPipeline(use_slack=use_slack)
 
         start_time = time.time()
         results = pipeline.run_pipeline(args.command)
@@ -198,30 +199,6 @@ def print_results_summary(results: dict[str, Any], elapsed_time: float) -> None:
     print(f"Best score achieved: {best_score:.3f}")
     print(f"Pipeline success: {'YES' if pipeline_success else 'NO'}")
     print(f"Total time: {elapsed_time:.1f} seconds")
-
-    # Print best iteration details if available
-    best_iteration = results.get("best_iteration")
-    if best_iteration:
-        print()
-        print("BEST ITERATION DETAILS:")
-        print(f"- Iteration: {best_iteration['iteration']}")
-
-        opt_result = best_iteration.get("optimization", {})
-        print(f"- Optimization: {'SUCCESS' if opt_result.get('success') else 'FAILED'}")
-
-        sim_result = best_iteration.get("simulation", {})
-        print(f"- Simulation: {'SUCCESS' if sim_result.get('success') else 'FAILED'}")
-
-        if sim_result.get("tracking_error") is not None:
-            print(f"- Tracking error: {sim_result['tracking_error']:.3f}")
-
-        # Print trajectory metrics if available
-        traj_analysis = opt_result.get("trajectory_analysis", {})
-        if traj_analysis:
-            print(f"- Max height: {traj_analysis.get('max_com_height', 'N/A'):.3f}m")
-            if "total_pitch_rotation" in traj_analysis:
-                rotation_deg = traj_analysis["total_pitch_rotation"] * 180 / 3.14159
-                print(f"- Pitch rotation: {rotation_deg:.1f} degrees")
 
     print()
     print(f"Results saved to: {results['results_directory']}")
