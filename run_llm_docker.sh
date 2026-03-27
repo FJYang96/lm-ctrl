@@ -23,17 +23,19 @@ echo ""
 # Check if .env file exists
 if [ ! -f .env ]; then
     echo "❌ Error: .env file not found!"
-    echo "Please create .env file with your Anthropic API key:"
+    echo "Please create .env file with your API keys:"
     echo "ANTHROPIC_API_KEY=your_key_here"
+    echo "GEMINI_API_KEY=your_key_here  (optional)"
     exit 1
 fi
 
-# Check if API key is set
+# Check if API keys are set
 if ! grep -q "ANTHROPIC_API_KEY=sk-" .env; then
-    echo "❌ Error: ANTHROPIC_API_KEY not properly set in .env file"
-    echo "Please edit .env and set your actual API key:"
-    echo "ANTHROPIC_API_KEY=sk-ant-api03-your-actual-key-here"
+    echo "❌ Error: ANTHROPIC_API_KEY not properly set in .env file (needed for code generation)"
     exit 1
+fi
+if ! grep -q "GEMINI_API_KEY=AI" .env; then
+    echo "⚠️  Warning: GEMINI_API_KEY not set in .env file (not required — video summary replaced by computed metrics)"
 fi
 
 # Create results directory on host BEFORE running Docker
@@ -53,6 +55,12 @@ docker run --rm \
         export LD_LIBRARY_PATH=/Quadruped-PyMPC/quadruped_pympc/acados/lib:/Quadruped-PyMPC/quadruped_pympc/acados/build/external/hpipm:\$LD_LIBRARY_PATH
         export ACADOS_SOURCE_DIR=/Quadruped-PyMPC/quadruped_pympc/acados
         export MUJOCO_GL=osmesa
+        export MPLBACKEND=Agg
+
+        # Prevent OpenBLAS/MUMPS thread deadlock in Docker
+        export OMP_NUM_THREADS=4
+        export OPENBLAS_NUM_THREADS=4
+        export MKL_NUM_THREADS=4
 
         # Create results directory
         mkdir -p results/llm_iterations
@@ -65,11 +73,12 @@ docker run --rm \
         echo '🔍 Checking environment...'
         python -c 'import casadi; print(f\"CasADi: {casadi.__version__}\")'
         python -c 'import anthropic; print(\"Anthropic: Available\")'
+        echo \"Google GenAI: Not required (motion quality computed from trajectory data)\"
         python -c 'from mpc.dynamics.model import ACADOS_AVAILABLE; print(f\"Acados: {ACADOS_AVAILABLE}\")'
 
         # Run LLM pipeline
         echo '🧠 Starting LLM pipeline...'
-        python llm_main.py \"$COMMAND\" $OPTIONS
+        xvfb-run -a python llm_main.py \"$COMMAND\" $OPTIONS
 
         echo '✅ LLM pipeline complete! Check results/llm_iterations/ for outputs.'
     "

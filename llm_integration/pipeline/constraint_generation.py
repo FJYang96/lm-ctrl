@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any
 
+from ..code_generation import extract_raw_code, generate_constraints
+from ..code_generation.prompts import create_repair_prompt
 from ..logging_config import logger
 
 if TYPE_CHECKING:
@@ -12,53 +14,62 @@ def generate_constraints_with_retry(
     self: "FeedbackPipeline",
     system_prompt: str,
     user_message: str,
-    context: str | None = None,
+    feedback_data: dict[str, Any] | None = None,
     command: str = "",
     max_attempts: int = 10,
-    images: list[str] | None = None,
-) -> tuple[str, str, list[dict[str, Any]]]:
+) -> tuple[str, str, list[dict[str, Any]], str | None]:
     """
     Generate constraints using the LLM with comprehensive auto-retry on failures.
 
     This implements the full repair loop with detailed error feedback to the LLM.
-    Uses vision API when images are provided for enhanced feedback.
+
+    Args:
+        system_prompt: System prompt for the LLM.
+        user_message: Initial user prompt (e.g. "Generate MPC for: backflip").
+        feedback_data: Structured feedback from the previous iteration (None on
+            iteration 1).  Passed as keyword args to ``generate_constraints``
+            which builds the context and calls the LLM in one shot.
+        command: Original natural-language command (for repair prompts).
+        max_attempts: Maximum LLM repair attempts.
 
     Returns:
-        Tuple of (final_code, function_name, attempt_log)
+        Tuple of (final_code, function_name, attempt_log, feedback_context).
+        ``feedback_context`` is the assembled context string (None on iteration 1).
     """
     from ..mpc import LLMTaskMPC
 
     attempts: list[dict[str, Any]] = []
     mpc_config_code = ""  # Initialize for exception handling
+    feedback_context: str | None = None
 
     for attempt in range(1, max_attempts + 1):
         try:
             # Generate code from LLM
             if attempt == 1:
-                # First attempt uses original prompt
-                prompt = user_message
-                if context:
-                    prompt = f"{context}\n\n{user_message}"
+                if feedback_data:
+                    # Iteration 2+: build context + call LLM in one shot
+                    response, feedback_context = generate_constraints(
+                        system_prompt, user_message, **feedback_data
+                    )
+                else:
+                    # Iteration 1: user_message is the whole prompt
+                    response, _ = generate_constraints(system_prompt, user_message)
             else:
                 # Subsequent attempts use repair prompts with detailed error feedback
                 failed_code = attempts[-1]["code"]
                 error_msg = attempts[-1]["error"]
-                prompt = self.constraint_generator.create_repair_prompt(
-                    command, failed_code, error_msg, attempt
+                # Use the LLM's mpc_dt (from feedback_data or pipeline state)
+                # so the repair prompt shows the correct dt, not the base config.
+                repair_dt = (
+                    feedback_data.get("mpc_dt") if feedback_data else None
+                ) or getattr(self, "_last_mpc_dt", None)
+                prompt = create_repair_prompt(
+                    command, failed_code, error_msg, attempt, mpc_dt=repair_dt
                 )
-
-            # Call LLM with vision if images available, otherwise standard call
-            if images and len(images) > 0:
-                response = self.llm_client.generate_constraints_with_vision(
-                    system_prompt, prompt, None, images
-                )
-            else:
-                response = self.llm_client.generate_constraints(
-                    system_prompt, prompt, None
-                )
+                response, _ = generate_constraints(system_prompt, prompt)
 
             # Extract code from response with improved extraction
-            mpc_config_code = self.llm_client.extract_raw_code(response)
+            mpc_config_code = extract_raw_code(response)
 
             if not mpc_config_code.strip():
                 attempts.append(
@@ -67,16 +78,16 @@ def generate_constraints_with_retry(
                         "code": mpc_config_code,
                         "error": "No code extracted from LLM response - check response format",
                         "success": False,
+                        "failure_stage": "no_code_extracted",
                     }
                 )
                 continue
 
             # Create fresh LLM MPC instance for this attempt
-            use_slack = getattr(self, "use_slack", True)
-            task_mpc = LLMTaskMPC(self.kindyn_model, self.config, use_slack=use_slack)
+            task_mpc = LLMTaskMPC(self.kindyn_model, use_slack=self.use_slack)
 
-            # Initialize with previous iteration's slack weights (if any)
-            if hasattr(self, "current_slack_weights") and self.current_slack_weights:
+            # Initialize with previous iteration's slack weights
+            if self.current_slack_weights:
                 task_mpc.slack_weights = self.current_slack_weights.copy()
 
             # Test the MPC configuration code with SafeExecutor
@@ -102,7 +113,7 @@ def generate_constraints_with_retry(
 
             # Get configuration summary for logging
             config_summary = task_mpc.get_configuration_summary()
-            task_name = config_summary.get("task_name", "unknown")
+            task_name = config_summary["task_name"]
 
             # Save the LLM's slack weights for next iteration
             if task_mpc.slack_weights:
@@ -125,7 +136,7 @@ def generate_constraints_with_retry(
             )
 
             logger.info(f"Constraints generated (attempt {attempt})")
-            return mpc_config_code, task_name, attempts
+            return mpc_config_code, task_name, attempts, feedback_context
 
         except Exception as e:
             # Catch any unexpected errors and provide details
@@ -151,9 +162,9 @@ def generate_constraints_with_retry(
     logger.error(f"All {max_attempts} constraint attempts failed")
 
     # Analyze failure patterns
-    failure_stages = [attempt.get("failure_stage", "unknown") for attempt in attempts]
+    failure_stages = [attempt["failure_stage"] for attempt in attempts]
 
-    last_error = attempts[-1]["error"] if attempts else "No attempts recorded"
+    last_error = attempts[-1]["error"]
     raise ValueError(
         f"Failed to generate valid constraints after {max_attempts} attempts.\n"
         f"Last error: {last_error}\n"

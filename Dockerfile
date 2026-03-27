@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y gedit
 
 # Install git
 RUN apt-get update && apt-get install -y git
-RUN apt install -y libosmesa6 libosmesa6-dev
+RUN apt install -y libosmesa6 libosmesa6-dev xvfb
 
 
 # Install Miniforge

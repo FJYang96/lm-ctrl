@@ -2,9 +2,12 @@
 
 from typing import Any
 
+import go2_config
+from mpc.mpc_opti_slack import PHYSICS_CONSTRAINT_NAMES
+
 
 def _identify_time_ranges(
-    timesteps: list[int], dt: float = 0.02
+    timesteps: list[int], dt: float | None = None
 ) -> list[tuple[float, float]]:
     """
     Convert a list of timesteps into time ranges (in seconds).
@@ -16,6 +19,8 @@ def _identify_time_ranges(
     Returns:
         List of (start_time, end_time) tuples
     """
+    if dt is None:
+        dt = go2_config.mpc_config.mpc_dt
     if not timesteps:
         return []
 
@@ -39,14 +44,18 @@ def _identify_time_ranges(
     return ranges
 
 
-def _format_time_ranges(ranges: list[tuple[float, float]]) -> str:
+def _format_time_ranges(
+    ranges: list[tuple[float, float]], dt: float | None = None
+) -> str:
     """Format time ranges into a readable string."""
+    if dt is None:
+        dt = go2_config.mpc_config.mpc_dt
     if not ranges:
         return "none"
 
     parts = []
     for start, end in ranges[:3]:  # Limit to first 3 ranges to avoid clutter
-        if end - start <= 0.02:
+        if end - start <= dt:
             parts.append(f"{start:.2f}s")
         else:
             parts.append(f"{start:.2f}-{end:.2f}s")
@@ -58,7 +67,7 @@ def _format_time_ranges(ranges: list[tuple[float, float]]) -> str:
 
 
 def _find_worst_timesteps(
-    slack_by_timestep: dict[int, float], top_n: int = 3, dt: float = 0.02
+    slack_by_timestep: dict[int, float], top_n: int = 3, dt: float | None = None
 ) -> list[tuple[float, float]]:
     """
     Find the timesteps with highest slack values.
@@ -66,6 +75,8 @@ def _find_worst_timesteps(
     Returns:
         List of (time_in_seconds, slack_value) for worst timesteps
     """
+    if dt is None:
+        dt = go2_config.mpc_config.mpc_dt
     if not slack_by_timestep:
         return []
 
@@ -75,7 +86,7 @@ def _find_worst_timesteps(
 
 def format_hardness_report(
     hardness_report: dict[str, dict[str, Any]] | None,
-    dt: float = 0.02,
+    dt: float | None = None,
     current_slack_weights: dict[str, float] | None = None,
 ) -> str:
     """
@@ -86,12 +97,19 @@ def format_hardness_report(
 
     Args:
         hardness_report: Dictionary mapping constraint names to hardness metrics
-        dt: Time step size (default 0.02s)
+        dt: Time step size (must be provided by caller — never falls back to
+            go2_config.mpc_config which may hold a stale base value after
+            restore_base_config).
         current_slack_weights: Current slack weights set by LLM (for display)
 
     Returns:
         Formatted string for inclusion in LLM feedback
     """
+    if dt is None:
+        raise ValueError(
+            "format_hardness_report: 'dt' must be explicitly provided "
+            "(go2_config.mpc_config.mpc_dt may be stale after restore_base_config)."
+        )
     if not hardness_report:
         return ""
 
@@ -120,15 +138,15 @@ def format_hardness_report(
         ]
     )
 
-    # Separate LLM-controllable constraints from system constraints
+    # Separate LLM-controllable constraints from system (physics) constraints.
     llm_constraints = {}
     system_constraints = {}
 
     for name, metrics in hardness_report.items():
-        if "contact_aware" in name.lower() or "llm" in name.lower():
-            llm_constraints[name] = metrics
-        else:
+        if name in PHYSICS_CONSTRAINT_NAMES:
             system_constraints[name] = metrics
+        else:
+            llm_constraints[name] = metrics
 
     # Format LLM constraints (most important - LLM can fix these)
     if llm_constraints:
@@ -175,7 +193,7 @@ def _format_constraint_detail(
     # Show when violations occur
     if active_timesteps:
         time_ranges = _identify_time_ranges(active_timesteps, dt)
-        time_str = _format_time_ranges(time_ranges)
+        time_str = _format_time_ranges(time_ranges, dt=dt)
         lines.append(
             f"      Violated at: {time_str} ({len(active_timesteps)} timesteps)"
         )

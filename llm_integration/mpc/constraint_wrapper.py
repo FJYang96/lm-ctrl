@@ -8,6 +8,8 @@ from typing import Any, cast
 
 import numpy as np
 
+import go2_config
+
 
 def wrap_constraint_for_contact_phases(
     constraint_func: Callable[..., Any],
@@ -23,11 +25,8 @@ def wrap_constraint_for_contact_phases(
     for the task's contact sequence.
     """
     # Detect the number of parameters in the constraint function
-    try:
-        sig = inspect.signature(constraint_func)
-        num_params = len(sig.parameters)
-    except (ValueError, TypeError):
-        num_params = 5  # Default to 5-arg signature
+    sig = inspect.signature(constraint_func)
+    num_params = len(sig.parameters)
 
     def contact_aware_constraint(
         x_k: Any,
@@ -50,14 +49,30 @@ def wrap_constraint_for_contact_phases(
                 constraint_func(x_k, u_k, kindyn_model, config, contact_k),
             )
 
+    contact_aware_constraint.__name__ = constraint_func.__name__
     return contact_aware_constraint
+
+
+def _to_float_array(val: Any) -> np.ndarray:
+    """Convert a scalar, CasADi DM/MX/SX, or numpy value to a flat float array."""
+    try:
+        import casadi as cs
+
+        if isinstance(val, cs.MX):
+            val = cs.evalf(val)
+        elif isinstance(val, cs.SX):
+            val = cs.DM(val)
+    except (ImportError, RuntimeError):
+        pass
+    if hasattr(val, "full"):
+        return np.asarray(val.full(), dtype=float).flatten()
+    return np.atleast_1d(np.asarray(val, dtype=float)).flatten()
 
 
 def evaluate_constraint_violations(
     constraint_functions: list[Any],
-    contact_sequence: np.ndarray | None,
+    contact_sequence: np.ndarray,
     kindyn_model: Any,
-    base_config: Any,
     X_debug: np.ndarray,
     U_debug: np.ndarray,
 ) -> dict[str, Any]:
@@ -71,7 +86,6 @@ def evaluate_constraint_violations(
         constraint_functions: List of constraint functions
         contact_sequence: Contact sequence array (4 x horizon)
         kindyn_model: Robot kinodynamic model
-        base_config: Configuration object
         X_debug: State trajectory (states_dim x horizon+1) from opti.debug.value(X)
         U_debug: Input trajectory (inputs_dim x horizon) from opti.debug.value(U)
 
@@ -81,15 +95,12 @@ def evaluate_constraint_violations(
     violations: dict[str, Any] = {
         "llm_constraints": [],
         "by_constraint": {},
+        "constraint_meta": {},
         "summary": [],
     }
 
     if not constraint_functions:
         violations["summary"].append("No LLM constraints to evaluate")
-        return violations
-
-    if contact_sequence is None:
-        violations["summary"].append("No contact sequence configured")
         return violations
 
     horizon = contact_sequence.shape[1]
@@ -99,87 +110,81 @@ def evaluate_constraint_violations(
         violations["by_constraint"][i] = []
 
     # Evaluate each constraint at each timestep (skip k=0 as MPC does)
-    for k in range(1, min(horizon, X_debug.shape[1])):
+    for k in range(1, horizon):
         x_k = X_debug[:, k]
-        u_k = U_debug[:, k] if k < U_debug.shape[1] else U_debug[:, -1]
+        u_k = U_debug[:, k]
         contact_k = contact_sequence[:, k]
 
         for i, constraint_func in enumerate(constraint_functions):
             try:
                 # Call the constraint function
-                result = constraint_func(
+                expr_value, lower, upper = constraint_func(
                     x_k,
                     u_k,
                     kindyn_model,
-                    base_config,
+                    go2_config,
                     contact_k,
                     k,
                     horizon,
                 )
 
-                # Extract value, lower, upper bounds
-                if isinstance(result, tuple) and len(result) == 3:
-                    expr_value, lower, upper = result
-
-                    # Convert CasADi types to float if needed
-                    try:
-                        if hasattr(expr_value, "full"):
-                            expr_value = float(expr_value.full().flatten()[0])
-                        elif hasattr(expr_value, "__float__"):
-                            expr_value = float(expr_value)
-                    except Exception:
-                        pass  # Keep as-is if conversion fails
-
-                    try:
-                        if hasattr(lower, "__float__"):
-                            lower = float(lower)
-                        if hasattr(upper, "__float__"):
-                            upper = float(upper)
-                    except Exception:
-                        pass
-
-                    # Check for violations
-                    if isinstance(expr_value, (int, float)) and isinstance(
-                        lower, (int, float)
-                    ):
-                        if expr_value < lower:
-                            violation_msg = (
-                                f"Constraint {i} at k={k}: "
-                                f"value={expr_value:.6f} < lower={lower:.6f}"
-                            )
-                            violations["llm_constraints"].append(violation_msg)
-                            violations["by_constraint"][i].append(
-                                {
-                                    "k": k,
-                                    "value": expr_value,
-                                    "lower": lower,
-                                    "type": "below_lower",
-                                }
-                            )
-
-                    if isinstance(expr_value, (int, float)) and isinstance(
-                        upper, (int, float)
-                    ):
-                        if expr_value > upper:
-                            violation_msg = (
-                                f"Constraint {i} at k={k}: "
-                                f"value={expr_value:.6f} > upper={upper:.6f}"
-                            )
-                            violations["llm_constraints"].append(violation_msg)
-                            violations["by_constraint"][i].append(
-                                {
-                                    "k": k,
-                                    "value": expr_value,
-                                    "upper": upper,
-                                    "type": "above_upper",
-                                }
-                            )
-
+                # Convert to numpy arrays to handle both scalar and vector constraints
+                expr_arr = _to_float_array(expr_value)
+                lower_arr = _to_float_array(lower)
+                upper_arr = _to_float_array(upper)
             except Exception as e:
-                # Record evaluation error but continue
-                violations["llm_constraints"].append(
-                    f"Constraint {i} at k={k}: evaluation error - {str(e)[:50]}"
-                )
+                if k == 1:  # Log once per constraint, not per timestep
+                    violations["llm_constraints"].append(
+                        f"Constraint {i}: evaluation error at k={k} - {str(e)[:80]}"
+                    )
+                continue
+
+            # Record metadata on first successful evaluation
+            if i not in violations["constraint_meta"]:
+                violations["constraint_meta"][i] = {
+                    "name": getattr(constraint_func, "__name__", f"constraint_{i}"),
+                    "n_outputs": len(expr_arr),
+                }
+
+            # Check element-wise violations
+            for j in range(len(expr_arr)):
+                v = expr_arr[j]
+                lb = lower_arr[j] if j < len(lower_arr) else lower_arr[0]
+                ub = upper_arr[j] if j < len(upper_arr) else upper_arr[0]
+
+                suffix = f"[{j}]" if len(expr_arr) > 1 else ""
+
+                if v < lb:
+                    violation_msg = (
+                        f"Constraint {i}{suffix} at k={k}: "
+                        f"value={v:.6f} < lower={lb:.6f}"
+                    )
+                    violations["llm_constraints"].append(violation_msg)
+                    violations["by_constraint"][i].append(
+                        {
+                            "k": k,
+                            "element": j,
+                            "value": v,
+                            "lower": lb,
+                            "type": "below_lower",
+                        }
+                    )
+
+                if v > ub:
+                    violation_msg = (
+                        f"Constraint {i}{suffix} at k={k}: "
+                        f"value={v:.6f} > upper={ub:.6f}"
+                    )
+                    violations["llm_constraints"].append(violation_msg)
+                    violations["by_constraint"][i].append(
+                        {
+                            "k": k,
+                            "element": j,
+                            "value": v,
+                            "upper": ub,
+                            "type": "above_upper",
+                        }
+                    )
 
     # Generate summary
     for i, constraint_violations in violations["by_constraint"].items():
