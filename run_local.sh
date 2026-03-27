@@ -21,10 +21,12 @@ if [ $# -eq 0 ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PYTHON="/opt/anaconda3/bin/python3"
+PYTHON="/home/aryanroy/miniconda3/bin/python3"
 
 # Non-interactive matplotlib
 export MPLBACKEND=Agg
+# Use EGL for headless OpenGL rendering (avoids gladLoadGL errors)
+export MUJOCO_GL=egl
 
 cd "$SCRIPT_DIR"
 exec "$PYTHON" llm_main.py "$@"

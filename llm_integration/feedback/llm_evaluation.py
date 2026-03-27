@@ -14,7 +14,7 @@ from typing import Any
 import anthropic
 from dotenv import load_dotenv
 
-from .format_metrics import format_trajectory_metrics_text  # noqa: F401 (re-export)
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Claude client (scoring, summary, codegen)
@@ -205,3 +205,35 @@ def format_error_info(error_info: dict[str, Any] | None) -> str:
     if error_info.get("constraint_violations"):
         lines.append(f"Violations: {str(error_info['constraint_violations'])}")
     return "\n".join(lines) if lines else ""
+
+
+# ---------------------------------------------------------------------------
+# Shared prompt constants and helpers
+# ---------------------------------------------------------------------------
+
+DATA_DESCRIPTION = """- TASK COMMAND: The user's task description specifying what the robot should do.
+- MOTION QUALITY REPORT: Computed metrics analyzing physical quality — smoothness, ground penetration, GRF-contact consistency, friction cone, angular momentum, energy continuity, terminal stability, contact quality, joint feasibility, manipulability.
+- METRICS: Numerical trajectory data (positions, velocities, orientations, timing, GRF, actuator loads).
+- HARDNESS DATA: Raw constraint slack values and violation timesteps.
+- VIOLATIONS: Which constraints were violated and where.
+- REFERENCE ANALYSIS: RMSE between reference and actual trajectory, plus plausibility metrics.
+- CONSTRAINT CODE: The full constraint and reference trajectory code that produced this result.
+- SOLVER STATUS: Whether the optimizer converged or failed."""
+
+
+def save_prompt(
+    run_dir: Path | None,
+    label: str,
+    iteration: int,
+    system_prompt: str,
+    user_message: str,
+) -> None:
+    """Save a prompt to disk for debugging."""
+    if run_dir is None:
+        return
+    path = run_dir / f"{label}_prompt_iter_{iteration}.txt"
+    with open(path, "w") as f:
+        f.write("=== SYSTEM PROMPT ===\n")
+        f.write(system_prompt)
+        f.write("\n\n=== USER MESSAGE ===\n")
+        f.write(user_message)

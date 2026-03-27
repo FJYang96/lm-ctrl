@@ -25,8 +25,8 @@ rm -rf rl_isaac/policy_output/* 2>/dev/null
 echo "Cleaned rl_isaac/policy_output/"
 
 # ── Parse args with defaults ──
-MODEL_PATH="${1:-rl_isaac/trained_models/isaaclab_run_20260322_232436/best_model}"
-TRAJ_DIR="${2:-results/jump}"
+MODEL_PATH="${1:-rl_isaac/trained_models/isaaclab_run_20260327_025734/best_model}"
+TRAJ_DIR="${2:-results/test}"
 OUTPUT_DIR="${3:-rl_isaac/policy_output/eval_$(date +%Y%m%d_%H%M%S)}"
 
 # ── Validate model ──
@@ -36,7 +36,7 @@ if [ ! -f "$MODEL_PATH/checkpoint.pt" ]; then
 fi
 
 # ── Trajectory files (iter 9, same as run_smoke_test.sh) ──
-ITER_NUM=9
+ITER_NUM=20
 STATE_TRAJ="$TRAJ_DIR/state_traj_iter_${ITER_NUM}.npy"
 GRF_TRAJ="$TRAJ_DIR/grf_traj_iter_${ITER_NUM}.npy"
 JOINT_VEL_TRAJ="$TRAJ_DIR/joint_vel_traj_iter_${ITER_NUM}.npy"
