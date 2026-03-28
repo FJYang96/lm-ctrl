@@ -24,12 +24,14 @@ PHYSICS_CONSTRAINT_NAMES: set[str] = {
     "body_clearance_constraints",
     "complementarity_constraints",
     "torque_feasibility_constraints",
+    "link_clearance_constraints",
 }
 
 STATE_ONLY_CONSTRAINT_NAMES = {
     "foot_height_constraints",
     "joint_limits_constraints",
     "body_clearance_constraints",
+    "link_clearance_constraints",
 }
 
 

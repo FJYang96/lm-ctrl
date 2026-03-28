@@ -248,6 +248,42 @@ def body_clearance_constraints(
     return effective_clearance, min_clearance, INF
 
 
+def link_clearance_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """Constrain calf and head link heights to stay above ground.
+
+    The body_clearance_constraints only checks an approximate COM box.
+    This constraint uses FK to check actual link positions that commonly
+    penetrate during flips: 4 calves + 2 head links.
+    """
+    com_position = x_k[0:3]
+    roll, pitch, yaw = x_k[6], x_k[7], x_k[8]
+    joint_positions = x_k[12:24]
+
+    w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
+    H = cs.MX.eye(4)
+    H[0:3, 0:3] = w_R_b
+    H[0:3, 3] = com_position
+
+    link_names = ["FL_calf", "FR_calf", "RL_calf", "RR_calf",
+                  "Head_lower", "Head_upper"]
+    heights = []
+    for link in link_names:
+        fk_fun = getattr(kindyn_model, f"forward_kinematics_{link}_fun")
+        heights.append(fk_fun(H, joint_positions)[2, 3])
+
+    link_heights = cs.vertcat(*heights)
+    min_clearance = 0.01 * np.ones(len(link_names))  # 1cm above ground
+    return link_heights, min_clearance, INF * np.ones(len(link_names))
+
+
 def torque_feasibility_constraints(
     x_k: cs.MX,
     u_k: cs.MX,

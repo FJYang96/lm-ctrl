@@ -136,8 +136,8 @@ Optional: mpc.set_slack_weights({{"your_constraint_func_name": weight, ...}})
   mean the solver barely enforces your constraints. Physics constraints are always hard
   — you cannot soften them. Hard constraint names: friction_cone_constraints,
   foot_height_constraints, joint_limits_constraints,
-  input_limits_constraints, body_clearance_constraints, complementarity_constraints,
-  torque_feasibility_constraints.
+  input_limits_constraints, body_clearance_constraints, link_clearance_constraints,
+  complementarity_constraints, torque_feasibility_constraints.
   (foot_velocity_constraints is also reserved but not active in complementarity mode.)
   IMPORTANT: Do NOT name your constraint functions with any of these names, or they
   will be treated as hard constraints (no slack) and solver failures become likely.
@@ -165,7 +165,7 @@ Parameters:
 
 Constraint application range:
   YOUR constraints are applied at k=1 through k=horizon-1 ONLY (never at k=0 or
-  k=horizon). Three system constraints (joint_limits, foot_height, body_clearance)
+  k=horizon). State-only system constraints (joint_limits, foot_height, body_clearance, link_clearance)
   are additionally applied at k=horizon by the solver using a hardcoded name check.
   YOUR constraints are NEVER applied at k=horizon regardless of whether they use u_k.
   The initial state (k=0) is enforced separately by the solver. Design
@@ -204,7 +204,7 @@ P5 — ONE CONSTRAINT PER VARIABLE: Don't constrain the same variable in multipl
 Constraint hardness guidance (for iteration 2+):
   - YOUR constraints with large slack: bounds too tight, widen at violated timesteps
   - SYSTEM constraints with large slack: motion is physically difficult, adjust timing
-  - body_clearance violations often mean too much rotation during ground contact
+  - body_clearance/link_clearance violations mean too much rotation during ground contact
   - Use mpc.set_slack_weights() to prioritize which constraints matter most
 
 Solver failure causes (Invalid_Number = NaN, infeasible problem):
@@ -213,11 +213,10 @@ Solver failure causes (Invalid_Number = NaN, infeasible problem):
   - Fix by widening bounds 2-3×, NOT by removing constraints entirely — removing
     all guidance produces degenerate solutions
 
-Body-link ground penetration:
-  - The solver only constrains foot heights and an approximate COM-based body
-    clearance. Individual body links can still go below ground.
-  - If body-link penetration is reported in feedback, raise the COM height floor
-    during the affected phase of your constraints.
+Body-link ground clearance:
+  - The solver constrains foot heights, COM-based body clearance, AND individual
+    link heights (calves and head) to stay above ground. If link_clearance
+    violations appear, the motion requires too much rotation during ground contact.
 
 == 5. REFERENCE TRAJECTORY ==
 
@@ -273,44 +272,15 @@ ITERATION 1: Minimal viable constraints
   - Maximum 2-3 constraints, bounds 2-3x wider than you think necessary
   - Goal: Solver converges, motion happens (even if imperfect)
 
-LATER ITERATIONS: You receive the previous iteration's FULL constraint code,
-  detailed trajectory metrics, motion quality report, constraint hardness,
-  constraint violations, reference analysis, and a history of all prior
-  iterations(iteration summary can be very useful!). Read all of this carefully. Cross-reference the metrics and
-  violations with the constraint code to diagnose the specific issue, then
-  fix it.
+LATER ITERATIONS: You receive scores for ALL past iterations, plus 3 sampled
+  iterations (the best + 2 random, weighted by score) with their constraint code
+  and detailed performance summaries. Learn from ALL of them — high scores show
+  what works, low scores show what to avoid and why. You decide whether to tweak
+  a good approach or pivot to something new.
 
-  You decide whether to tweak or pivot but here's some guidance.
-  Pivot = drastic structural change (phases, contact sequence, reference
-  trajectory shape, or full rewrite).
-
-  WHEN TO PIVOT:
-  - Solver failing → first try shorter duration and wider bounds (simplify the
-    problem). If still failing after 2 consecutive attempts, pivot.
-  - Scores plateauing below 0.7 for 3+ converged iterations → pivot.
-
-  WHEN TO TWEAK:
-  - Solver converging and scores improving → keep iterating, focus on the
-    weakest metric.
-  - Scores plateauing at 0.7+ → the solution is good but can be improved.
-    Target the single weakest metric. Do NOT pivot — you risk losing a
-    working solution.
-
-  HOW TO TWEAK:
-  - Tighten at most one constraint bound per iteration; freely update the
-    reference trajectory, phase timing, and other code to match. Compound
-    bound tightening (multiple bounds at once) is the #1 cause of solver
-    failure. Terminal bounds are the most sensitive — leave room for the
-    solver to find a feasible terminal state. Do not increase slack weights
-    and tighten bounds in the same iteration.
-
-  A converged solution with imperfect task completion is far more valuable than
-  an unconverged one. If your tweak causes a solver failure, revert to the last
-  converging approach with minimal changes.
-
-  Reference the [BEST] iteration for context, but don't anchor on it — it may
-  be unconverged or a poor solution. Even if it scored well, trying a new
-  structure may score higher.
+  If the solver is failing → first try shorter duration and wider bounds
+  (simplify the problem). A converged solution with imperfect task completion
+  is far more valuable than an unconverged one.
 
 == 8. TASK ==
 Generate MPC configuration and constraints for the requested behavior.
@@ -390,6 +360,6 @@ Other requirements:
 - Constraint function must have 7 parameters: (x_k, u_k, kindyn_model, config, contact_k, k, horizon)
 - Must return exactly 3 values: (constraint_expr, lower_bound, upper_bound)
 - All return values must be CasADi MX expressions (use vertcat for multiple constraints)
-- YOUR constraints are applied at k=1 through k=horizon-1 (NOT at k=0 or k=horizon). System constraints (joint_limits, foot_height, body_clearance) are also applied at k=horizon. Bounds at k=1 must be reachable from the starting state (height={initial_height:.4f}m).
+- YOUR constraints are applied at k=1 through k=horizon-1 (NOT at k=0 or k=horizon). State-only system constraints (joint_limits, foot_height, body_clearance, link_clearance) are also applied at k=horizon. Bounds at k=1 must be reachable from the starting state (height={initial_height:.4f}m).
 
 Return ONLY corrected Python code."""

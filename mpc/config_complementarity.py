@@ -26,6 +26,7 @@ from .constraints import (
     friction_cone_constraints,
     input_limits_constraints,
     joint_limits_constraints,
+    link_clearance_constraints,
     torque_feasibility_constraints,
 )
 from .dynamics.model import KinoDynamic_Model
@@ -55,7 +56,8 @@ class ComplementarityMPCConfig(MPCConfig):
             complementarity_constraints,  # Add complementarity
             joint_limits_constraints,
             input_limits_constraints,
-            body_clearance_constraints,  # Ensure body stays above ground
+            body_clearance_constraints,
+            link_clearance_constraints,
             torque_feasibility_constraints,
         ]
     )

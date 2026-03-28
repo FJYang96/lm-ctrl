@@ -52,6 +52,12 @@ class KinoDynamic_Model:
             setattr(self, f"jacobian_{prefix}_fun",
                     self.kindyn.jacobian_fun(foot))
 
+        # FK for body links that can penetrate ground (calves + head)
+        for link in ["FL_calf", "FR_calf", "RL_calf", "RR_calf",
+                      "Head_lower", "Head_upper"]:
+            setattr(self, f"forward_kinematics_{link}_fun",
+                    self.kindyn.forward_kinematics_fun(link))
+
         self._build_symbolic_variables()
 
     def _build_symbolic_variables(self) -> None:

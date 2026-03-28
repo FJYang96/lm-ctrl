@@ -146,7 +146,10 @@ def generate_constraints(
         "performance summaries. Learn from ALL of them — high-scoring iterations "
         "show what works, low-scoring iterations show what to avoid and why. "
         "Don't repeat approaches that scored poorly. Build on what scored well. "
-        "You decide whether to tweak a good approach or pivot to something new."
+        "You decide whether to tweak a good approach or pivot to something new. "
+        "If the solver is failing, first try shorter duration and wider bounds — "
+        "a converged solution with imperfect task completion is far more valuable "
+        "than an unconverged one."
     )
     lines.append("Return ONLY Python code.")
     lines.append("=" * 60)

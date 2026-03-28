@@ -53,6 +53,7 @@ else:
             constr.joint_limits_constraints,
             constr.input_limits_constraints,
             constr.body_clearance_constraints,
+            constr.link_clearance_constraints,
         ],
         path_constraint_params={
             "SWING_GRF_EPS": 0.0,

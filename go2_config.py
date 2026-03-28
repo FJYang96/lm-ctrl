@@ -323,7 +323,7 @@ solver_config: dict[str, Any] = {
     "ipopt.mu_strategy": "adaptive",
     "ipopt.alpha_for_y": "primal",
     "ipopt.recalc_y": "yes",
-    "ipopt.max_wall_time": 1800.0,
+    "ipopt.max_wall_time": 3600.0,
 }
 
 plot_quantities = [
