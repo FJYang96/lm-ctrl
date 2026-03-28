@@ -20,7 +20,7 @@ if [ ! -f "$ISAAC_PYTHON" ]; then
     exit 1
 fi
 
-ITER_DIR="results/test"
+ITER_DIR="results/llm_iterations/backflip"
 STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_20.npy}
 GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_20.npy}
 JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_20.npy}
