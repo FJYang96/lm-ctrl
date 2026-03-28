@@ -293,7 +293,7 @@ default_mpc_dt_standard: float = 0.1
 CONSTRAINT_MODE: str = "complementarity"
 
 experiment = types.SimpleNamespace(
-    mu_ground=0.5,
+    mu_ground=0.8,
     gravity_constant=9.81,
     duration=1.0,
     sim_dt=0.01,
@@ -323,11 +323,8 @@ solver_config: dict[str, Any] = {
     "ipopt.mu_strategy": "adaptive",
     "ipopt.alpha_for_y": "primal",
     "ipopt.recalc_y": "yes",
-    "ipopt.max_wall_time": 1200.0,
+    "ipopt.max_wall_time": 1800.0,
 }
-
-# Joint acceleration limit (rad/s²) — bounds q̈ to keep M_bj·q̈_j coupling small
-joint_acceleration_limit: float = 150.0
 
 plot_quantities = [
     "base_position",

@@ -257,63 +257,51 @@ def torque_feasibility_constraints(
     k: int = 0,
     horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
-    """
-    Constrain joint torques implied by planned GRFs to stay within actuator limits.
+    """Constrain total joint torques from ALL contact forces within actuator limits.
 
-    For each leg: tau = J_leg^T @ f_foot, then -tau_max <= tau_i <= tau_max.
-    During swing (contact_flag=0), bounds are relaxed to (-INF, INF).
+    Uses the full Jacobian (3x18) per foot and sums J^T·F across all feet,
+    matching the feedforward computation exactly. This accounts for cross-leg
+    coupling (force on one foot produces torques on other legs' joints).
+
+    During swing (all contact_k=0), bounds are relaxed.
     """
     com_position = x_k[0:3]
-    roll = x_k[6]
-    pitch = x_k[7]
-    yaw = x_k[8]
+    roll, pitch, yaw = x_k[6], x_k[7], x_k[8]
     joint_positions = x_k[12:24]
-
     forces = u_k[12:24]
 
-    # Build homogeneous transformation matrix
     w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
     H = cs.MX.eye(4)
     H[0:3, 0:3] = w_R_b
     H[0:3, 3] = com_position
 
-    # Per-joint torque limits from URDF (12,)
-    torque_limits = go2_config.robot_data.joint_efforts
-
     jacobian_funs = [
-        kindyn_model.jacobian_FL_fun,
-        kindyn_model.jacobian_FR_fun,
-        kindyn_model.jacobian_RL_fun,
-        kindyn_model.jacobian_RR_fun,
+        kindyn_model.jacobian_FL_fun, kindyn_model.jacobian_FR_fun,
+        kindyn_model.jacobian_RL_fun, kindyn_model.jacobian_RR_fun,
     ]
 
-    expr_list = []
-    min_list = []
-    max_list = []
-
+    # Sum J^T·F across all feet using full (3,18) Jacobians — same as feedforward.py
+    tau_total = cs.MX.zeros(18)
+    any_contact = cs.MX.zeros(1)
     for leg_idx in range(4):
         f_foot = forces[leg_idx * 3 : leg_idx * 3 + 3]
         contact_flag = contact_k[leg_idx]
+        J_full = jacobian_funs[leg_idx](H, joint_positions)[0:3, :]  # (3, 18)
+        tau_total += J_full.T @ (f_foot * contact_flag)
+        any_contact += contact_flag
 
-        # Translational Jacobian: (3, 18) — first 3 rows of full (6, 18)
-        J_full = jacobian_funs[leg_idx](H, joint_positions)[0:3, :]
-        # Extract this leg's 3 joint columns
-        j_start = 6 + leg_idx * 3
-        J_leg = J_full[:, j_start : j_start + 3]  # (3, 3)
+    # Extract joint torques (skip 6 base DOFs)
+    tau_joints = tau_total[6:]  # (12,)
 
-        # Implied joint torques: tau = J_leg^T @ f_foot  (3,)
-        tau_leg = J_leg.T @ f_foot
+    # Use 80% of actual limits to leave headroom for PD tracking corrections
+    torque_limits = go2_config.robot_data.joint_efforts * 0.8
+    # Relax bounds when no feet are in contact (flight phase)
+    is_stance = cs.fmin(any_contact, 1.0)  # 1 if any foot in contact, 0 if flight
 
-        # Per-joint effort limits for this leg
-        leg_efforts = torque_limits[leg_idx * 3 : (leg_idx + 1) * 3]
+    lb = -torque_limits * is_stance - INF * (1 - is_stance)
+    ub = torque_limits * is_stance + INF * (1 - is_stance)
 
-        for j in range(3):
-            expr_list.append(tau_leg[j])
-            # During stance: [-effort, +effort]; during swing: [-INF, INF]
-            min_list.append(-leg_efforts[j] * contact_flag - INF * (1 - contact_flag))
-            max_list.append(leg_efforts[j] * contact_flag + INF * (1 - contact_flag))
-
-    return cs.vertcat(*expr_list), cs.vertcat(*min_list), cs.vertcat(*max_list)
+    return tau_joints, lb, ub
 
 
 def complementarity_constraints(

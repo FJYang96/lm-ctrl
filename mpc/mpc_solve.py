@@ -58,9 +58,6 @@ def solve_trajectory(
 
     mpc.opti.set_value(mpc.P_X_ref, X_ref_param)
     mpc.opti.set_value(mpc.P_U_ref, U_ref_param)
-    mpc.opti.set_value(mpc.P_mu, go2_config.experiment.mu_ground)
-    mpc.opti.set_value(mpc.P_mass, go2_config.robot_data.mass)
-    mpc.opti.set_value(mpc.P_inertia, go2_config.robot_data.inertia.flatten())
 
     # Initial guess
     if ref_trajectory is not None:

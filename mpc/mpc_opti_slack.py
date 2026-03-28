@@ -87,9 +87,6 @@ class QuadrupedMPCOptiSlack:
         self.P_initial_state = self.opti.parameter(self.states_dim)
         self.P_X_ref = self.opti.parameter(self.states_dim, self.horizon + 1)
         self.P_U_ref = self.opti.parameter(self.inputs_dim, self.horizon)
-        self.P_mu = self.opti.parameter()
-        self.P_mass = self.opti.parameter()
-        self.P_inertia = self.opti.parameter(9)
 
         # Build problem
         self.opti.subject_to(self.X[:, 0] == self.P_initial_state)
@@ -107,22 +104,16 @@ class QuadrupedMPCOptiSlack:
 
     def _setup_dynamics(self, dynamics_fn: cs.Function) -> None:
         dt = go2_config.mpc_config.mpc_dt
-        accel_limit = go2_config.joint_acceleration_limit
-
         for k in range(self.horizon):
             x_k, u_k, x_next = self.X[:, k], self.U[:, k], self.X[:, k + 1]
             contact_k = self.P_contact[:, k]
-            param_k = cs.vertcat(
-                contact_k, self.P_mu, cs.MX.zeros(4), cs.MX.zeros(3),
-                cs.MX.zeros(1), cs.MX.zeros(6), self.P_inertia, self.P_mass,
-            )
-            self.opti.subject_to(x_next == x_k + dt * dynamics_fn(x_k, u_k, param_k))
-
-            # Joint acceleration constraint (finite difference on joint velocities)
+            # Joint acceleration: q̈_j = (q̇_k - q̇_{k-1}) / dt
             if k >= 1:
-                joint_accel = (self.U[0:12, k] - self.U[0:12, k - 1]) / dt
-                self.opti.subject_to(joint_accel <= accel_limit)
-                self.opti.subject_to(joint_accel >= -accel_limit)
+                q_ddot_j = (self.U[0:12, k] - self.U[0:12, k - 1]) / dt
+            else:
+                q_ddot_j = cs.MX.zeros(12)
+            param_k = cs.vertcat(contact_k, q_ddot_j)
+            self.opti.subject_to(x_next == x_k + dt * dynamics_fn(x_k, u_k, param_k))
 
     def _add_constraint_with_slack(
         self, name: str, k: int, expr: cs.MX, lb: cs.MX, ub: cs.MX,
