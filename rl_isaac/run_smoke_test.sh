@@ -30,7 +30,7 @@ fi
 TIMESTEPS=${1:-100000000}
 NUM_ENVS=${2:-4096}
 
-ITER_DIR="results/test"
+ITER_DIR="results/llm_iterations/backflip"
 STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_20.npy}
 GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_20.npy}
 JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_20.npy}
