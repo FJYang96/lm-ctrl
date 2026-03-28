@@ -316,14 +316,18 @@ def __getattr__(name: str) -> Any:
 solver_config: dict[str, Any] = {
     "ipopt.print_level": 5,
     "print_time": True,
-    "ipopt.max_iter": 2000,
+    "ipopt.max_iter": 5000,
     "ipopt.tol": 1e-4,
     "ipopt.acceptable_tol": 1e-3,
     "ipopt.mu_init": 1e-2,
     "ipopt.mu_strategy": "adaptive",
     "ipopt.alpha_for_y": "primal",
     "ipopt.recalc_y": "yes",
+    "ipopt.max_wall_time": 1200.0,
 }
+
+# Joint acceleration limit (rad/s²) — bounds q̈ to keep M_bj·q̈_j coupling small
+joint_acceleration_limit: float = 150.0
 
 plot_quantities = [
     "base_position",

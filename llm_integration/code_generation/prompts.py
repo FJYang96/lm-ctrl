@@ -68,6 +68,13 @@ Physical capability limits (do NOT exceed):
 - vz_takeoff = g * flight_duration / 2, but flight_duration MUST be <= {cl['max_flight_duration']}s
 
 Key physics:
+- The MPC uses FULL-BODY DYNAMICS (not simplified centroidal). Forces couple through
+  Jacobians — leg configuration affects how GRFs translate to COM acceleration.
+  The mass matrix is configuration-dependent (changes as joints move).
+- Joint accelerations are constrained — avoid sudden velocity changes in reference
+  trajectories. Smooth trajectories help the solver converge.
+- The solver is computationally heavy — keep constraints conservative and prefer
+  wider bounds. The dynamics are more coupled than a simple point-mass model.
 - Rotation: angle_change = angular_velocity × time
 - Projectile motion: peak_height = initial_height + v²/(2g)
 - Angular momentum is conserved during flight (no external torques)

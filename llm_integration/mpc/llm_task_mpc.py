@@ -24,7 +24,9 @@ import numpy as np
 
 import go2_config
 from mpc.dynamics.model import KinoDynamic_Model
+from mpc.mpc_analysis import analyze_constraint_hardness
 from mpc.mpc_opti_slack import PHYSICS_CONSTRAINT_NAMES, QuadrupedMPCOptiSlack
+from mpc.mpc_solve import solve_trajectory
 
 from .config_management import create_task_config, restore_base_config
 from .constraint_wrapper import (
@@ -433,30 +435,25 @@ class LLMTaskMPC:
         )
 
         try:
-            result = self.mpc.solve_trajectory(
-                initial_state,
-                ref,
-                self.contact_sequence,
-                ref_trajectory=ref_traj_dict,
+            result = solve_trajectory(
+                self.mpc, initial_state, ref,
+                self.contact_sequence, ref_trajectory=ref_traj_dict,
             )
 
-            # Extract solver stats
             stats = self.mpc.opti.stats()
             self.solver_iterations = stats["iter_count"]
-            if result[3] != 0:  # Non-zero status means failure
+            if result[3] != 0:
                 self.last_error = stats["return_status"]
 
-            # Analyze constraint hardness if using slack formulation
             if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
-                self.last_hardness_report = self.mpc.analyze_constraint_hardness()
+                self.last_hardness_report = analyze_constraint_hardness(self.mpc)
 
             return result
 
         except Exception as e:
             self.last_error = str(e)
-            # Still try to get hardness report on failure
             if self.use_slack and isinstance(self.mpc, QuadrupedMPCOptiSlack):
-                self.last_hardness_report = self.mpc.analyze_constraint_hardness()
+                self.last_hardness_report = analyze_constraint_hardness(self.mpc)
             raise
 
     def get_configuration_summary(self) -> dict[str, Any]:

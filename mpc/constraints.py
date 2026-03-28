@@ -17,6 +17,8 @@ def friction_cone_constraints(
     kindyn_model: KinoDynamic_Model,
     config: Any,
     contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     """Add friction cone constraints exactly like working Acados version."""
     # Key insight: The working version uses contact_sequence to DISABLE constraints
@@ -64,6 +66,8 @@ def foot_height_constraints(
     kindyn_model: KinoDynamic_Model,
     config: Any,
     contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     """
     Add foot height constraints based on the contact schedule.
@@ -104,6 +108,8 @@ def foot_velocity_constraints(
     kindyn_model: KinoDynamic_Model,
     config: Any,
     contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     com_position = x_k[0:3]
     com_velocity = x_k[3:6]
@@ -163,6 +169,8 @@ def joint_limits_constraints(
     kindyn_model: KinoDynamic_Model,
     config: Any,
     contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     # Add joint limits to prevent broken configurations
     joint_positions = x_k[12:24]  # 12 joint angles
@@ -179,6 +187,8 @@ def input_limits_constraints(
     kindyn_model: KinoDynamic_Model,
     config: Any,
     contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     lb = np.concatenate(
         (
@@ -201,6 +211,8 @@ def body_clearance_constraints(
     kindyn_model: KinoDynamic_Model,
     config: Any,
     contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     """
     Add body clearance constraints to ensure all parts of the robot body remain above ground.
@@ -242,6 +254,8 @@ def torque_feasibility_constraints(
     kindyn_model: KinoDynamic_Model,
     config: Any,
     contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     """
     Constrain joint torques implied by planned GRFs to stay within actuator limits.
@@ -308,6 +322,8 @@ def complementarity_constraints(
     kindyn_model: KinoDynamic_Model,
     config: Any,
     contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     """
     Implement relaxed complementarity constraints: f_normal * v_normal <= epsilon

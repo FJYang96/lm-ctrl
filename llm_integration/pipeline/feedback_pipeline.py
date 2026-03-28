@@ -59,10 +59,12 @@ class FeedbackPipeline:
 
     def _extract_constraint_violations(self, opt_result: dict[str, Any]) -> dict[str, Any]:
         """Extract system + LLM constraint violations from the MPC solver."""
+        from mpc.mpc_analysis import get_constraint_violations
+
         assert self.current_task_mpc is not None
         mpc = self.current_task_mpc.mpc
         assert mpc is not None
-        violations = mpc.get_constraint_violations()
+        violations = get_constraint_violations(mpc)
         if opt_result["success"]:
             X_val, U_val = mpc.opti.value(mpc.X), mpc.opti.value(mpc.U)
         else:

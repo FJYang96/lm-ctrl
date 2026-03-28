@@ -26,8 +26,8 @@ from liecasadi import SO3
 gym_quadruped_path = os.path.dirname(gym_quadruped.__file__)
 
 use_adam = True
-use_fixed_inertia = True
-use_centroidal_model = True
+use_fixed_inertia = False
+use_centroidal_model = False
 
 if use_adam:
     # ADAM import
