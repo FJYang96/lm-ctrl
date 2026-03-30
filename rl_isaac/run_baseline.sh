@@ -20,11 +20,11 @@ if [ ! -f "$ISAAC_PYTHON" ]; then
     exit 1
 fi
 
-ITER_DIR="results/llm_iterations/do_a_backflip_1774709237"
-STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_1.npy}
-GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_1.npy}
-JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_1.npy}
-CONTACT_SEQ=${4:-$ITER_DIR/contact_sequence_iter_1.npy}
+ITER_DIR="results/llm_iterations/backflip"
+STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_20.npy}
+GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_20.npy}
+JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_20.npy}
+CONTACT_SEQ=${4:-$ITER_DIR/contact_sequence_iter_20.npy}
 
 OUTPUT_DIR="rl_isaac/eval_output/baseline_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"

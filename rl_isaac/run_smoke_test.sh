@@ -13,10 +13,13 @@ set -e
 rm -rf rl_isaac/trained_models/* 2>/dev/null
 echo "Cleaned rl_isaac/trained_models/"
 
-# GPU selection (default: GPU 1). Set via GPU_ID env var or defaults to 1.
-GPU_ID=${GPU_ID:-2}
+# GPU selection: automatically pick the GPU with the most free memory.
+GPU_ID=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits 2>/dev/null \
+    | sort -t',' -k2 -nr | head -1 | cut -d',' -f1 | tr -d ' ')
+GPU_ID=${GPU_ID:-0}
+GPU_FREE=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$GPU_ID" 2>/dev/null | tr -d ' ')
 export CUDA_VISIBLE_DEVICES=$GPU_ID
-echo "Using GPU: $GPU_ID"
+echo "Selected GPU $GPU_ID (${GPU_FREE}MB free)"
 
 ISAAC_PYTHON="${ISAAC_PYTHON:-/workspace/isaaclab/_isaac_sim/python.sh}"
 if [ ! -f "$ISAAC_PYTHON" ]; then
@@ -30,12 +33,12 @@ fi
 TIMESTEPS=${1:-100000000}
 NUM_ENVS=${2:-4096}
 
-ITER_DIR="results/llm_iterations/do_a_backflip_1774703475"
-STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_2.npy}
-GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_2.npy}
-JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_2.npy}
-PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_2.mp4}
-CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_2.npy}
+ITER_DIR="results/llm_iterations/backflip"
+STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_20.npy}
+GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_20.npy}
+JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_20.npy}
+PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_20.mp4}
+CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_20.npy}
 
 RUN_TAG="isaaclab_run_$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="rl_isaac/trained_models/$RUN_TAG"
@@ -43,6 +46,7 @@ LOG_FILE="$OUTPUT_DIR/experiment.log"
 
 mkdir -p "$OUTPUT_DIR"
 
+echo "Selected GPU $GPU_ID (${GPU_FREE}MB free)" >> "$LOG_FILE"
 echo "Output directory: $OUTPUT_DIR"
 echo "Trajectories: $STATE_TRAJ"
 echo "Timesteps: $TIMESTEPS  Envs: $NUM_ENVS"
