@@ -25,6 +25,7 @@ PHYSICS_CONSTRAINT_NAMES: set[str] = {
     "complementarity_constraints",
     "torque_feasibility_constraints",
     "link_clearance_constraints",
+    "angular_momentum_flight_constraint",
 }
 
 STATE_ONLY_CONSTRAINT_NAMES = {
@@ -137,14 +138,31 @@ class QuadrupedMPCOptiSlack:
         self.slack_penalty_cost += weight * (cs.sumsqr(s_lower) + cs.sumsqr(s_upper))
 
     def _setup_path_constraints(self) -> None:
+        dt = go2_config.mpc_config.mpc_dt
         for k in range(1, self.horizon):
             contact_k = self.P_contact[:, k]
+            # Joint acceleration for torque constraint (same as _setup_dynamics)
+            q_ddot_j = (self.U[0:12, k] - self.U[0:12, k - 1]) / dt
             for constraint_fn in go2_config.mpc_config.path_constraints:
-                expr, lb, ub = constraint_fn(
-                    self.X[:, k], self.U[:, k], self.kindyn_model,
-                    go2_config, contact_k, k, self.horizon,
-                )
-                self._add_constraint_with_slack(constraint_fn.__name__, k, expr, lb, ub)
+                name = constraint_fn.__name__
+                if name == "torque_feasibility_constraints":
+                    expr, lb, ub = constraint_fn(
+                        self.X[:, k], self.U[:, k], self.kindyn_model,
+                        go2_config, contact_k, k, self.horizon,
+                        q_ddot_j=q_ddot_j,
+                    )
+                elif name == "angular_momentum_flight_constraint":
+                    expr, lb, ub = constraint_fn(
+                        self.X[:, k], self.U[:, k], self.kindyn_model,
+                        go2_config, contact_k, k, self.horizon,
+                        x_prev=self.X[:, k - 1], u_prev=self.U[:, k - 1],
+                    )
+                else:
+                    expr, lb, ub = constraint_fn(
+                        self.X[:, k], self.U[:, k], self.kindyn_model,
+                        go2_config, contact_k, k, self.horizon,
+                    )
+                self._add_constraint_with_slack(name, k, expr, lb, ub)
 
         # Terminal state-only constraints
         u_zero = cs.MX.zeros(self.inputs_dim)

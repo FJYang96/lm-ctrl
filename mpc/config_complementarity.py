@@ -20,6 +20,7 @@ import numpy as np
 import go2_config
 
 from .constraints import (
+    angular_momentum_flight_constraint,
     body_clearance_constraints,
     complementarity_constraints,
     foot_height_constraints,
@@ -53,12 +54,13 @@ class ComplementarityMPCConfig(MPCConfig):
         default_factory=lambda: [
             friction_cone_constraints,
             foot_height_constraints,
-            complementarity_constraints,  # Add complementarity
+            complementarity_constraints,
             joint_limits_constraints,
             input_limits_constraints,
             body_clearance_constraints,
             link_clearance_constraints,
             torque_feasibility_constraints,
+            angular_momentum_flight_constraint,
         ]
     )
     path_constraint_params: dict[str, float] = field(

@@ -44,6 +44,7 @@ class KinoDynamic_Model:
         self.bias_force_fun = self.kindyn.bias_force_fun()
         self.gravity_fun = self.kindyn.gravity_term_fun()
         self.coriolis_fun = self.kindyn.coriolis_term_fun()
+        self.centroidal_momentum_matrix_fun = self.kindyn.centroidal_momentum_matrix_fun()
 
         for foot in ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]:
             prefix = foot.split("_")[0]

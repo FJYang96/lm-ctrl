@@ -292,18 +292,20 @@ def torque_feasibility_constraints(
     contact_k: cs.MX,
     k: int = 0,
     horizon: int = 1,
+    q_ddot_j: cs.MX | None = None,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
-    """Constrain total joint torques from ALL contact forces within actuator limits.
+    """Constrain full inverse dynamics joint torques within actuator limits.
 
-    Uses the full Jacobian (3x18) per foot and sums J^T·F across all feet,
-    matching the feedforward computation exactly. This accounts for cross-leg
-    coupling (force on one foot produces torques on other legs' joints).
-
-    During swing (all contact_k=0), bounds are relaxed.
+    Computes tau = M_jb·a_base + M_jj·qddot_j + h_j - (J^T·F)_j
+    and constrains it within actuator torque limits. This accounts for
+    inertial coupling, Coriolis, and gravity — not just the GRF contribution.
     """
     com_position = x_k[0:3]
+    linear_vel = x_k[3:6]
     roll, pitch, yaw = x_k[6], x_k[7], x_k[8]
+    angular_vel = x_k[9:12]
     joint_positions = x_k[12:24]
+    joint_velocities = u_k[0:12]
     forces = u_k[12:24]
 
     w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
@@ -311,33 +313,106 @@ def torque_feasibility_constraints(
     H[0:3, 0:3] = w_R_b
     H[0:3, 3] = com_position
 
+    # Full 18x18 mass matrix
+    M = kindyn_model.mass_mass_fun(H, joint_positions)
+    M_bb = M[0:6, 0:6]
+    M_bj = M[0:6, 6:18]
+    M_jb = M[6:18, 0:6]
+    M_jj = M[6:18, 6:18]
+
+    # Bias forces (Coriolis + gravity)
+    base_vel = cs.vertcat(linear_vel, angular_vel)
+    h = kindyn_model.bias_force_fun(H, joint_positions, base_vel, joint_velocities)
+    h_b = h[0:6]
+    h_j = h[6:18]
+
+    # J^T·F summed across all feet
     jacobian_funs = [
         kindyn_model.jacobian_FL_fun, kindyn_model.jacobian_FR_fun,
         kindyn_model.jacobian_RL_fun, kindyn_model.jacobian_RR_fun,
     ]
-
-    # Sum J^T·F across all feet using full (3,18) Jacobians — same as feedforward.py
-    tau_total = cs.MX.zeros(18)
-    any_contact = cs.MX.zeros(1)
+    JtF = cs.MX.zeros(18)
     for leg_idx in range(4):
         f_foot = forces[leg_idx * 3 : leg_idx * 3 + 3]
         contact_flag = contact_k[leg_idx]
-        J_full = jacobian_funs[leg_idx](H, joint_positions)[0:3, :]  # (3, 18)
-        tau_total += J_full.T @ (f_foot * contact_flag)
-        any_contact += contact_flag
+        J_full = jacobian_funs[leg_idx](H, joint_positions)[0:3, :]
+        JtF += J_full.T @ (f_foot * contact_flag)
 
-    # Extract joint torques (skip 6 base DOFs)
-    tau_joints = tau_total[6:]  # (12,)
+    JtF_b = JtF[0:6]
+    JtF_j = JtF[6:18]
 
-    # Use 80% of actual limits to leave headroom for PD tracking corrections
+    if q_ddot_j is None:
+        q_ddot_j = cs.MX.zeros(12)
+
+    # Base acceleration (same equation as forward_dynamics):
+    # M_bb · a_base = -h_b + J^T·F_b - M_bj · qddot_j
+    a_base = cs.inv(M_bb) @ (-h_b + JtF_b - M_bj @ q_ddot_j)
+
+    # Full inverse dynamics joint torque:
+    # tau = M_jb · a_base + M_jj · qddot_j + h_j - (J^T·F)_j
+    tau_joints = M_jb @ a_base + M_jj @ q_ddot_j + h_j - JtF_j
+
+    # 80% of actual limits to leave headroom for PD tracking corrections
     torque_limits = go2_config.robot_data.joint_efforts * 0.8
-    # Relax bounds when no feet are in contact (flight phase)
-    is_stance = cs.fmin(any_contact, 1.0)  # 1 if any foot in contact, 0 if flight
 
-    lb = -torque_limits * is_stance - INF * (1 - is_stance)
-    ub = torque_limits * is_stance + INF * (1 - is_stance)
+    return tau_joints, -torque_limits, torque_limits
 
-    return tau_joints, lb, ub
+
+def angular_momentum_flight_constraint(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
+    x_prev: cs.MX | None = None,
+    u_prev: cs.MX | None = None,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """Conserve centroidal angular momentum during flight.
+
+    During flight (no ground contact), angular momentum about the COM is
+    conserved. The MPC's Euler integration doesn't enforce this exactly,
+    so the solver can exploit numerical drift to gain free rotation.
+    This constraint closes that loophole.
+
+    Uses ADAM's centroidal momentum matrix: h = A_G(q) · v_gen,
+    where h[3:6] is the angular momentum about the COM.
+    """
+    if x_prev is None or u_prev is None:
+        # No previous timestep — can't compute change, skip
+        return cs.MX.zeros(3), -INF * np.ones(3), INF * np.ones(3)
+
+    def _centroidal_angular_momentum(x: cs.MX, u: cs.MX) -> cs.MX:
+        com_pos = x[0:3]
+        lin_vel = x[3:6]
+        roll, pitch, yaw = x[6], x[7], x[8]
+        ang_vel = x[9:12]
+        joint_pos = x[12:24]
+        joint_vel = u[0:12]
+
+        w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
+        H = cs.MX.eye(4)
+        H[0:3, 0:3] = w_R_b
+        H[0:3, 3] = com_pos
+
+        # Centroidal momentum matrix A_G: (6, 18)
+        # h = A_G · [v_base(6); q̇(12)]  →  h[3:6] = angular momentum about COM
+        A_G = kindyn_model.centroidal_momentum_matrix_fun(H, joint_pos)
+        v_gen = cs.vertcat(lin_vel, ang_vel, joint_vel)
+        h = A_G @ v_gen  # (6,)
+        return h[3:6]  # angular momentum about COM (3,)
+
+    L_k = _centroidal_angular_momentum(x_k, u_k)
+    L_prev = _centroidal_angular_momentum(x_prev, u_prev)
+
+    # Only constrain during flight (all contacts = 0)
+    any_contact = contact_k[0] + contact_k[1] + contact_k[2] + contact_k[3]
+    is_flight = 1.0 - cs.fmin(any_contact, 1.0)  # 1 if flight, 0 if stance
+
+    delta_L = (L_k - L_prev) * is_flight
+    tol = 0.5 * np.ones(3)  # small tolerance for integration discretization
+    return delta_L, -tol, tol
 
 
 def complementarity_constraints(

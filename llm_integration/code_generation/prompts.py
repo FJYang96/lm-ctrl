@@ -77,7 +77,12 @@ Key physics:
   wider bounds. Smooth reference trajectories help convergence.
 - Rotation: angle_change = angular_velocity × time
 - Projectile motion: peak_height = initial_height + v²/(2g)
-- Angular momentum is conserved during flight (no external torques)
+- Angular momentum is STRICTLY CONSERVED during flight — the solver enforces this
+  as a hard constraint (angular_momentum_flight_constraint). ALL rotational momentum
+  must be generated during stance (before takeoff). During flight, joint motion can
+  redistribute angular momentum between base and legs but CANNOT create new angular
+  momentum. Plan takeoff GRFs and timing to generate sufficient angular velocity
+  BEFORE the feet leave the ground.
 - All forces during stance go through the feet and must satisfy the friction box
   (|fx| <= mu*fz AND |fy| <= mu*fz per foot). The per-phase breakdown in trajectory metrics
   shows what % of each motion occurs during stance vs flight — cross-reference this
@@ -137,7 +142,8 @@ Optional: mpc.set_slack_weights({{"your_constraint_func_name": weight, ...}})
   — you cannot soften them. Hard constraint names: friction_cone_constraints,
   foot_height_constraints, joint_limits_constraints,
   input_limits_constraints, body_clearance_constraints, link_clearance_constraints,
-  complementarity_constraints, torque_feasibility_constraints.
+  complementarity_constraints, torque_feasibility_constraints,
+  angular_momentum_flight_constraint.
   (foot_velocity_constraints is also reserved but not active in complementarity mode.)
   IMPORTANT: Do NOT name your constraint functions with any of these names, or they
   will be treated as hard constraints (no slack) and solver failures become likely.
@@ -234,7 +240,8 @@ How to build:
 
 Physics rules:
   - Velocities must be consistent with positions
-  - Flight phases: ballistic z(t) = z0 + vz0*t - 0.5*g*t², angular momentum conserved, GRF=0
+  - Flight phases: ballistic z(t) = z0 + vz0*t - 0.5*g*t², GRF=0, angular momentum
+    strictly conserved (enforced by solver)
   - Stance phases: GRF_z per grounded foot ≈ robot_mass * g / n_grounded_feet
   - Use smooth interpolation (e.g. 10t³ - 15t⁴ + 6t⁵) for transitions
   - Integrate angles from angular velocities — don't set angles without matching omega
