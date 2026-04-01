@@ -1,291 +1,250 @@
-"""Evaluate trained Isaac Lab OPT-Mimic policy.
+"""Evaluate trained OPT-Mimic policy using Isaac Lab (PhysX).
 
-Uses a CPU MuJoCo environment for rollout and video rendering.
-Does NOT import JAX — runs entirely in PyTorch + MuJoCo.
+Uses the same Go2TrackingEnv and physics engine as training for consistent
+evaluation.  No MuJoCo dependency.
 
-Usage:
-    python -m rl_isaac.evaluate \
-        --model-path rl_isaac/trained_models/run_50M/best_model \
-        --state-traj results/llm_iterations/.../state_traj_iter_7.npy \
-        --grf-traj results/llm_iterations/.../grf_traj_iter_7.npy \
-        --joint-vel-traj results/llm_iterations/.../joint_vel_traj_iter_7.npy
+Usage (trained policy):
+    /workspace/isaaclab/isaaclab.sh -p -m rl_isaac.evaluate \
+        --model-path rl_isaac/trained_models/.../best_model \
+        --state-traj results/.../state_traj.npy \
+        --grf-traj results/.../grf_traj.npy \
+        --joint-vel-traj results/.../joint_vel_traj.npy \
+        --headless
+
+Usage (PD+FF baseline, no RL residuals):
+    /workspace/isaaclab/isaaclab.sh -p -m rl_isaac.evaluate \
+        --baseline \
+        --state-traj results/.../state_traj.npy \
+        --grf-traj results/.../grf_traj.npy \
+        --joint-vel-traj results/.../joint_vel_traj.npy \
+        --headless
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
-import os
-import sys
-import types
+from isaaclab.app import AppLauncher
 
-# Block broken GLFW and mujoco.viewer so gym_quadruped doesn't crash on headless Docker.
-os.environ.setdefault("MUJOCO_GL", "egl")
-if "mujoco.viewer" not in sys.modules:
-    _fake_viewer = types.ModuleType("mujoco.viewer")
-    _fake_viewer.Handle = type("Handle", (), {})
-    sys.modules["mujoco.viewer"] = _fake_viewer
-if "glfw" not in sys.modules:
-    _fake_glfw = types.ModuleType("glfw")
-    _fake_glfw._glfw = True
-    sys.modules["glfw"] = _fake_glfw
-    sys.modules["glfw.library"] = types.ModuleType("glfw.library")
+parser = argparse.ArgumentParser(description="Evaluate OPT-Mimic policy (Isaac Lab)")
+parser.add_argument("--model-path", type=str, default="")
+parser.add_argument("--state-traj", type=str, required=True)
+parser.add_argument("--grf-traj", type=str, required=True)
+parser.add_argument("--joint-vel-traj", type=str, required=True)
+parser.add_argument("--contact-sequence", type=str, default="")
+parser.add_argument("--output-video", type=str, default="results/rl_isaac_tracking.mp4")
+parser.add_argument("--baseline", action="store_true",
+                    help="Run PD+FF baseline (zero RL residuals)")
+AppLauncher.add_app_launcher_args(parser)
+args_cli = parser.parse_args()
 
-import mujoco
+app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
+
+# -- safe to import after AppLauncher --
 import numpy as np
 import torch
 
-import go2_config
-from mpc.dynamics.model import KinoDynamic_Model
-from rl_isaac.feedforward import FeedforwardComputer
-from rl_isaac.reference import ReferenceTrajectory
-from utils.conversion import sim_to_mpc
+from rsl_rl.modules import EmpiricalNormalization
 
+from rl_isaac.env_cfg import Go2TrackingEnvCfg
+from rl_isaac.tracking_env import Go2TrackingEnv
 from rl_isaac.network import OPTMimicActorCritic
 
-# OPT-Mimic constants (same as tracking_env.py)
-KP = 25.0
-KD = 1.5
-TORQUE_LIMITS = np.array([23.7, 23.7, 45.43] * 4, dtype=np.float32)
-ACTION_LIMIT = 0.2
 
-
-def load_isaac_checkpoint(model_path: str, device: str = "cpu"):
+def load_checkpoint(model_path: str, device: str = "cpu"):
     """Load Isaac Lab checkpoint."""
     ckpt_file = Path(model_path) / "checkpoint.pt"
     if not ckpt_file.exists():
         ckpt_file = Path(model_path)
     ckpt = torch.load(ckpt_file, map_location=device, weights_only=False)
-    actor_critic = OPTMimicActorCritic(num_obs=39, num_privileged_obs=0, num_actions=12)
-    actor_critic.load_state_dict(ckpt["model_state_dict"])
-    actor_critic.eval()
-    normalizer_state = ckpt.get("normalizer_state_dict", None)
-    step = ckpt.get("step", 0)
-    return actor_critic, normalizer_state, step
+    ac = OPTMimicActorCritic(num_obs=39, num_privileged_obs=0, num_actions=12)
+    ac.load_state_dict(ckpt["model_state_dict"])
+    ac.eval()
+    return ac, ckpt.get("normalizer_state_dict", None), ckpt.get("step", 0)
 
 
-def execute_rollout(
-    state_traj: np.ndarray,
-    grf_traj: np.ndarray,
-    joint_vel_traj: np.ndarray,
-    actor_critic,
-    normalizer_state: dict | None = None,
-    contact_sequence: np.ndarray | None = None,
-    render: bool = True,
-):
-    """Roll out the trained policy on CPU MuJoCo for evaluation + video.
+def execute_rollout(env, actor_critic, obs_normalizer, render=True):
+    """Run deterministic rollout from phase 0 in Isaac Lab.
 
-    Uses gym_quadruped directly (no JAX dependency).
+    The env handles PD + feedforward + residual internally via _apply_action.
+    We just provide actions (or zeros for baseline) and collect results.
+
+    Returns (positions, images).
     """
-    sim_dt = 0.001
-    control_dt = go2_config.mpc_config.mpc_dt
-    substeps = int(control_dt / sim_dt)
+    device = env.device
+    max_phase = env._max_phase
 
-    kindyn = KinoDynamic_Model()
-    ref = ReferenceTrajectory(
-        state_traj=state_traj,
-        joint_vel_traj=joint_vel_traj,
-        grf_traj=grf_traj,
-        contact_sequence=contact_sequence,
-        control_dt=control_dt,
+    # Reset env and force to phase 0 with no DR
+    env.reset()
+    env._phase[:] = 0
+    env._prev_action[:] = 0
+    env._last_torque[:] = 0
+    env._first_step[:] = True
+    env._joint_offset[:] = 0
+    env._torque_scale[:] = 1.0
+
+    # Write reference state at phase 0
+    all_ids = env._robot._ALL_INDICES
+    ref_pos = env._ref_body_pos[0:1].expand(env.num_envs, -1).clone() + env._env_origins
+    ref_quat = env._ref_body_quat[0:1].expand(env.num_envs, -1).clone()
+    ref_vel = env._ref_body_vel[0:1].expand(env.num_envs, -1).clone()
+    ref_ang_vel = env._ref_body_ang_vel[0:1].expand(env.num_envs, -1).clone()
+    ref_jpos = env._ref_joint_pos[0:1].expand(env.num_envs, -1).clone()
+    ref_jvel = env._ref_joint_vel[0:1].expand(env.num_envs, -1).clone()
+
+    env._robot.write_root_pose_to_sim(
+        torch.cat([ref_pos, ref_quat], dim=-1), all_ids,
     )
-    ff = FeedforwardComputer(kindyn)
-    ref.set_feedforward(ff.precompute_trajectory(ref))
-
-    # Create CPU MuJoCo env via gym_quadruped
-    from gym_quadruped.quadruped_env import QuadrupedEnv
-    quad_env = QuadrupedEnv(
-        robot="go2", scene="flat",
-        ground_friction_coeff=0.8,
-        state_obs_names=QuadrupedEnv._DEFAULT_OBS + ("contact_forces:base",),
-        sim_dt=sim_dt,
+    env._robot.write_root_velocity_to_sim(
+        torch.cat([ref_vel, ref_ang_vel], dim=-1), all_ids,
+    )
+    env._robot.write_joint_state_to_sim(
+        env._to_isaac_order(ref_jpos),
+        env._to_isaac_order(ref_jvel),
+        None, all_ids,
     )
 
-    # Reset to reference state at phase 0
-    init_qpos = np.zeros(19)
-    init_qpos[0:3] = ref.get_body_pos(0)
-    init_qpos[3:7] = ref.get_body_quat(0)
-    init_qpos[7:19] = ref.get_joint_pos(0)
-    init_qvel = np.zeros(18)
-    init_qvel[0:3] = ref.get_body_vel(0)
-    init_qvel[3:6] = ref.get_body_ang_vel(0)
-    init_qvel[6:18] = ref.get_joint_vel(0)
-    quad_env.reset(qpos=init_qpos, qvel=init_qvel)
-
-    # Normalizer
-    norm_mean = None
-    norm_var = None
-    if normalizer_state is not None:
-        norm_mean = normalizer_state.get("_mean", None)
-        norm_var = normalizer_state.get("_var", None)
-        if norm_mean is not None:
-            norm_mean = norm_mean.float()
-        if norm_var is not None:
-            norm_var = norm_var.float()
-
-    renderer = None
-    if render:
-        try:
-            renderer = mujoco.Renderer(quad_env.mjModel, height=480, width=640)
-        except Exception:
-            print("Warning: Could not create renderer")
-
-    num_policy_steps = ref.max_phase
-    qpos_traj = []
-    qvel_traj = []
-    grf_traj_out = []
     images = []
-    prev_action = np.zeros(12)
+    positions = []
+    use_policy = actor_critic is not None
 
-    for phase in range(num_policy_steps):
-        sim_obs = quad_env._get_obs()
-
-        # Build 39D observation (same as tracking_env.py)
-        body_pos = sim_obs["qpos"][0:3]
-        body_quat = sim_obs["qpos"][3:7]
-        joint_pos = sim_obs["qpos"][7:19]
-        body_vel = sim_obs["qvel"][0:3]
-        body_ang_vel = sim_obs["qvel"][3:6]
-        joint_vel = sim_obs["qvel"][6:18]
-        angle = 2.0 * np.pi * phase / ref.max_phase
-        phase_enc = np.array([np.cos(angle), np.sin(angle)])
-        obs = np.concatenate([body_pos, body_quat, joint_pos, body_vel, body_ang_vel, joint_vel, phase_enc]).astype(np.float32)
-
-        obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
-
-        # Normalize
-        if norm_mean is not None and norm_var is not None:
-            obs_t = (obs_t - norm_mean) / torch.sqrt(norm_var + 1e-8)
-            obs_t = obs_t.clamp(-10.0, 10.0)
-
-        with torch.no_grad():
-            action = actor_critic.act_inference(obs_t)
-        action = action.squeeze(0).numpy()
-
-        # Apply PD + FF actuation
-        action_scaled = action * ACTION_LIMIT
-        ref_joint_pos = ref.get_joint_pos(phase)
-        ref_joint_vel = ref.get_joint_vel(phase)
-        ff_torque = ref.get_feedforward_torque(phase)
-
-        actual_joint_pos = sim_obs["qpos"][7:19]
-        actual_joint_vel = sim_obs["qvel"][6:18]
-
-        target_pos = ref_joint_pos + action_scaled
-        torque = (
-            KP * (target_pos - actual_joint_pos)
-            + KD * (ref_joint_vel - actual_joint_vel)
-            + ff_torque
-        )
-        torque = np.clip(torque, -TORQUE_LIMITS, TORQUE_LIMITS)
-
-        # Step physics
-        for _ in range(substeps):
-            sim_obs, _, _, _, _ = quad_env.step(action=torque)
-
-        # Record
-        qpos_traj.append(sim_obs["qpos"].copy())
-        qvel_traj.append(sim_obs["qvel"].copy())
-        if "contact_forces:base" in sim_obs:
-            grf_traj_out.append(sim_obs["contact_forces:base"].copy())
+    terminated_at = None
+    for step_idx in range(max_phase):
+        if use_policy:
+            obs = env._get_observations()["policy"]
+            with torch.no_grad():
+                obs_norm = obs_normalizer(obs)
+                actions = actor_critic.act_inference(obs_norm)
         else:
-            grf_traj_out.append(np.zeros(12))
+            actions = torch.zeros(env.num_envs, 12, device=device)
 
-        if renderer is not None:
-            try:
-                renderer.update_scene(quad_env.mjData)
-                images.append(renderer.render())
-            except Exception:
-                pass
+        _, _, terminated, truncated, _ = env.step(actions)
 
-        prev_action = action_scaled.copy()
+        if terminated_at is None and (terminated[0] or truncated[0]):
+            terminated_at = step_idx + 1
+            # Don't break — keep simulating so the video shows the full outcome
 
-    if renderer:
-        try:
-            renderer.close()
-        except Exception:
-            pass
-    quad_env.close()
+        # Record state (env 0)
+        root_pos = (env._robot.data.root_pos_w[0] - env._env_origins[0]).cpu().numpy()
+        root_quat = env._robot.data.root_quat_w[0].cpu().numpy()
+        joint_pos = env._to_mpc_order(env._robot.data.joint_pos)[0].cpu().numpy()
+        positions.append({
+            "root_pos": root_pos.copy(),
+            "root_quat": root_quat.copy(),
+            "joint_pos": joint_pos.copy(),
+        })
 
-    return (
-        np.array(qpos_traj) if qpos_traj else np.zeros((0, 19)),
-        np.array(qvel_traj) if qvel_traj else np.zeros((0, 18)),
-        np.array(grf_traj_out) if grf_traj_out else np.zeros((0, 12)),
-        images,
-    )
+        if render:
+            frame = env.render()
+            if frame is not None:
+                images.append(frame)
 
+    if terminated_at is not None:
+        print(f"  Env 0 would have terminated at step {terminated_at}/{max_phase}")
 
-def compute_tracking_error(planned_state, qpos_traj, qvel_traj):
-    """RMS tracking error (same as rl/evaluate.py)."""
-    sim_states = []
-    for i in range(min(len(qpos_traj), planned_state.shape[0])):
-        sim_state, _ = sim_to_mpc(qpos_traj[i], qvel_traj[i])
-        sim_states.append(sim_state)
-    if not sim_states:
-        return {"pos_rms": float("nan"), "ori_rms": float("nan"), "joint_rms": float("nan")}
-    sim_traj = np.array(sim_states)
-    n = min(planned_state.shape[0], sim_traj.shape[0])
-    return {
-        "pos_rms": np.sqrt(np.mean((planned_state[:n, 0:3] - sim_traj[:n, 0:3]) ** 2)),
-        "ori_rms": np.sqrt(np.mean((planned_state[:n, 6:9] - sim_traj[:n, 6:9]) ** 2)),
-        "joint_rms": np.sqrt(np.mean((planned_state[:n, 12:24] - sim_traj[:n, 12:24]) ** 2)),
-    }
+    return positions, images
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate Isaac Lab OPT-Mimic policy")
-    parser.add_argument("--model-path", type=str, required=True)
-    parser.add_argument("--state-traj", type=str, required=True)
-    parser.add_argument("--grf-traj", type=str, required=True)
-    parser.add_argument("--joint-vel-traj", type=str, required=True)
-    parser.add_argument("--contact-sequence", type=str, default=None)
-    parser.add_argument("--output-video", type=str, default="results/rl_isaac_tracking.mp4")
-    args = parser.parse_args()
+    if not args_cli.baseline and not args_cli.model_path:
+        print("ERROR: provide --model-path or --baseline")
+        simulation_app.close()
+        return
 
-    os.environ.setdefault("MUJOCO_GL", "egl")
+    # Create env with 1 env for clean evaluation
+    from isaaclab.envs.common import ViewerCfg
 
-    state_traj = np.load(args.state_traj)
-    grf_traj = np.load(args.grf_traj)
-    joint_vel_traj = np.load(args.joint_vel_traj)
-    contact_seq = np.load(args.contact_sequence) if args.contact_sequence else None
-
-    print(f"Loading model from {args.model_path}...")
-    actor_critic, normalizer_state, step = load_isaac_checkpoint(args.model_path)
-    print(f"  Loaded checkpoint at step {step}")
-
-    print("Running rollout...")
-    qpos_rl, qvel_rl, grf_rl, images = execute_rollout(
-        state_traj, grf_traj, joint_vel_traj,
-        actor_critic, normalizer_state, contact_seq,
-        render=True,
+    cfg = Go2TrackingEnvCfg()
+    cfg.scene.num_envs = 1
+    cfg.state_traj_path = args_cli.state_traj
+    cfg.grf_traj_path = args_cli.grf_traj
+    cfg.joint_vel_traj_path = args_cli.joint_vel_traj
+    cfg.contact_sequence_path = (
+        args_cli.contact_sequence if args_cli.contact_sequence else ""
+    )
+    # Close-up camera with fixed world-frame position
+    cfg.viewer = ViewerCfg(
+        eye=(2.5, 2.5, 1.5),
+        lookat=(0.0, 0.0, 0.4),
+        resolution=(1920, 1088),  # divisible by 16 for codec compatibility
+        origin_type="world",
     )
 
-    n_tracked = len(qpos_rl)
-    err = compute_tracking_error(state_traj, qpos_rl, qvel_rl) if n_tracked > 0 else {
-        "pos_rms": float("nan"), "ori_rms": float("nan"), "joint_rms": float("nan")
-    }
+    env = Go2TrackingEnv(cfg, render_mode="rgb_array")
+    device = env.device
+    max_phase = env._max_phase
+
+    # Load model or use baseline
+    actor_critic = None
+    obs_normalizer = EmpiricalNormalization(shape=[39], until=1e8).to(device)
+    obs_normalizer.eval()
+
+    if args_cli.baseline:
+        print("Running PD+FF baseline (zero RL residuals)...")
+    else:
+        actor_critic, normalizer_state, step = load_checkpoint(
+            args_cli.model_path, str(device),
+        )
+        actor_critic = actor_critic.to(device)
+        if normalizer_state:
+            obs_normalizer.load_state_dict(normalizer_state)
+            obs_normalizer.eval()
+        print(f"Loaded checkpoint at step {step}")
+
+    # Run rollout
+    print("Running evaluation rollout...")
+    positions, images = execute_rollout(env, actor_critic, obs_normalizer, render=True)
+
+    # Compute tracking errors
+    n_tracked = len(positions)
+    mode = "BASELINE (PD+FF)" if args_cli.baseline else "RL POLICY"
 
     print("")
-    print("=" * 40)
-    print("ISAAC LAB RL TRACKING ERRORS")
-    print("=" * 40)
-    print(f"  Steps tracked: {n_tracked}/{state_traj.shape[0] - 1}")
-    print(f"  Position RMS:  {err['pos_rms']:.4f} m")
-    print(f"  Orientation RMS: {err['ori_rms']:.4f} rad")
-    print(f"  Joint RMS:     {err['joint_rms']:.4f} rad")
-    print("=" * 40)
+    print("=" * 50)
+    print(f"ISAAC LAB TRACKING: {mode}")
+    print("=" * 50)
+    print(f"  Steps tracked: {n_tracked}/{max_phase}")
 
+    if n_tracked > 0:
+        # Phase is incremented before reward/done check, so the reference
+        # position at phase k+1 is what we compare against after step k.
+        ref_idx = min(n_tracked, max_phase)
+        ref_positions = env._ref_body_pos[1:ref_idx + 1].cpu().numpy()
+        actual_positions = np.array([p["root_pos"] for p in positions[:ref_idx]])
+        pos_rms = np.sqrt(np.mean((ref_positions - actual_positions) ** 2))
+
+        ref_joints = env._ref_joint_pos[1:ref_idx + 1].cpu().numpy()
+        actual_joints = np.array([p["joint_pos"] for p in positions[:ref_idx]])
+        joint_rms = np.sqrt(np.mean((ref_joints - actual_joints) ** 2))
+
+        print(f"  Position RMS:  {pos_rms:.4f} m")
+        print(f"  Joint RMS:     {joint_rms:.4f} rad")
+    print("=" * 50)
+
+    # Save video
     if images:
         import imageio
-        output_path = Path(args.output_video)
+
+        # Hold last frame for 2s so the video rests at the end
+        last_frame = images[-1]
+        for _ in range(100):  # 2s at 50fps
+            images.append(last_frame)
+
+        output_path = Path(args_cli.output_video)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        fps = int(1.0 / config.mpc_config.mpc_dt)
-        imageio.mimsave(str(output_path), images, fps=fps)
+        writer = imageio.get_writer(str(output_path), fps=50, macro_block_size=1)
+        for frame in images:
+            writer.append_data(frame)
+        writer.close()
         print(f"Video saved to {output_path}")
     else:
         print("No frames captured — video not saved.")
+        print("  (Tip: try running without --headless, or with --enable_cameras)")
+
+    env.close()
+    simulation_app.close()
 
 
 if __name__ == "__main__":

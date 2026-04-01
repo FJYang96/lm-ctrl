@@ -8,8 +8,8 @@
 set -e
 
 # ── Edit these defaults for your trajectory ──
-DEFAULT_TRAJ_DIR="results/llm_iterations/do_a_backflip_1774988073" 
-DEFAULT_ITER=1
+DEFAULT_TRAJ_DIR="results/llm_iterations/backflip" 
+DEFAULT_ITER=20
 
 TRAJ_DIR="${1:-$DEFAULT_TRAJ_DIR}"
 ITER="${2:-$DEFAULT_ITER}"

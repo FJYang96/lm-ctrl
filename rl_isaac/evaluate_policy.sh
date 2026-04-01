@@ -1,17 +1,10 @@
 #!/bin/bash
-# Evaluate a trained OPT-Mimic policy against its reference trajectory.
+# Evaluate the best model from the latest training run.
+# Auto-finds the latest isaaclab_run_* in rl_isaac/trained_models/.
+# Reads trajectory from rl_isaac/traj_config.sh (edit TRAJ_DIR and ITER_NUM there).
 #
 # Usage:
-#   ./rl_isaac/evaluate_policy.sh [model_path] [traj_dir] [output_dir]
-#
-# Defaults:
-#   model_path  - rl_isaac/trained_models/isaaclab_run_20260322_232436/best_model
-#   traj_dir    - results/jump  (iter 9, same as run_smoke_test.sh)
-#   output_dir  - rl_isaac/eval_output/eval_<timestamp>
-#
-# Example:
 #   ./rl_isaac/evaluate_policy.sh
-#   ./rl_isaac/evaluate_policy.sh rl_isaac/trained_models/my_run/best_model results/jump
 #
 #   # Inside Docker:
 #   docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash \
@@ -21,26 +14,27 @@ set -e
 
 cd /workspace/lm-ctrl 2>/dev/null || true
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/traj_config.sh"
+
 rm -rf rl_isaac/policy_output/* 2>/dev/null
 echo "Cleaned rl_isaac/policy_output/"
 
-# ── Parse args with defaults ──
-MODEL_PATH="${1:-rl_isaac/trained_models/isaaclab_run_20260327_025734/best_model}"
-TRAJ_DIR="${2:-results/test}"
-OUTPUT_DIR="${3:-rl_isaac/policy_output/eval_$(date +%Y%m%d_%H%M%S)}"
+# ── Auto-find latest training run and its best model ──
+LATEST_RUN=$(ls -td rl_isaac/trained_models/isaaclab_run_* 2>/dev/null | head -1)
+if [ -z "$LATEST_RUN" ]; then
+    echo "ERROR: no training runs found in rl_isaac/trained_models/"
+    echo "  Run rl_isaac/run_smoke_test.sh first."
+    exit 1
+fi
+
+MODEL_PATH="$LATEST_RUN/best_model"
 
 # ── Validate model ──
 if [ ! -f "$MODEL_PATH/checkpoint.pt" ]; then
     echo "ERROR: checkpoint.pt not found in $MODEL_PATH"
     exit 1
 fi
-
-# ── Trajectory files (iter 9, same as run_smoke_test.sh) ──
-ITER_NUM=20
-STATE_TRAJ="$TRAJ_DIR/state_traj_iter_${ITER_NUM}.npy"
-GRF_TRAJ="$TRAJ_DIR/grf_traj_iter_${ITER_NUM}.npy"
-JOINT_VEL_TRAJ="$TRAJ_DIR/joint_vel_traj_iter_${ITER_NUM}.npy"
-CONTACT_SEQ="$TRAJ_DIR/contact_sequence_iter_${ITER_NUM}.npy"
 
 # ── Validate trajectory files ──
 for f in "$STATE_TRAJ" "$GRF_TRAJ" "$JOINT_VEL_TRAJ"; do
@@ -50,6 +44,7 @@ for f in "$STATE_TRAJ" "$GRF_TRAJ" "$JOINT_VEL_TRAJ"; do
     fi
 done
 
+OUTPUT_DIR="rl_isaac/policy_output/eval_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"
 
 # ── Python setup ──
@@ -61,21 +56,22 @@ fi
 export PYTHONPATH="/workspace/lm-ctrl:${PYTHONPATH}"
 export MUJOCO_GL=egl
 
-# ── Print config ──
-echo "============================================================"
-echo "OPT-Mimic Policy Evaluation"
-echo "============================================================"
-echo "  Model:      $MODEL_PATH"
-echo "  Trajectory: iter $ITER_NUM from $TRAJ_DIR"
-echo "  Contact:    $([ -f "$CONTACT_SEQ" ] && echo "yes" || echo "no (derived from GRF)")"
-echo "  Output:     $OUTPUT_DIR"
-echo "============================================================"
-
 # ── Build contact sequence arg ──
 CONTACT_ARGS=""
 if [ -f "$CONTACT_SEQ" ]; then
     CONTACT_ARGS="'--contact-sequence', '$CONTACT_SEQ',"
 fi
+
+# ── Print config ──
+echo "============================================================"
+echo "OPT-Mimic Policy Evaluation"
+echo "============================================================"
+echo "  Model:      $MODEL_PATH"
+echo "  Run:        $(basename "$LATEST_RUN")"
+echo "  Trajectory: $TRAJ_DIR (iter $ITER_NUM)"
+echo "  Contact:    $([ -f "$CONTACT_SEQ" ] && echo "yes" || echo "no (derived from GRF)")"
+echo "  Output:     $OUTPUT_DIR"
+echo "============================================================"
 
 # ── Run evaluation ──
 $ISAAC_PYTHON -c "

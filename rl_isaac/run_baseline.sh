@@ -2,10 +2,15 @@
 # PD + Feedforward baseline (no RL residuals).
 # Shows tracking quality without any learned policy — just the PD controller + J^T*F.
 #
+# Reads trajectory from rl_isaac/traj_config.sh (edit TRAJ_DIR and ITER_NUM there).
+#
 # Usage:
 #   docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_baseline.sh
 # docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_baseline.sh
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/traj_config.sh"
 
 # Clean previous baseline outputs
 rm -rf rl_isaac/eval_output/* 2>/dev/null
@@ -20,12 +25,6 @@ if [ ! -f "$ISAAC_PYTHON" ]; then
     exit 1
 fi
 
-ITER_DIR="results/llm_iterations/do_a_backflip_1774988073"
-STATE_TRAJ=${1:-$ITER_DIR/state_traj_iter_2.npy}
-GRF_TRAJ=${2:-$ITER_DIR/grf_traj_iter_2.npy}
-JOINT_VEL_TRAJ=${3:-$ITER_DIR/joint_vel_traj_iter_2.npy}
-CONTACT_SEQ=${4:-$ITER_DIR/contact_sequence_iter_2.npy}
-
 OUTPUT_DIR="rl_isaac/eval_output/baseline_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"
 
@@ -38,6 +37,7 @@ if [ -f "$CONTACT_SEQ" ]; then
 fi
 
 echo "Running PD+FF baseline (zero RL residuals)..."
+echo "  Trajectory: $TRAJ_DIR (iter $ITER_NUM)"
 
 $ISAAC_PYTHON -c "
 import os, sys, types

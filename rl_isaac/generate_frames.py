@@ -42,7 +42,17 @@ def extract_and_save(video_path: Path, output_dir: Path, num_frames: int) -> int
     return saved
 
 
-def main(args: argparse.Namespace) -> None:
+def main(args: argparse.Namespace | None = None) -> None:
+    if args is None:
+        parser = argparse.ArgumentParser(
+            description="Extract frames from planned and RL tracking videos"
+        )
+        parser.add_argument("--planned", type=str, default="results/planned_traj.mp4")
+        parser.add_argument("--rl", type=str, default="results/rl_tracking.mp4")
+        parser.add_argument("--output-dir", type=str, default="results/comparison")
+        parser.add_argument("--num-frames", type=int, default=20)
+        args = parser.parse_args()
+
     planned_path = Path(args.planned)
     rl_path = Path(args.rl)
     output_dir = Path(args.output_dir)

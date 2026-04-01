@@ -1,13 +1,18 @@
 #!/bin/bash
 # Isaac Lab OPT-Mimic: train, render best model video, evaluate, compare.
 #
+# Reads trajectory from rl_isaac/traj_config.sh (edit TRAJ_DIR and ITER_NUM there).
+#
 # Usage (from project root):
 #   docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash \
-#       lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_smoke_test.sh [TIMESTEPS] [NUM_ENVS] [GPU_ID]
+#       lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_smoke_test.sh [TIMESTEPS] [NUM_ENVS]
 
 # end command: docker run:  docker ps -q | xargs -r docker stop; docker ps -qa | xargs -r docker rm
 #start command: docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_smoke_test.sh
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/traj_config.sh"
 
 # Clean previous runs
 rm -rf rl_isaac/trained_models/* 2>/dev/null
@@ -33,13 +38,6 @@ fi
 TIMESTEPS=${1:-100000000}
 NUM_ENVS=${2:-4096}
 
-ITER_DIR="results/llm_iterations/backflip"
-STATE_TRAJ=${3:-$ITER_DIR/state_traj_iter_20.npy}
-GRF_TRAJ=${4:-$ITER_DIR/grf_traj_iter_20.npy}
-JOINT_VEL_TRAJ=${5:-$ITER_DIR/joint_vel_traj_iter_20.npy}
-PLANNED_VIDEO=${6:-$ITER_DIR/planned_traj_iter_20.mp4}
-CONTACT_SEQ=${7:-$ITER_DIR/contact_sequence_iter_20.npy}
-
 RUN_TAG="isaaclab_run_$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="rl_isaac/trained_models/$RUN_TAG"
 LOG_FILE="$OUTPUT_DIR/experiment.log"
@@ -48,7 +46,6 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "Selected GPU $GPU_ID (${GPU_FREE}MB free)" >> "$LOG_FILE"
 echo "Output directory: $OUTPUT_DIR"
-echo "Trajectories: $STATE_TRAJ"
 echo "Timesteps: $TIMESTEPS  Envs: $NUM_ENVS"
 
 EXPERIMENT_START=$SECONDS
@@ -108,11 +105,15 @@ main()
 
 # ── Step 3: Generate comparison frames ──
 echo "[3/3] Generating comparison frames..."
-$ISAAC_PYTHON -c "
+if [ -f "$PLANNED_VIDEO" ]; then
+    $ISAAC_PYTHON -c "
 import sys; sys.modules['glfw'] = type(sys)('glfw'); sys.modules['glfw.library'] = type(sys)('glfw.library')
 sys.argv = ['generate_frames', '--planned', '$PLANNED_VIDEO', '--rl', '$OUTPUT_DIR/rl_tracking.mp4', '--output-dir', '$OUTPUT_DIR/comparison', '--num-frames', '20']
 from rl_isaac.generate_frames import main; main()
-" 2>/dev/null || echo "Frame generation skipped (no video or cv2 missing)"
+" 2>/dev/null || echo "Frame generation failed (cv2 missing?)"
+else
+    echo "  Skipped: no planned video at $PLANNED_VIDEO"
+fi
 
 EXPERIMENT_ELAPSED=$(( SECONDS - EXPERIMENT_START ))
 
