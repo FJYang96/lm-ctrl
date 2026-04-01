@@ -110,7 +110,11 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True):
     positions = []
     use_policy = actor_critic is not None
 
-    terminated_at = None
+    # Disable auto-reset so we can capture the final frame after termination.
+    # Isaac Lab's step() calls _reset_idx on done envs, which teleports the robot.
+    original_reset = env._reset_idx
+    env._reset_idx = lambda env_ids: None
+
     for step_idx in range(max_phase):
         if use_policy:
             obs = env._get_observations()["policy"]
@@ -122,11 +126,7 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True):
 
         _, _, terminated, truncated, _ = env.step(actions)
 
-        if terminated_at is None and (terminated[0] or truncated[0]):
-            terminated_at = step_idx + 1
-            # Don't break — keep simulating so the video shows the full outcome
-
-        # Record state (env 0)
+        # Record state after step (auto-reset is disabled so this is real)
         root_pos = (env._robot.data.root_pos_w[0] - env._env_origins[0]).cpu().numpy()
         root_quat = env._robot.data.root_quat_w[0].cpu().numpy()
         joint_pos = env._to_mpc_order(env._robot.data.joint_pos)[0].cpu().numpy()
@@ -141,9 +141,11 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True):
             if frame is not None:
                 images.append(frame)
 
-    if terminated_at is not None:
-        print(f"  Env 0 would have terminated at step {terminated_at}/{max_phase}")
+        if terminated[0] or truncated[0]:
+            print(f"  Env 0 terminated at step {step_idx + 1}/{max_phase}")
+            break
 
+    env._reset_idx = original_reset
     return positions, images
 
 

@@ -7,8 +7,7 @@
 #   ./rl_isaac/evaluate_policy.sh
 #
 #   # Inside Docker:
-#   docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash \
-#       lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/evaluate_policy.sh
+#   docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash \lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/evaluate_policy.sh
 
 set -e
 
@@ -46,6 +45,13 @@ done
 
 OUTPUT_DIR="rl_isaac/policy_output/eval_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR"
+
+# ── GPU selection: pick GPU with most free memory ──
+GPU_ID=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits 2>/dev/null \
+    | sort -t',' -k2 -nr | head -1 | cut -d',' -f1 | tr -d ' ')
+GPU_ID=${GPU_ID:-0}
+export CUDA_VISIBLE_DEVICES=$GPU_ID
+echo "Selected GPU $GPU_ID"
 
 # ── Python setup ──
 ISAAC_PYTHON="${ISAAC_PYTHON:-/workspace/isaaclab/_isaac_sim/python.sh}"

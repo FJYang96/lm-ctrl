@@ -33,10 +33,11 @@ def render_video(
     logger=None,
     label: str = "",
 ) -> torch.Tensor:
-    """Render best-model video using the training env (PhysX).
+    """Render best-model video showing one robot from starting position.
 
-    Temporarily loads best model, runs deterministic rollout from phase 0,
-    captures frames, restores training weights, resets env.
+    Temporarily loads best model, sets env 0 to phase 0 with no DR,
+    zooms camera onto env 0, runs deterministic rollout, captures frames,
+    restores training weights, resets env.
 
     Returns new obs tensor after env reset.
     """
@@ -62,28 +63,43 @@ def render_video(
             obs_normalizer.load_state_dict(best_ckpt["normalizer_state_dict"])
         obs_normalizer.eval()
 
-        # Reset env to phase 0, no domain randomization
+        # Reset env, then set env 0 to phase 0 with no DR.
         env.reset()
-        env._phase[:] = 0
-        env._prev_action[:] = 0
-        env._last_torque[:] = 0
-        env._first_step[:] = True
-        env._joint_offset[:] = 0
-        env._torque_scale[:] = 1.0
+        env._phase[0] = 0
+        env._prev_action[0] = 0
+        env._last_torque[0] = 0
+        env._first_step[0] = True
+        env._joint_offset[0] = 0
+        env._torque_scale[0] = 1.0
 
-        all_ids = env._robot._ALL_INDICES
-        ref_pos = env._ref_body_pos[0:1].expand(env.num_envs, -1).clone() + env._env_origins
-        ref_quat = env._ref_body_quat[0:1].expand(env.num_envs, -1).clone()
-        env._robot.write_root_pose_to_sim(torch.cat([ref_pos, ref_quat], dim=-1), all_ids)
+        env_0 = torch.tensor([0], device=device, dtype=torch.long)
+        env._robot.write_root_pose_to_sim(torch.cat([
+            env._ref_body_pos[0:1].clone() + env._env_origins[0:1],
+            env._ref_body_quat[0:1].clone(),
+        ], dim=-1), env_0)
         env._robot.write_root_velocity_to_sim(torch.cat([
-            env._ref_body_vel[0:1].expand(env.num_envs, -1).clone(),
-            env._ref_body_ang_vel[0:1].expand(env.num_envs, -1).clone(),
-        ], dim=-1), all_ids)
+            env._ref_body_vel[0:1].clone(),
+            env._ref_body_ang_vel[0:1].clone(),
+        ], dim=-1), env_0)
         env._robot.write_joint_state_to_sim(
-            env._to_isaac_order(env._ref_joint_pos[0:1].expand(env.num_envs, -1).clone()),
-            env._to_isaac_order(env._ref_joint_vel[0:1].expand(env.num_envs, -1).clone()),
-            None, all_ids,
+            env._to_isaac_order(env._ref_joint_pos[0:1].clone()),
+            env._to_isaac_order(env._ref_joint_vel[0:1].clone()),
+            None, env_0,
         )
+
+        # Zoom camera close to env 0 so only one robot is visible.
+        # env_origins[0] is env 0's world position.
+        origin = env._env_origins[0].cpu().numpy()
+        eye = (origin[0] + 1.5, origin[1] + 1.5, origin[2] + 1.0)
+        target = (origin[0], origin[1], origin[2] + 0.3)
+        try:
+            env.sim.set_camera_view(eye, target)
+        except Exception:
+            pass  # headless or API unavailable
+
+        # Disable auto-reset so we capture the real post-step state (landing frame).
+        original_reset = env._reset_idx
+        env._reset_idx = lambda env_ids: None
 
         images = []
         for _ in range(max_phase):
@@ -91,11 +107,15 @@ def render_video(
             with torch.no_grad():
                 actions = actor_critic.act_inference(obs_normalizer(obs))
             _, _, terminated, truncated, _ = env.step(actions)
+
             frame = env.render()
             if frame is not None:
                 images.append(frame)
-            if (terminated | truncated).all():
+
+            if terminated[0] or truncated[0]:
                 break
+
+        env._reset_idx = original_reset
 
         if images:
             video_dir = output_dir / "runs"
