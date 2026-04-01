@@ -54,17 +54,16 @@ if [ ! -f "$ISAAC_PYTHON" ]; then
 fi
 
 export PYTHONPATH="/workspace/lm-ctrl:${PYTHONPATH}"
-export MUJOCO_GL=egl
 
 # ── Build contact sequence arg ──
-CONTACT_ARGS=""
+CONTACT_FLAG=""
 if [ -f "$CONTACT_SEQ" ]; then
-    CONTACT_ARGS="'--contact-sequence', '$CONTACT_SEQ',"
+    CONTACT_FLAG="--contact-sequence $CONTACT_SEQ"
 fi
 
 # ── Print config ──
 echo "============================================================"
-echo "OPT-Mimic Policy Evaluation"
+echo "OPT-Mimic Policy Evaluation (Isaac Lab PhysX)"
 echo "============================================================"
 echo "  Model:      $MODEL_PATH"
 echo "  Run:        $(basename "$LATEST_RUN")"
@@ -74,33 +73,18 @@ echo "  Output:     $OUTPUT_DIR"
 echo "============================================================"
 
 # ── Run evaluation ──
-$ISAAC_PYTHON -c "
-import os, sys, types
-os.environ['MUJOCO_GL'] = 'egl'
-if 'mujoco.viewer' not in sys.modules:
-    _fv = types.ModuleType('mujoco.viewer')
-    _fv.Handle = type('Handle', (), {})
-    sys.modules['mujoco.viewer'] = _fv
-if 'glfw' not in sys.modules:
-    _fg = types.ModuleType('glfw')
-    _fg._glfw = True
-    sys.modules['glfw'] = _fg
-    sys.modules['glfw.library'] = types.ModuleType('glfw.library')
-
-sys.argv = ['evaluate',
-    '--model-path', '$MODEL_PATH',
-    '--state-traj', '$STATE_TRAJ',
-    '--grf-traj', '$GRF_TRAJ',
-    '--joint-vel-traj', '$JOINT_VEL_TRAJ',
-    '--output-video', '$OUTPUT_DIR/eval_tracking.mp4',
-    $CONTACT_ARGS
-]
-from rl_isaac.evaluate import main
-main()
-"
+$ISAAC_PYTHON -m rl_isaac.evaluate \
+    --model-path "$MODEL_PATH" \
+    --state-traj "$STATE_TRAJ" \
+    --grf-traj "$GRF_TRAJ" \
+    --joint-vel-traj "$JOINT_VEL_TRAJ" \
+    --output-video "$OUTPUT_DIR/eval_tracking.mp4" \
+    --headless --enable_cameras \
+    $CONTACT_FLAG 2>&1 | tee "$OUTPUT_DIR/eval.log"
 
 echo ""
 echo "============================================================"
 echo "Evaluation complete"
 echo "  Video: $OUTPUT_DIR/eval_tracking.mp4"
+echo "  Log:   $OUTPUT_DIR/eval.log"
 echo "============================================================"

@@ -56,7 +56,6 @@ if [ -f "$CONTACT_SEQ" ]; then
 fi
 
 export PYTHONPATH="/workspace/lm-ctrl:${PYTHONPATH}"
-export MUJOCO_GL=egl
 
 # ── Step 1: Train (includes periodic videos every 1M steps + final best model video) ──
 echo "[1/3] Training OPT-Mimic tracking policy (Isaac Lab PPO)..."
@@ -69,48 +68,36 @@ $ISAAC_PYTHON -m rl_isaac.train \
     --output-dir "$OUTPUT_DIR" \
     --total-timesteps "$TIMESTEPS" \
     --num-envs "$NUM_ENVS" \
-    --headless \
+    --headless --enable_cameras \
     $CONTACT_SEQ_FLAG
 
-# ── Step 2: Evaluate best model (CPU MuJoCo rollout + tracking errors + video) ──
-echo "[2/3] Evaluating best model (CPU MuJoCo)..."
+# ── Step 2: Evaluate best model (Isaac Lab PhysX) ──
+echo "[2/3] Evaluating best model (Isaac Lab)..."
 MODEL_PATH="$OUTPUT_DIR/best_model"
 
-$ISAAC_PYTHON -c "
-import os, sys, types
-os.environ['MUJOCO_GL'] = 'egl'
-if 'mujoco.viewer' not in sys.modules:
-    _fv = types.ModuleType('mujoco.viewer')
-    _fv.Handle = type('Handle', (), {})
-    sys.modules['mujoco.viewer'] = _fv
-if 'glfw' not in sys.modules:
-    _fg = types.ModuleType('glfw')
-    _fg._glfw = True
-    sys.modules['glfw'] = _fg
-    sys.modules['glfw.library'] = types.ModuleType('glfw.library')
+EVAL_CONTACT_FLAG=""
+if [ -f "$CONTACT_SEQ" ]; then
+    EVAL_CONTACT_FLAG="--contact-sequence $CONTACT_SEQ"
+fi
 
-args = ['evaluate',
-    '--model-path', '$MODEL_PATH',
-    '--state-traj', '$STATE_TRAJ',
-    '--grf-traj', '$GRF_TRAJ',
-    '--joint-vel-traj', '$JOINT_VEL_TRAJ',
-    '--output-video', '$OUTPUT_DIR/rl_tracking.mp4',
-]
-if os.path.exists('$CONTACT_SEQ'):
-    args += ['--contact-sequence', '$CONTACT_SEQ']
-sys.argv = args
-from rl_isaac.evaluate import main
-main()
-" 2>&1 | tee -a "$LOG_FILE"
+$ISAAC_PYTHON -m rl_isaac.evaluate \
+    --model-path "$MODEL_PATH" \
+    --state-traj "$STATE_TRAJ" \
+    --grf-traj "$GRF_TRAJ" \
+    --joint-vel-traj "$JOINT_VEL_TRAJ" \
+    --output-video "$OUTPUT_DIR/rl_tracking.mp4" \
+    --headless --enable_cameras \
+    $EVAL_CONTACT_FLAG 2>&1 | tee -a "$LOG_FILE"
 
 # ── Step 3: Generate comparison frames ──
 echo "[3/3] Generating comparison frames..."
 if [ -f "$PLANNED_VIDEO" ]; then
-    $ISAAC_PYTHON -c "
-import sys; sys.modules['glfw'] = type(sys)('glfw'); sys.modules['glfw.library'] = type(sys)('glfw.library')
-sys.argv = ['generate_frames', '--planned', '$PLANNED_VIDEO', '--rl', '$OUTPUT_DIR/rl_tracking.mp4', '--output-dir', '$OUTPUT_DIR/comparison', '--num-frames', '20']
-from rl_isaac.generate_frames import main; main()
-" 2>/dev/null || echo "Frame generation failed (cv2 missing?)"
+    $ISAAC_PYTHON -m rl_isaac.generate_frames \
+        --planned "$PLANNED_VIDEO" \
+        --rl "$OUTPUT_DIR/rl_tracking.mp4" \
+        --output-dir "$OUTPUT_DIR/comparison" \
+        --num-frames 20 \
+        2>/dev/null || echo "Frame generation failed (cv2 missing?)"
 else
     echo "  Skipped: no planned video at $PLANNED_VIDEO"
 fi
