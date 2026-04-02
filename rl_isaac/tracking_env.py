@@ -197,6 +197,16 @@ class Go2TrackingEnv(DirectRLEnv):
         n = len(env_ids)
         self._joint_offset[env_ids] = torch.randn(n, 12, device=self.device) * 0.02
         self._torque_scale[env_ids] = (1.0 + torch.randn(n, device=self.device) * 0.1).clamp(0.5, 1.5)
+        # Friction & restitution DR (OPT-Mimic paper Table I)
+        mat = self._robot.root_physx_view.get_material_properties()
+        env_ids_cpu = env_ids.cpu() if env_ids.device.type != "cpu" else env_ids
+        n_shapes = mat.shape[1]
+        friction = (torch.randn(n) * 0.25 + 0.8).clamp(0.1, 1.0)
+        restitution = (torch.randn(n) * 0.25).clamp(0.0, 1.0)
+        mat[env_ids_cpu, :, 0] = friction.unsqueeze(-1).expand(-1, n_shapes)
+        mat[env_ids_cpu, :, 1] = friction.unsqueeze(-1).expand(-1, n_shapes)
+        mat[env_ids_cpu, :, 2] = restitution.unsqueeze(-1).expand(-1, n_shapes)
+        self._robot.root_physx_view.set_material_properties(mat, env_ids_cpu)
         start = torch.randint(0, self._max_phase, (n,), device=self.device, dtype=torch.int32)
         self._phase[env_ids] = start
         ph = start.clamp(0, self._max_phase - 1).long()
