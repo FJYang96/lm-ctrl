@@ -6,14 +6,13 @@ This script validates generated reference trajectories before they are used by
 physics-oriented feasibility checks, and optionally saves debug plots.
 
 Example:
-    python rl_isaac/validate_reference.py \
+    python validate_reference.py \
         --traj-dir llm_integration/backflip --iter 20 --plot-dir results/validation
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +29,10 @@ from utils.conversion import (
     MPC_X_BASE_VEL,
     MPC_X_Q_JOINTS,
 )
+
+# Edit these defaults for your trajectory.
+DEFAULT_TRAJ_DIR = "results/backflip"
+DEFAULT_ITER = 20
 
 FOOT_NAMES = ["FL", "FR", "RL", "RR"]
 JOINT_NAMES = [
@@ -78,13 +81,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--traj-dir",
         type=str,
-        default="llm_integration/backflip",
+        default=DEFAULT_TRAJ_DIR,
         help="Directory containing *_traj_iter_*.npy files",
     )
     parser.add_argument(
         "--iter",
         type=int,
-        default=20,
+        default=DEFAULT_ITER,
         help="Iteration number used in filename suffixes",
     )
     parser.add_argument(
@@ -315,9 +318,27 @@ def _compute_contact_expected(
     contact_sequence: np.ndarray | None,
     N: int,
 ) -> tuple[np.ndarray, str]:
+    def _normalize_contact_shape(contact: np.ndarray, num_steps: int) -> np.ndarray:
+        """Return contact in step-major shape (N, 4)."""
+        if contact.ndim != 2:
+            raise ValueError(f"contact sequence must be 2D, got shape {contact.shape}")
+
+        # Common storage format in this repo is (4, N): foot-major.
+        if contact.shape[0] == 4 and contact.shape[1] >= num_steps:
+            return contact[:, :num_steps].T > 0.5
+
+        # Accept step-major as a fallback for external files.
+        if contact.shape[1] == 4 and contact.shape[0] >= num_steps:
+            return contact[:num_steps, :] > 0.5
+
+        raise ValueError(
+            "unsupported contact shape: "
+            f"got {contact.shape}, expected (4, N) or (N, 4) with N>={num_steps}"
+        )
+
     if contact_sequence is not None:
-        return (contact_sequence[:, :N] > 0.5), "from_contact_file"
-    return (reference.contact_sequence[:, :N] > 0.5), "derived_from_grf"
+        return _normalize_contact_shape(contact_sequence, N), "from_contact_file"
+    return _normalize_contact_shape(reference.contact_sequence, N), "derived_from_grf"
 
 
 def _check_contact_and_grf(
@@ -448,8 +469,8 @@ def _check_kinematics_continuity(
     if N > 2:
         base_jerk = np.diff(base_acc, axis=0) / dt
         joint_jerk = np.diff(joint_acc, axis=0) / dt
-        base_jerk_norm[2:] = np.linalg.norm(base_jerk, axis=1)
-        joint_jerk_norm[2:] = np.linalg.norm(joint_jerk, axis=1)
+        base_jerk_norm[1:] = np.linalg.norm(base_jerk, axis=1)
+        joint_jerk_norm[1:] = np.linalg.norm(joint_jerk, axis=1)
 
     details.append(
         f"base jerk norm p95/max: {np.percentile(base_jerk_norm, 95):.2f}/{base_jerk_norm.max():.2f}"
