@@ -19,7 +19,7 @@ from .constraints import (
     input_limits_constraints,
     joint_limits_constraints,
     link_clearance_constraints,
-    no_slip,
+    no_slip_constraints,
     torque_feasibility_constraints,
 )
 from .dynamics.model import KinoDynamic_Model
@@ -38,7 +38,7 @@ class ComplementarityMPCConfig(MPCConfig):
         default_factory=lambda: [
             friction_cone_constraints,
             foot_height_constraints,
-            no_slip,
+            no_slip_constraints,
             joint_limits_constraints,
             input_limits_constraints,
             body_clearance_constraints,

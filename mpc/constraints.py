@@ -102,7 +102,7 @@ def foot_height_constraints(
     return foot_heights, foot_height_min, foot_height_max
 
 
-def no_slip(
+def no_slip_constraints(
     x_k: cs.MX,
     u_k: cs.MX,
     kindyn_model: KinoDynamic_Model,

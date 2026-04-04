@@ -144,7 +144,7 @@ Optional: mpc.set_slack_weights({{"your_constraint_func_name": weight, ...}})
   Default weight for your constraints: 1e3. Never go below 1e3 — smaller values
   mean the solver barely enforces your constraints. Physics constraints are always hard
   — you cannot soften them. Hard constraint names: friction_cone_constraints,
-  foot_height_constraints, no_slip, joint_limits_constraints,
+  foot_height_constraints, no_slip_constraints, joint_limits_constraints,
   input_limits_constraints, body_clearance_constraints, link_clearance_constraints,
   torque_feasibility_constraints, angular_momentum_flight_constraint.
   IMPORTANT: Do NOT name your constraint functions with any of these names, or they

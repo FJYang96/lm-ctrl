@@ -18,7 +18,7 @@ from .dynamics.model import KinoDynamic_Model
 PHYSICS_CONSTRAINT_NAMES: set[str] = {
     "friction_cone_constraints",
     "foot_height_constraints",
-    "no_slip",
+    "no_slip_constraints",
     "joint_limits_constraints",
     "input_limits_constraints",
     "body_clearance_constraints",

@@ -48,7 +48,7 @@ else:
         path_constraints=[
             constr.friction_cone_constraints,
             constr.foot_height_constraints,
-            constr.no_slip,
+            constr.no_slip_constraints,
             constr.joint_limits_constraints,
             constr.input_limits_constraints,
             constr.body_clearance_constraints,
