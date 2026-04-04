@@ -52,20 +52,20 @@ def get_system_prompt() -> str:
 == 1. ROBOT (Unitree Go2) ==
 
 Mass: {mass:.2f} kg | Initial COM height: {initial_height:.4f}m
-Body trunk: ~{bhe[0]*2*100:.1f}cm long x {bhe[1]*2*100:.1f}cm wide x {bhe[2]*2*100:.1f}cm tall (model half-extents: {bhe[0]}/{bhe[1]}/{bhe[2]}m)
-Leg length: ~{ll['total']*100:.0f}cm fully extended ({ll['thigh']*100:.1f}cm thigh + {ll['calf']*100:.1f}cm calf)
-Hip spacing: Front/rear ~{hs['front_rear_from_com']*100:.0f}cm from COM, Left/right ~{hs['left_right_from_com']*100:.0f}cm from COM
-Joint limits (from URDF, per joint in rad): lower={details['joint_limits_lower'][:3]}, upper={details['joint_limits_upper'][:3]} (FL; pattern repeats per leg with RL/RR thigh having different range)
+Body trunk: ~{bhe[0] * 2 * 100:.1f}cm long x {bhe[1] * 2 * 100:.1f}cm wide x {bhe[2] * 2 * 100:.1f}cm tall (model half-extents: {bhe[0]}/{bhe[1]}/{bhe[2]}m)
+Leg length: ~{ll["total"] * 100:.0f}cm fully extended ({ll["thigh"] * 100:.1f}cm thigh + {ll["calf"] * 100:.1f}cm calf)
+Hip spacing: Front/rear ~{hs["front_rear_from_com"] * 100:.0f}cm from COM, Left/right ~{hs["left_right_from_com"] * 100:.0f}cm from COM
+Joint limits (from URDF, per joint in rad): lower={details["joint_limits_lower"][:3]}, upper={details["joint_limits_upper"][:3]} (FL; pattern repeats per leg with RL/RR thigh having different range)
 Per-component GRF limit: {grf_limit:.0f} N (fx,fy,fz each per foot) | Joint velocity limit: {jvel_limit:.1f} rad/s
 Ground friction coefficient: {mu}
 
 Physical capability limits (do NOT exceed):
-- Max COM height gain: ~{cl['min_height_gain_normal']}-{cl['max_height_gain_normal']}m (normal jump), ~{cl['max_height_gain_aggressive']}m (aggressive)
-- Max takeoff vz: ~{cl['min_takeoff_vz']}-{cl['max_takeoff_vz']} m/s | Max flight duration: ~{cl['min_flight_duration']}-{cl['max_flight_duration']}s
-- Max peak GRF: ~{cl['min_peak_grf_bodyweight_multiple']:.0f}-{cl['max_peak_grf_bodyweight_multiple']:.0f}x body weight (~{cl['min_peak_grf_total']:.0f}-{cl['max_peak_grf_total']:.0f} N total across 4 feet)
-- Max COM acceleration: ~{cl['min_com_accel_typical_g']:.0f}-{cl['max_com_accel_typical_g']:.0f}g typical, up to ~{cl['max_com_accel_feasible_g']:.0f}g solver-feasible
-- Peak angular velocity: {cl['min_peak_angular_velocity']:.0f}-{cl['peak_angular_velocity']:.0f} rad/s
-- vz_takeoff = g * flight_duration / 2, but flight_duration MUST be <= {cl['max_flight_duration']}s
+- Max COM height gain: ~{cl["min_height_gain_normal"]}-{cl["max_height_gain_normal"]}m (normal jump), ~{cl["max_height_gain_aggressive"]}m (aggressive)
+- Max takeoff vz: ~{cl["min_takeoff_vz"]}-{cl["max_takeoff_vz"]} m/s | Max flight duration: ~{cl["min_flight_duration"]}-{cl["max_flight_duration"]}s
+- Max peak GRF: ~{cl["min_peak_grf_bodyweight_multiple"]:.0f}-{cl["max_peak_grf_bodyweight_multiple"]:.0f}x body weight (~{cl["min_peak_grf_total"]:.0f}-{cl["max_peak_grf_total"]:.0f} N total across 4 feet)
+- Max COM acceleration: ~{cl["min_com_accel_typical_g"]:.0f}-{cl["max_com_accel_typical_g"]:.0f}g typical, up to ~{cl["max_com_accel_feasible_g"]:.0f}g solver-feasible
+- Peak angular velocity: {cl["min_peak_angular_velocity"]:.0f}-{cl["peak_angular_velocity"]:.0f} rad/s
+- vz_takeoff = g * flight_duration / 2, but flight_duration MUST be <= {cl["max_flight_duration"]}s
 
 Key physics:
 - The MPC uses FULL-BODY DYNAMICS (not simplified centroidal). Forces couple through
@@ -115,6 +115,10 @@ Input vector (u_k) index constants:
   IDX_GRF_Z       = [14, 17, 20, 23]  # u_k: GRF z-component per foot
 
 == 3. MPC API ==
+
+You are tasked to write a script that configures the MPC for the given task:
+  Assume that you are given a global variable called `mpc`.
+  Remember that this is a script, so if you define a function as an entrypoint, you need to invoke it yourself at the end of the script.
 
 Include these calls (items 4-6 are REQUIRED — solver FAILS without them):
   1. mpc.set_task_name("...")              # descriptive name (defaults to "unknown")

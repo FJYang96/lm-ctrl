@@ -11,13 +11,13 @@ Usage:
     python llm_main.py "perform a front flip"
 
 The system will:
-1. Generate optimization constraints using an LLM (Claude)
+1. Generate optimization constraints using an LLM (Anthropic or Gemini; see LLM_PROVIDER in .env)
 2. Solve trajectory optimization with those constraints
 3. Simulate the resulting trajectory
 4. Collect feedback and iterate to improve results
 
 Requirements:
-- Set ANTHROPIC_API_KEY in .env file
+- Set ANTHROPIC_API_KEY or GEMINI_API_KEY in .env (per LLM_PROVIDER)
 - Ensure all dependencies are installed
 """
 
@@ -163,16 +163,24 @@ def check_api_key() -> bool:
 
         load_dotenv()
 
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key or api_key == "your_api_key_here":
-            print("Error: ANTHROPIC_API_KEY not configured")
-            print()
-            print("Please set your Anthropic API key in the .env file:")
-            print("1. Edit the .env file in this directory")
-            print("2. Replace 'your_api_key_here' with your actual API key")
-            print()
-            print("Get an API key from: https://console.anthropic.com/")
-            return False
+        provider = (os.getenv("LLM_PROVIDER") or "anthropic").strip().lower()
+        if provider == "gemini":
+            key = os.getenv("GEMINI_API_KEY")
+            if not key or key == "your_api_key_here":
+                print("Error: GEMINI_API_KEY not configured (LLM_PROVIDER=gemini)")
+                print("Set GEMINI_API_KEY in .env — https://aistudio.google.com/apikey")
+                return False
+        else:
+            key = os.getenv("ANTHROPIC_API_KEY")
+            if not key or key == "your_api_key_here":
+                print("Error: ANTHROPIC_API_KEY not configured")
+                print()
+                print("Please set your Anthropic API key in the .env file:")
+                print("1. Edit the .env file in this directory")
+                print("2. Replace 'your_api_key_here' with your actual API key")
+                print()
+                print("Get an API key from: https://console.anthropic.com/")
+                return False
 
         return True
 

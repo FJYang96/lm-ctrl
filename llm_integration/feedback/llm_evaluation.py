@@ -1,59 +1,23 @@
-"""LLM clients and shared helpers for evaluation calls.
+"""Shared helpers for LLM evaluation prompts and responses.
 
-Provides:
-- call_llm(): Claude-based text evaluation for scoring/summary
-- format_violations(), format_error_info(): Shared formatting helpers
-- extract_json_from_response(): JSON extraction from LLM responses
+call_llm() is implemented in llm_client (Anthropic or Gemini via LLM_PROVIDER).
 """
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import Any
 
-import anthropic
-from dotenv import load_dotenv
+from .llm_client import call_llm
 
-from pathlib import Path
-
-# ---------------------------------------------------------------------------
-# Claude client (scoring, summary, codegen)
-# ---------------------------------------------------------------------------
-
-_claude_client: anthropic.Anthropic | None = None
-_claude_model: str = ""
-
-
-def _get_claude_client() -> anthropic.Anthropic:
-    """Get or create the global Anthropic client."""
-    global _claude_client, _claude_model
-    if _claude_client is None:
-        load_dotenv()
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        _claude_model = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-6")
-        if not api_key or api_key == "your_api_key_here":
-            raise ValueError("ANTHROPIC_API_KEY not found in environment variables.")
-        _claude_client = anthropic.Anthropic(api_key=api_key)
-    return _claude_client
-
-
-def call_llm(system_prompt: str, user_message: str) -> str:
-    """Make a text-only Claude call."""
-    client = _get_claude_client()
-
-    collected: list[str] = []
-    with client.messages.stream(
-        model=_claude_model,
-        max_tokens=40000,
-        temperature=0.0,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
-    ) as stream:
-        for text in stream.text_stream:
-            collected.append(text)
-
-    return "".join(collected)
-
+__all__ = [
+    "call_llm",
+    "DATA_DESCRIPTION",
+    "extract_json_from_response",
+    "format_error_info",
+    "format_violations",
+    "save_prompt",
+]
 
 # ---------------------------------------------------------------------------
 # Shared helpers

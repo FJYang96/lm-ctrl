@@ -67,13 +67,13 @@ docker run --rm \
 
         # Install LLM dependencies
         echo '📦 Installing LLM dependencies...'
-        pip install anthropic python-dotenv
+        pip install anthropic httpx python-dotenv
 
         # Check environment
         echo '🔍 Checking environment...'
         python -c 'import casadi; print(f\"CasADi: {casadi.__version__}\")'
         python -c 'import anthropic; print(\"Anthropic: Available\")'
-        echo \"Google GenAI: Not required (motion quality computed from trajectory data)\"
+        python -c 'import httpx; print(\"httpx: Available\")'
         python -c 'from mpc.dynamics.model import ACADOS_AVAILABLE; print(f\"Acados: {ACADOS_AVAILABLE}\")'
 
         # Run LLM pipeline

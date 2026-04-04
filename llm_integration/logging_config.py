@@ -8,6 +8,7 @@ All modules should import logger from here:
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 # Determine log directory
@@ -31,3 +32,14 @@ if not logger.handlers:
     )
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
+
+if not any(
+    isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stderr
+    for h in logger.handlers
+):
+    err = logging.StreamHandler(sys.stderr)
+    err.setLevel(logging.INFO)
+    err.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+    )
+    logger.addHandler(err)

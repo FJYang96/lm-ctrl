@@ -10,6 +10,18 @@ if TYPE_CHECKING:
     from .feedback_pipeline import FeedbackPipeline
 
 
+def _log_attempt_failure(
+    attempt: int, max_attempts: int, stage: str, message: str
+) -> None:
+    logger.error(
+        "Constraint gen attempt %d/%d failed [%s]:\n%s",
+        attempt,
+        max_attempts,
+        stage,
+        message,
+    )
+
+
 def generate_constraints_with_retry(
     self: "FeedbackPipeline",
     system_prompt: str,
@@ -72,15 +84,17 @@ def generate_constraints_with_retry(
             mpc_config_code = extract_raw_code(response)
 
             if not mpc_config_code.strip():
+                msg = "No code extracted from LLM response - check response format"
                 attempts.append(
                     {
                         "attempt": attempt,
                         "code": mpc_config_code,
-                        "error": "No code extracted from LLM response - check response format",
+                        "error": msg,
                         "success": False,
                         "failure_stage": "no_code_extracted",
                     }
                 )
+                _log_attempt_failure(attempt, max_attempts, "no_code_extracted", msg)
                 continue
 
             # Create fresh LLM MPC instance for this attempt
@@ -96,7 +110,6 @@ def generate_constraints_with_retry(
             )
 
             if not success:
-                # Log detailed failure reason
                 attempts.append(
                     {
                         "attempt": attempt,
@@ -105,6 +118,9 @@ def generate_constraints_with_retry(
                         "success": False,
                         "failure_stage": "mpc_configuration",
                     }
+                )
+                _log_attempt_failure(
+                    attempt, max_attempts, "mpc_configuration", error_msg
                 )
                 continue
 
@@ -155,7 +171,9 @@ def generate_constraints_with_retry(
                     "failure_stage": "unexpected_exception",
                 }
             )
-            logger.error(f"Attempt {attempt} failed: {str(e)[:100]}")
+            _log_attempt_failure(
+                attempt, max_attempts, "unexpected_exception", error_details
+            )
             continue
 
     # All attempts failed

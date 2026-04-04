@@ -90,12 +90,18 @@ def check_api_key() -> tuple[bool, str]:
 
         load_dotenv(Path(__file__).parent.parent / ".env")
 
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key or api_key == "your_api_key_here":
-            return (
-                False,
-                "ANTHROPIC_API_KEY not configured. Please set it in the .env file.",
-            )
+        provider = (os.getenv("LLM_PROVIDER") or "anthropic").strip().lower()
+        if provider == "gemini":
+            key = os.getenv("GEMINI_API_KEY")
+            if not key or key == "your_api_key_here":
+                return False, "GEMINI_API_KEY not configured (LLM_PROVIDER=gemini)."
+        else:
+            key = os.getenv("ANTHROPIC_API_KEY")
+            if not key or key == "your_api_key_here":
+                return (
+                    False,
+                    "ANTHROPIC_API_KEY not configured. Please set it in the .env file.",
+                )
         return True, "API key configured"
     except ImportError:
         return False, "python-dotenv not installed. Run: pip install python-dotenv"

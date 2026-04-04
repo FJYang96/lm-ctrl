@@ -228,6 +228,7 @@ def create_restricted_globals(
             "tuple": tuple,
             "dict": dict,
             "bool": bool,
+            "slice": slice,
             "sum": sum,
             "hasattr": _safe_hasattr,
             "getattr": _safe_getattr,
