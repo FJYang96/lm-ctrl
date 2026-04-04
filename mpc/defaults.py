@@ -24,7 +24,6 @@ if go2_config.CONSTRAINT_MODE == "complementarity":
         ref_state=None,
         ref_input=None,
         path_constraint_params={
-            "COMPLEMENTARITY_EPS": 1e-3,
             "SWING_GRF_EPS": 0.0,
             "STANCE_HEIGHT_EPS": 0.04,
             "NO_SLIP_EPS": 0.01,
@@ -49,7 +48,7 @@ else:
         path_constraints=[
             constr.friction_cone_constraints,
             constr.foot_height_constraints,
-            constr.foot_velocity_constraints,
+            constr.no_slip,
             constr.joint_limits_constraints,
             constr.input_limits_constraints,
             constr.body_clearance_constraints,

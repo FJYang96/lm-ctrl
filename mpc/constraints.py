@@ -102,7 +102,7 @@ def foot_height_constraints(
     return foot_heights, foot_height_min, foot_height_max
 
 
-def foot_velocity_constraints(
+def no_slip(
     x_k: cs.MX,
     u_k: cs.MX,
     kindyn_model: KinoDynamic_Model,
@@ -113,54 +113,32 @@ def foot_velocity_constraints(
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     com_position = x_k[0:3]
     com_velocity = x_k[3:6]
-    roll = x_k[6]
-    pitch = x_k[7]
-    yaw = x_k[8]
+    roll, pitch, yaw = x_k[6], x_k[7], x_k[8]
     com_angular_velocity = x_k[9:12]
     joint_positions = x_k[12:24]
-
-    qvel_joints_FL = u_k[0:3]
-    qvel_joints_FR = u_k[3:6]
-    qvel_joints_RL = u_k[6:9]
-    qvel_joints_RR = u_k[9:12]
-
-    # Create homogeneous transformation matrix
+    qvel = cs.vertcat(
+        com_velocity,
+        com_angular_velocity,
+        u_k[0:3],
+        u_k[3:6],
+        u_k[6:9],
+        u_k[9:12],
+    )
     w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
     H = cs.MX.eye(4)
     H[0:3, 0:3] = w_R_b
     H[0:3, 3] = com_position
-
-    qvel = cs.vertcat(
-        com_velocity,
-        com_angular_velocity,
-        qvel_joints_FL,
-        qvel_joints_FR,
-        qvel_joints_RL,
-        qvel_joints_RR,
-    )
-
-    foot_vel_FL = kindyn_model.jacobian_FL_fun(H, joint_positions)[0:3, :] @ qvel
-    foot_vel_FR = kindyn_model.jacobian_FR_fun(H, joint_positions)[0:3, :] @ qvel
-    foot_vel_RL = kindyn_model.jacobian_RL_fun(H, joint_positions)[0:3, :] @ qvel
-    foot_vel_RR = kindyn_model.jacobian_RR_fun(H, joint_positions)[0:3, :] @ qvel
-
-    # Stack only x and y foot velocities (exclude z-direction)
-    # The z-direction no-slip constraint is redundant because foot-height constraints already enforce it
-    foot_velocities = cs.vertcat(
-        foot_vel_FL[0:2], foot_vel_FR[0:2], foot_vel_RL[0:2], foot_vel_RR[0:2]
-    )  # Dimension: 4 x 2 = 8 (only x and y components)
-    foot_velocity_min = cs.kron(
-        -go2_config.mpc_config.path_constraint_params["NO_SLIP_EPS"] * contact_k
-        - INF * (1 - contact_k),
-        cs.DM.ones(2, 1),  # Repeat each foot's bound for its x, y components
-    )
-    foot_velocity_max = cs.kron(
-        go2_config.mpc_config.path_constraint_params["NO_SLIP_EPS"] * contact_k
-        + INF * (1 - contact_k),
-        cs.DM.ones(2, 1),  # Repeat each foot's bound for its x, y components
-    )
-
-    return foot_velocities, foot_velocity_min, foot_velocity_max
+    v = [
+        kindyn_model.jacobian_FL_fun(H, joint_positions)[0:3, :] @ qvel,
+        kindyn_model.jacobian_FR_fun(H, joint_positions)[0:3, :] @ qvel,
+        kindyn_model.jacobian_RL_fun(H, joint_positions)[0:3, :] @ qvel,
+        kindyn_model.jacobian_RR_fun(H, joint_positions)[0:3, :] @ qvel,
+    ]
+    e = float(go2_config.mpc_config.path_constraint_params["NO_SLIP_EPS"])
+    # sumsqr(v) <= e^2  <=>  ||v|| <= e; avoids NaNs from d(||v||)/dv at v=0
+    v_sq = cs.vertcat(*[cs.sumsqr(v[i]) for i in range(4)])
+    ub = e * e * contact_k + INF * (1 - contact_k)
+    return v_sq, np.zeros(4), ub
 
 
 def joint_limits_constraints(
@@ -190,18 +168,21 @@ def input_limits_constraints(
     k: int = 0,
     horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
-    lb = np.concatenate(
-        (
-            np.ones(12) * -go2_config.robot_data.joint_velocity_limits,
-            np.ones(12) * -go2_config.robot_data.grf_limits,
-        )
+    jlim = np.asarray(go2_config.robot_data.joint_velocity_limits, dtype=float).ravel()
+    if jlim.size == 1:
+        jlim = np.full(12, float(jlim[0]))
+    grf_lim = float(np.asarray(go2_config.robot_data.grf_limits).ravel()[0])
+    sg_eps = float(
+        go2_config.mpc_config.path_constraint_params.get("SWING_GRF_EPS", 0.0)
     )
-    ub = np.concatenate(
-        (
-            np.ones(12) * go2_config.robot_data.joint_velocity_limits,
-            np.ones(12) * go2_config.robot_data.grf_limits,
-        )
-    )
+    lb_f, ub_f = [], []
+    for i in range(4):
+        c = contact_k[i]
+        lo, hi = -grf_lim * c - sg_eps * (1 - c), grf_lim * c + sg_eps * (1 - c)
+        lb_f.extend([lo, lo, lo])
+        ub_f.extend([hi, hi, hi])
+    lb = cs.vertcat(cs.DM(-jlim), cs.vertcat(*lb_f))
+    ub = cs.vertcat(cs.DM(jlim), cs.vertcat(*ub_f))
     return u_k, lb, ub
 
 
@@ -272,8 +253,14 @@ def link_clearance_constraints(
     H[0:3, 0:3] = w_R_b
     H[0:3, 3] = com_position
 
-    link_names = ["FL_calf", "FR_calf", "RL_calf", "RR_calf",
-                  "Head_lower", "Head_upper"]
+    link_names = [
+        "FL_calf",
+        "FR_calf",
+        "RL_calf",
+        "RR_calf",
+        "Head_lower",
+        "Head_upper",
+    ]
     heights = []
     for link in link_names:
         fk_fun = getattr(kindyn_model, f"forward_kinematics_{link}_fun")
@@ -328,8 +315,10 @@ def torque_feasibility_constraints(
 
     # J^T·F summed across all feet
     jacobian_funs = [
-        kindyn_model.jacobian_FL_fun, kindyn_model.jacobian_FR_fun,
-        kindyn_model.jacobian_RL_fun, kindyn_model.jacobian_RR_fun,
+        kindyn_model.jacobian_FL_fun,
+        kindyn_model.jacobian_FR_fun,
+        kindyn_model.jacobian_RL_fun,
+        kindyn_model.jacobian_RR_fun,
     ]
     JtF = cs.MX.zeros(18)
     for leg_idx in range(4):
@@ -413,98 +402,3 @@ def angular_momentum_flight_constraint(
     delta_L = (L_k - L_prev) * is_flight
     tol = 0.5 * np.ones(3)  # small tolerance for integration discretization
     return delta_L, -tol, tol
-
-
-def complementarity_constraints(
-    x_k: cs.MX,
-    u_k: cs.MX,
-    kindyn_model: KinoDynamic_Model,
-    config: Any,
-    contact_k: cs.MX,
-    k: int = 0,
-    horizon: int = 1,
-) -> tuple[cs.MX, cs.MX, cs.MX]:
-    """
-    Implement relaxed complementarity constraints: f_normal * v_normal <= epsilon
-
-    This constraint ensures that contact forces and velocities don't both be
-    significantly non-zero, which would violate physical contact mechanics.
-
-    For each foot:
-    - f_z: normal force (from u_k[12:24])
-    - v_z: normal velocity (from foot Jacobian * qvel)
-    - Constraint: f_z * v_z <= epsilon
-
-    The constraint is only active during stance phase (contact_k = 1).
-    """
-    # Extract state components
-    com_position = x_k[0:3]
-    com_velocity = x_k[3:6]
-    roll = x_k[6]
-    pitch = x_k[7]
-    yaw = x_k[8]
-    com_angular_velocity = x_k[9:12]
-    joint_positions = x_k[12:24]
-
-    # Extract joint velocities and forces
-    qvel_joints_FL = u_k[0:3]
-    qvel_joints_FR = u_k[3:6]
-    qvel_joints_RL = u_k[6:9]
-    qvel_joints_RR = u_k[9:12]
-    forces = u_k[12:24]  # [FL_xyz, FR_xyz, RL_xyz, RR_xyz]
-
-    # Create homogeneous transformation matrix
-    w_R_b = SO3.from_euler(cs.vertcat(roll, pitch, yaw)).as_matrix()
-    H = cs.MX.eye(4)
-    H[0:3, 0:3] = w_R_b
-    H[0:3, 3] = com_position
-
-    # Full velocity vector for Jacobian multiplication
-    qvel = cs.vertcat(
-        com_velocity,
-        com_angular_velocity,
-        qvel_joints_FL,
-        qvel_joints_FR,
-        qvel_joints_RL,
-        qvel_joints_RR,
-    )
-
-    # Compute foot velocities using Jacobians
-    foot_vel_FL = kindyn_model.jacobian_FL_fun(H, joint_positions)[0:3, :] @ qvel
-    foot_vel_FR = kindyn_model.jacobian_FR_fun(H, joint_positions)[0:3, :] @ qvel
-    foot_vel_RL = kindyn_model.jacobian_RL_fun(H, joint_positions)[0:3, :] @ qvel
-    foot_vel_RR = kindyn_model.jacobian_RR_fun(H, joint_positions)[0:3, :] @ qvel
-
-    # Extract normal (z) components
-    f_z = cs.vertcat(forces[2], forces[5], forces[8], forces[11])  # Normal forces
-    v_z = cs.vertcat(
-        foot_vel_FL[2], foot_vel_FR[2], foot_vel_RL[2], foot_vel_RR[2]
-    )  # Normal velocities
-
-    # Complementarity products: f_z * v_z
-    # We want these to be small (close to zero) during contact
-    comp_products = f_z * v_z
-
-    # The constraint is: comp_products <= epsilon (only during stance)
-    # During swing, we don't enforce this constraint
-    epsilon = go2_config.mpc_config.path_constraint_params.get(
-        "COMPLEMENTARITY_EPS", 1e-3
-    )
-
-    # Apply constraint only during stance
-    # During swing (contact_k = 0), we relax the constraint to a large value
-    expr_list = []
-    min_list = []
-    max_list = []
-
-    for foot_idx in range(4):
-        comp_prod = comp_products[foot_idx]
-        contact_flag = contact_k[foot_idx]
-
-        # Constraint: f_z * v_z <= epsilon during stance
-        # During swing, we allow up to a large value (effectively no constraint)
-        expr_list.append(comp_prod)
-        min_list.append(-1e6)  # No lower bound
-        max_list.append(epsilon * contact_flag + 1e6 * (1 - contact_flag))
-
-    return cs.vertcat(*expr_list), cs.vertcat(*min_list), cs.vertcat(*max_list)

@@ -12,10 +12,10 @@ import go2_config
 from .constraints import (
     body_clearance_constraints,
     foot_height_constraints,
-    foot_velocity_constraints,
     friction_cone_constraints,
     input_limits_constraints,
     joint_limits_constraints,
+    no_slip,
     torque_feasibility_constraints,
 )
 from .dynamics.model import KinoDynamic_Model
@@ -67,7 +67,7 @@ class HoppingMPCConfig(MPCConfig):
         default_factory=lambda: [
             friction_cone_constraints,
             foot_height_constraints,
-            foot_velocity_constraints,
+            no_slip,
             joint_limits_constraints,
             input_limits_constraints,
             body_clearance_constraints,

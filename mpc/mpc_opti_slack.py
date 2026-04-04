@@ -18,11 +18,10 @@ from .dynamics.model import KinoDynamic_Model
 PHYSICS_CONSTRAINT_NAMES: set[str] = {
     "friction_cone_constraints",
     "foot_height_constraints",
-    "foot_velocity_constraints",
+    "no_slip",
     "joint_limits_constraints",
     "input_limits_constraints",
     "body_clearance_constraints",
-    "complementarity_constraints",
     "torque_feasibility_constraints",
     "link_clearance_constraints",
     "angular_momentum_flight_constraint",
