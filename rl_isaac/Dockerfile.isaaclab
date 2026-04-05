@@ -1,0 +1,16 @@
+FROM nvcr.io/nvidia/isaac-lab:2.2.0
+
+# Extra pip packages needed by lm-ctrl RL scripts
+# - rsl_rl: RL utilities (EmpiricalNormalization)
+# - opencv-python-headless: video frame extraction
+# - matplotlib: training plots
+# - casadi, liecasadi, adam-robotics: MPC dynamics & feedforward torques
+# - gym-quadruped: URDF paths for KinDynComputations
+RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install --no-cache-dir \
+    rsl-rl-lib==2.3.3 \
+    opencv-python-headless \
+    matplotlib \
+    casadi \
+    liecasadi \
+    adam-robotics \
+    git+https://github.com/FJYang96/gym-quadruped.git

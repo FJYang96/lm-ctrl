@@ -5,11 +5,23 @@
 #
 # Reads trajectory from rl_isaac/traj_config.sh (edit TRAJ_DIR and ITER_NUM there).
 #
-# Usage:
-#   docker run --gpus all -v $(pwd):/workspace/lm-ctrl --entrypoint bash \lm-ctrl-isaaclab:latest /workspace/lm-ctrl/rl_isaac/run_baseline.sh
+
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+IMAGE_NAME="lm-ctrl-isaaclab:latest"
+
+# If not inside the container, ensure image exists and re-launch inside Docker
+if [ ! -d "/workspace/isaaclab" ]; then
+    if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+        echo "Image $IMAGE_NAME not found — building..."
+        docker build -t "$IMAGE_NAME" -f rl_isaac/Dockerfile.isaaclab .
+    fi
+    echo "Launching inside Docker..."
+    exec docker run --gpus all -v "$(pwd)":/workspace/lm-ctrl --entrypoint bash \
+        "$IMAGE_NAME" /workspace/lm-ctrl/rl_isaac/run_baseline.sh "$@"
+fi
+
 source "$SCRIPT_DIR/traj_config.sh"
 
 # Clean previous baseline outputs

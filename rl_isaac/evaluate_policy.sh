@@ -11,9 +11,22 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+IMAGE_NAME="lm-ctrl-isaaclab:latest"
+
+# If not inside the container, ensure image exists and re-launch inside Docker
+if [ ! -d "/workspace/isaaclab" ]; then
+    if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+        echo "Image $IMAGE_NAME not found — building..."
+        docker build -t "$IMAGE_NAME" -f rl_isaac/Dockerfile.isaaclab .
+    fi
+    echo "Launching inside Docker..."
+    exec docker run --gpus all -v "$(pwd)":/workspace/lm-ctrl --entrypoint bash \
+        "$IMAGE_NAME" /workspace/lm-ctrl/rl_isaac/evaluate_policy.sh "$@"
+fi
+
 cd /workspace/lm-ctrl 2>/dev/null || true
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/traj_config.sh"
 
 rm -rf rl_isaac/policy_output/* 2>/dev/null

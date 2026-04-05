@@ -32,8 +32,24 @@ args_cli = parser.parse_args()
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
+# Ensure repo root is on sys.path (must be AFTER AppLauncher which resets sys.path)
+# AppLauncher may register a 'utils' namespace package that shadows ours,
+# so we force-load our utils package into sys.modules.
+import os, sys, types, importlib, importlib.util  # noqa: E401,E402
+_repo_root = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, _repo_root)
+for _mod_name, _mod_file in [
+    ("utils", "utils/__init__.py"),
+    ("utils.conversion", "utils/conversion.py"),
+]:
+    _spec = importlib.util.spec_from_file_location(
+        _mod_name, str(Path(_repo_root) / _mod_file)
+    )
+    _mod = importlib.util.module_from_spec(_spec)
+    sys.modules[_mod_name] = _mod
+    _spec.loader.exec_module(_mod)
+
 # GLFW/mujoco stubs — gym_quadruped (imported via feedforward→model) needs these in headless mode
-import os, sys, types  # noqa: E401,E402
 os.environ.setdefault("MUJOCO_GL", "egl")
 for mod_name, attrs in [("mujoco.viewer", {"Handle": type("Handle", (), {})}), ("glfw", {"_glfw": True})]:
     if mod_name not in sys.modules:
