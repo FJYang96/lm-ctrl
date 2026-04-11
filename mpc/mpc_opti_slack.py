@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 import casadi as cs
-import numpy as np
 
 import go2_config
 
@@ -118,7 +117,12 @@ class QuadrupedMPCOptiSlack:
             self.opti.subject_to(x_next == x_k + dt * dynamics_fn(x_k, u_k, param_k))
 
     def _add_constraint_with_slack(
-        self, name: str, k: int, expr: cs.MX, lb: cs.MX, ub: cs.MX,
+        self,
+        name: str,
+        k: int,
+        expr: cs.MX,
+        lb: cs.MX,
+        ub: cs.MX,
     ) -> None:
         if not self.use_slack or name in self.PHYSICS_CONSTRAINT_NAMES:
             self.opti.subject_to(expr >= lb)
@@ -138,7 +142,7 @@ class QuadrupedMPCOptiSlack:
 
     def _setup_path_constraints(self) -> None:
         dt = go2_config.mpc_config.mpc_dt
-        for k in range(1, self.horizon):
+        for k in range(0, self.horizon):
             contact_k = self.P_contact[:, k]
             # Joint acceleration for torque constraint (same as _setup_dynamics)
             q_ddot_j = (self.U[0:12, k] - self.U[0:12, k - 1]) / dt
@@ -146,20 +150,38 @@ class QuadrupedMPCOptiSlack:
                 name = constraint_fn.__name__
                 if name == "torque_feasibility_constraints":
                     expr, lb, ub = constraint_fn(
-                        self.X[:, k], self.U[:, k], self.kindyn_model,
-                        go2_config, contact_k, k, self.horizon,
+                        self.X[:, k],
+                        self.U[:, k],
+                        self.kindyn_model,
+                        go2_config,
+                        contact_k,
+                        k,
+                        self.horizon,
                         q_ddot_j=q_ddot_j,
                     )
                 elif name == "angular_momentum_flight_constraint":
                     expr, lb, ub = constraint_fn(
-                        self.X[:, k], self.U[:, k], self.kindyn_model,
-                        go2_config, contact_k, k, self.horizon,
-                        x_prev=self.X[:, k - 1], u_prev=self.U[:, k - 1],
+                        self.X[:, k],
+                        self.U[:, k],
+                        self.kindyn_model,
+                        go2_config,
+                        contact_k,
+                        k,
+                        self.horizon,
+                        x_prev=self.X[:, k - 1],
+                        u_prev=self.U[:, k - 1],
                     )
+                elif name == "foot_height_constraints" and k == 0:
+                    pass
                 else:
                     expr, lb, ub = constraint_fn(
-                        self.X[:, k], self.U[:, k], self.kindyn_model,
-                        go2_config, contact_k, k, self.horizon,
+                        self.X[:, k],
+                        self.U[:, k],
+                        self.kindyn_model,
+                        go2_config,
+                        contact_k,
+                        k,
+                        self.horizon,
                     )
                 self._add_constraint_with_slack(name, k, expr, lb, ub)
 
@@ -170,11 +192,20 @@ class QuadrupedMPCOptiSlack:
             if constraint_fn.__name__ not in STATE_ONLY_CONSTRAINT_NAMES:
                 continue
             expr, lb, ub = constraint_fn(
-                self.X[:, self.horizon], u_zero, self.kindyn_model,
-                go2_config, contact_terminal, self.horizon, self.horizon,
+                self.X[:, self.horizon],
+                u_zero,
+                self.kindyn_model,
+                go2_config,
+                contact_terminal,
+                self.horizon,
+                self.horizon,
             )
             self._add_constraint_with_slack(
-                constraint_fn.__name__, self.horizon, expr, lb, ub,
+                constraint_fn.__name__,
+                self.horizon,
+                expr,
+                lb,
+                ub,
             )
 
     def _setup_cost(self) -> None:
@@ -198,4 +229,3 @@ class QuadrupedMPCOptiSlack:
         if self.use_slack:
             cost += self.slack_penalty_cost
         self.opti.minimize(cost)
-

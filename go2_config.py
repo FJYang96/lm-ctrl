@@ -286,7 +286,7 @@ default_pre_flight_stance_duration: float = 0.3
 default_flight_duration: float = 0.4
 
 # Default MPC time steps per constraint mode
-default_mpc_dt_complementarity: float = 0.02
+default_mpc_dt_complementarity: float = 0.1
 default_mpc_dt_standard: float = 0.1
 
 # Select constraint mode: "standard" or "complementarity"
@@ -314,9 +314,11 @@ def __getattr__(name: str) -> Any:
 
 
 solver_config: dict[str, Any] = {
+    "expand": False,
     "ipopt.print_level": 5,
     "print_time": True,
-    "ipopt.max_iter": 10000,
+    "ipopt.max_iter": 3000,
+    "ipopt.linear_solver": "mumps",
     "ipopt.tol": 1e-4,
     "ipopt.acceptable_tol": 1e-3,
     "ipopt.mu_init": 1e-2,
