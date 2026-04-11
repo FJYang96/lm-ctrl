@@ -22,6 +22,8 @@ if [ ! -d "/workspace/isaaclab" ]; then
         "$IMAGE_NAME" /workspace/lm-ctrl/rl_isaac/run_baseline.sh "$@"
 fi
 
+cd /workspace/lm-ctrl
+
 source "$SCRIPT_DIR/traj_config.sh"
 
 # Clean previous baseline outputs
