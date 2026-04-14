@@ -144,11 +144,17 @@ class QuadrupedMPCOptiSlack:
         dt = go2_config.mpc_config.mpc_dt
         for k in range(0, self.horizon):
             contact_k = self.P_contact[:, k]
-            # Joint acceleration for torque constraint (same as _setup_dynamics)
-            q_ddot_j = (self.U[0:12, k] - self.U[0:12, k - 1]) / dt
             for constraint_fn in go2_config.mpc_config.path_constraints:
                 name = constraint_fn.__name__
+                if k == 0 and (
+                    name == "torque_feasibility_constraints"
+                    or name == "angular_momentum_flight_constraint"
+                    or name == "foot_height_constraints"
+                ):
+                    continue
                 if name == "torque_feasibility_constraints":
+                    # Joint acceleration for torque constraint (same as _setup_dynamics)
+                    q_ddot_j = (self.U[0:12, k] - self.U[0:12, k - 1]) / dt
                     expr, lb, ub = constraint_fn(
                         self.X[:, k],
                         self.U[:, k],
@@ -171,8 +177,6 @@ class QuadrupedMPCOptiSlack:
                         x_prev=self.X[:, k - 1],
                         u_prev=self.U[:, k - 1],
                     )
-                elif name == "foot_height_constraints" and k == 0:
-                    pass
                 else:
                     expr, lb, ub = constraint_fn(
                         self.X[:, k],
