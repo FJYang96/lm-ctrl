@@ -194,8 +194,9 @@ P2 — COMPATIBLE WITH INITIAL STATE: Robot starts at height={initial_height:.4f
   reachable from the initial state in one timestep. Bounds that jump far from the
   initial state at early timesteps cause solver failures.
 
-P3 — DON'T OVER-CONSTRAIN: Use one-sided bounds (lower, cs.inf) or (-cs.inf, upper)
-  when possible. Constrain RATES not positions for dynamic motions. Constraints define
+P3 — DON'T OVER-CONSTRAIN: Use one-sided bounds with large finite numbers (lower, 1e6)
+  or (-1e6, upper) when possible. NEVER use cs.inf or np.inf in bounds — use 1e6 / -1e6
+  instead, as infinite values cause numerical failures in the solver. Constrain RATES not positions for dynamic motions. Constraints define
   FEASIBLE REGIONS, not exact trajectories — the optimizer finds the optimal path.
   To FORCE motion, exclude the starting state (after t=0). DON'T add more constraints
   to fix failures — more constraints = smaller feasible region = harder problem.
