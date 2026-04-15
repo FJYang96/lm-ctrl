@@ -86,7 +86,7 @@ def _call_gemini(system_prompt: str, user_message: str) -> str:
     key = os.getenv("GEMINI_API_KEY")
     if not key or key == "your_api_key_here":
         raise ValueError("GEMINI_API_KEY not set")
-    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
     base = os.getenv("GEMINI_API_BASE", _DEFAULT_GEMINI_BASE).rstrip("/")
     url = f"{base}/{model}:generateContent"
     body = {
