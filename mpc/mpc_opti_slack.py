@@ -34,6 +34,9 @@ STATE_ONLY_CONSTRAINT_NAMES = {
 }
 
 
+INF = 1e6
+
+
 class QuadrupedMPCOptiSlack:
     """MPC with slack variables for constraint analysis.
 
@@ -131,35 +134,29 @@ class QuadrupedMPCOptiSlack:
 
         n = expr.shape[0] if hasattr(expr, "shape") and len(expr.shape) > 0 else 1
 
-        # Detect infinite bounds — slack on an infinite side produces Inf in g
-        # which causes IPOPT to abort with Invalid_Number_Detected.
-        def _is_neg_inf(v: cs.MX) -> bool:
+        # Build element-wise masks: 1 where bound is finite, 0 where it is +/-INF.
+        # Slack is only applied on finite entries to avoid Inf in NLP expressions.
+        def _finite_mask(v: cs.MX, is_lower: bool) -> cs.DM:
             try:
-                return float(v) <= -1e19
+                v_dm = cs.DM(v)
+                if is_lower:
+                    # Finite lower bounds satisfy lb > -INF.
+                    return cs.DM(v_dm > -INF)
+                # Finite upper bounds satisfy ub < INF.
+                return cs.DM(v_dm < INF)
             except (RuntimeError, TypeError, NotImplementedError):
-                return False
+                # If conversion fails (e.g. symbolic bound), treat as finite.
+                return cs.DM.ones(n, 1)
 
-        def _is_pos_inf(v: cs.MX) -> bool:
-            try:
-                return float(v) >= 1e19
-            except (RuntimeError, TypeError, NotImplementedError):
-                return False
-
-        lb_is_inf = _is_neg_inf(lb)
-        ub_is_inf = _is_pos_inf(ub)
+        finite_lb_mask = _finite_mask(lb, is_lower=True)
+        finite_ub_mask = _finite_mask(ub, is_lower=False)
 
         s_lower = self.opti.variable(n)
         s_upper = self.opti.variable(n)
         self.opti.subject_to(s_lower >= 0)
         self.opti.subject_to(s_upper >= 0)
-        if lb_is_inf:
-            self.opti.subject_to(expr >= lb)
-        else:
-            self.opti.subject_to(expr >= lb - s_lower)
-        if ub_is_inf:
-            self.opti.subject_to(expr <= ub)
-        else:
-            self.opti.subject_to(expr <= ub + s_upper)
+        self.opti.subject_to(expr >= lb - finite_lb_mask * s_lower)
+        self.opti.subject_to(expr <= ub + finite_ub_mask * s_upper)
         self.slack_variables[(name, k)] = (s_lower, s_upper, n)
         weight = self.slack_weights.get(name, 1e3)
         self.slack_penalty_cost += weight * (cs.sumsqr(s_lower) + cs.sumsqr(s_upper))
