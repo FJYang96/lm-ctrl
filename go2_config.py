@@ -286,7 +286,7 @@ default_pre_flight_stance_duration: float = 0.3
 default_flight_duration: float = 0.4
 
 # Default MPC time steps per constraint mode
-default_mpc_dt_complementarity: float = 0.1
+default_mpc_dt_complementarity: float = 0.02
 default_mpc_dt_standard: float = 0.1
 
 # Select constraint mode: "standard" or "complementarity"

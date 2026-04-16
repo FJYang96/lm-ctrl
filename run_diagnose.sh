@@ -12,8 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON="${PYTHON:-/home/aryanroy/miniconda3/bin/python3}"
 
 # ── Edit these defaults ──
-DEFAULT_TRAJ_DIR="results/llm_iterations/do_a_backflip_1775891288"
-DEFAULT_ITER=4
+DEFAULT_TRAJ_DIR="results/llm_iterations/do_a_backflip:_start_from_the_default_full_stance;_push_off_with_front_feet_first_to_almost_stand_up_and_then_take_off_from_back_legs_thrust;_land_first_on_the_front_feet_and_quickly_followed_by_rear_1776268270"
+DEFAULT_ITER=2
 
 TRAJ_DIR="${1:-$DEFAULT_TRAJ_DIR}"
 ITER="${2:-$DEFAULT_ITER}"
