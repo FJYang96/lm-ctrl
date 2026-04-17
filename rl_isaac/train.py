@@ -102,15 +102,15 @@ def train(args):
                 f"{ppo_cfg.num_learning_epochs} epochs, {ppo_cfg.num_mini_batches} minibatches")
 
     actor_critic = OPTMimicActorCritic(
-        num_obs=39, num_privileged_obs=0, num_actions=12,
+        num_obs=33, num_privileged_obs=0, num_actions=12,
         actor_hidden_dims=ppo_cfg.actor_hidden_dims, critic_hidden_dims=ppo_cfg.critic_hidden_dims,
     ).to(device)
-    obs_normalizer = EmpiricalNormalization(shape=[39], until=1e8).to(device)
+    obs_normalizer = EmpiricalNormalization(shape=[33], until=1e8).to(device)
     optimizer = torch.optim.Adam(actor_critic.parameters(), lr=ppo_cfg.learning_rate)
     lr_denom = ppo_cfg.num_learning_epochs * ppo_cfg.num_mini_batches
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda ep: 0.999 ** (ep / lr_denom))
 
-    obs_buf = torch.zeros(n_steps, num_envs, 39, device=device)
+    obs_buf = torch.zeros(n_steps, num_envs, 33, device=device)
     act_buf = torch.zeros(n_steps, num_envs, 12, device=device)
     rew_buf = torch.zeros(n_steps, num_envs, device=device)
     done_buf = torch.zeros(n_steps, num_envs, dtype=torch.bool, device=device)

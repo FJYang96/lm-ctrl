@@ -26,7 +26,7 @@ class Go2TrackingEnvCfg(DirectRLEnvCfg):
     decimation: int = 20  # 50Hz control / 1kHz physics = 20 substeps (matches N_SUBSTEPS)
     episode_length_s: float = 10.0  # overridden by trajectory length at runtime
     action_space: int = 12
-    observation_space: int = 39
+    observation_space: int = 33  # OPT-Mimic: quat(4)+joints(12)+ang_vel(3)+joint_vel(12)+phase(2)
     state_space: int = 0
 
     # --- Simulation ---

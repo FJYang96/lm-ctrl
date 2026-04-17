@@ -76,7 +76,7 @@ def load_checkpoint(model_path: str, device: str = "cpu"):
     if not ckpt_file.exists():
         ckpt_file = Path(model_path)
     ckpt = torch.load(ckpt_file, map_location=device, weights_only=False)
-    ac = OPTMimicActorCritic(num_obs=39, num_privileged_obs=0, num_actions=12)
+    ac = OPTMimicActorCritic(num_obs=33, num_privileged_obs=0, num_actions=12)
     ac.load_state_dict(ckpt["model_state_dict"])
     ac.eval()
     return ac, ckpt.get("normalizer_state_dict", None), ckpt.get("step", 0)
@@ -197,7 +197,7 @@ def main():
 
     # Load model or use baseline
     actor_critic = None
-    obs_normalizer = EmpiricalNormalization(shape=[39], until=1e8).to(device)
+    obs_normalizer = EmpiricalNormalization(shape=[33], until=1e8).to(device)
     obs_normalizer.eval()
 
     if args_cli.baseline:

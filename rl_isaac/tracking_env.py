@@ -145,13 +145,18 @@ class Go2TrackingEnv(DirectRLEnv):
         self._robot.set_joint_effort_target(self._to_isaac_order(torque))
 
     def _get_observations(self) -> dict:
+        """OPT-Mimic §III-C.1: proprioception-only (33 dims).
+
+        quat(4) + joint_pos(12) + base_ang_vel(3) + joint_vel(12) + phase(2) = 33.
+        Base position and linear velocity are NOT included — they require a state
+        estimator on the real robot, which the paper deliberately avoids.
+        """
         phase = self._phase.clamp(0, self._max_phase - 1)
-        root_pos = self._robot.data.root_pos_w - self._env_origins
         joint_pos = self._to_mpc_order(self._robot.data.joint_pos) + self._joint_offset
         angle = 2.0 * torch.pi * phase.float() / float(self._max_phase)
         obs = torch.cat([
-            root_pos, self._robot.data.root_quat_w, joint_pos,
-            self._robot.data.root_lin_vel_w, self._robot.data.root_ang_vel_w,
+            self._robot.data.root_quat_w, joint_pos,
+            self._robot.data.root_ang_vel_w,
             self._to_mpc_order(self._robot.data.joint_vel),
             torch.stack([torch.cos(angle), torch.sin(angle)], dim=-1),
         ], dim=-1)
