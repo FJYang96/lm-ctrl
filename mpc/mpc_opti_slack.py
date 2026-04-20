@@ -24,6 +24,7 @@ PHYSICS_CONSTRAINT_NAMES: set[str] = {
     "torque_feasibility_constraints",
     "link_clearance_constraints",
     "angular_momentum_flight_constraint",
+    "joint_acceleration_constraint",
 }
 
 STATE_ONLY_CONSTRAINT_NAMES = {
@@ -170,6 +171,7 @@ class QuadrupedMPCOptiSlack:
                 if k == 0 and (
                     name == "torque_feasibility_constraints"
                     or name == "angular_momentum_flight_constraint"
+                    or name == "joint_acceleration_constraint"
                     or name == "foot_height_constraints"
                 ):
                     continue
@@ -196,6 +198,17 @@ class QuadrupedMPCOptiSlack:
                         k,
                         self.horizon,
                         x_prev=self.X[:, k - 1],
+                        u_prev=self.U[:, k - 1],
+                    )
+                elif name == "joint_acceleration_constraint":
+                    expr, lb, ub = constraint_fn(
+                        self.X[:, k],
+                        self.U[:, k],
+                        self.kindyn_model,
+                        go2_config,
+                        contact_k,
+                        k,
+                        self.horizon,
                         u_prev=self.U[:, k - 1],
                     )
                 else:

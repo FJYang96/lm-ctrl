@@ -182,6 +182,10 @@ urdf_total_mass: float = _total_mass
 
 grf_limits: float = 500.0
 
+# Per-joint acceleration limits (rad/s^2), order: [hip, thigh, calf] x 4 legs.
+# Derived from tau_max / I_effective for free-swinging links; see chat 2026-04-18.
+joint_acceleration_limits: np.ndarray = np.array([500.0, 500.0, 1000.0] * 4)
+
 # Mass comes from URDF (sum of all link masses)
 composite_mass: float = urdf_total_mass
 

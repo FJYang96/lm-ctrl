@@ -402,3 +402,22 @@ def angular_momentum_flight_constraint(
     delta_L = (L_k - L_prev) * is_flight
     tol = 0.5 * np.ones(3)  # small tolerance for integration discretization
     return delta_L, -tol, tol
+
+
+def joint_acceleration_constraint(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
+    u_prev: cs.MX | None = None,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """Bound finite-difference joint acceleration to actuator-feasible range."""
+    if u_prev is None:
+        return cs.MX.zeros(12), -INF * np.ones(12), INF * np.ones(12)
+    dt = float(go2_config.mpc_config.mpc_dt)
+    q_ddot = (u_k[0:12] - u_prev[0:12]) / dt
+    bound = np.asarray(go2_config.joint_acceleration_limits, dtype=float)
+    return q_ddot, -bound, bound

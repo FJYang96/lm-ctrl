@@ -146,7 +146,8 @@ Optional: mpc.set_slack_weights({{"your_constraint_func_name": weight, ...}})
   — you cannot soften them. Hard constraint names: friction_cone_constraints,
   foot_height_constraints, no_slip_constraints, joint_limits_constraints,
   input_limits_constraints, body_clearance_constraints, link_clearance_constraints,
-  torque_feasibility_constraints, angular_momentum_flight_constraint.
+  torque_feasibility_constraints, angular_momentum_flight_constraint,
+  joint_acceleration_constraint.
   IMPORTANT: Do NOT name your constraint functions with any of these names, or they
   will be treated as hard constraints (no slack) and solver failures become likely.
 

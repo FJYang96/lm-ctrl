@@ -17,6 +17,7 @@ from .constraints import (
     foot_height_constraints,
     friction_cone_constraints,
     input_limits_constraints,
+    joint_acceleration_constraint,
     joint_limits_constraints,
     link_clearance_constraints,
     no_slip_constraints,
@@ -45,6 +46,7 @@ class ComplementarityMPCConfig(MPCConfig):
             link_clearance_constraints,
             torque_feasibility_constraints,
             angular_momentum_flight_constraint,
+            joint_acceleration_constraint,
         ]
     )
     path_constraint_params: dict[str, float] = field(

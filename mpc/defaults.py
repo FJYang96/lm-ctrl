@@ -54,6 +54,7 @@ else:
             constr.body_clearance_constraints,
             constr.link_clearance_constraints,
             constr.angular_momentum_flight_constraint,
+            constr.joint_acceleration_constraint,
         ],
         path_constraint_params={
             "SWING_GRF_EPS": 0.0,
