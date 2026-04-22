@@ -421,3 +421,115 @@ def joint_acceleration_constraint(
     q_ddot = (u_k[0:12] - u_prev[0:12]) / dt
     bound = np.asarray(go2_config.joint_acceleration_limits, dtype=float)
     return q_ddot, -bound, bound
+
+
+def joint_velocity_safety_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """Cap commanded joint velocities below URDF max with a safety factor.
+
+    URDF velocity limits are absolute hardware caps; commanding them leaves no
+    headroom for PD tracking corrections and saturates motor speed (observed on
+    RL_calf / RR_calf during aggressive flips). Bounds |q̇| ≤ factor · v_max.
+    """
+    joint_velocities = u_k[0:12]
+    jlim = np.asarray(go2_config.robot_data.joint_velocity_limits, dtype=float).ravel()
+    if jlim.size == 1:
+        jlim = np.full(12, float(jlim[0]))
+    bound = jlim * float(go2_config.JOINT_VEL_SAFETY_FACTOR)
+    return joint_velocities, -bound, bound
+
+
+def friction_margin_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """Tighter friction cone with a safety margin on mu.
+
+    The base friction_cone_constraints uses the nominal mu_ground, leaving
+    no margin if the real surface is less grippy than simulated. This applies
+    a tighter cone with mu' = mu * FRICTION_MARGIN. Same f_z scaling as the
+    base cone, so swing feet (f_z ≈ 0) are unaffected.
+    """
+    forces = u_k[12:24]
+    mu_safe = float(go2_config.experiment.mu_ground) * float(
+        go2_config.FRICTION_MARGIN
+    )
+
+    expr_list, min_list, max_list = [], [], []
+    for foot_idx in range(4):
+        f_x = forces[foot_idx * 3]
+        f_y = forces[foot_idx * 3 + 1]
+        f_z = forces[foot_idx * 3 + 2]
+        mu_term = mu_safe * f_z
+
+        expr_list.append(f_x)
+        min_list.append(-mu_term)
+        max_list.append(mu_term)
+
+        expr_list.append(f_y)
+        min_list.append(-mu_term)
+        max_list.append(mu_term)
+
+    return cs.vertcat(*expr_list), cs.vertcat(*min_list), cs.vertcat(*max_list)
+
+
+def landing_force_rate_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
+    u_prev: cs.MX | None = None,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """Bound dF_z/dt per leg to prevent impulsive touchdown forces.
+
+    Without this, the solver can step F_z from 0 to several body-weights in a
+    single dt as contact_k flips 0→1, which is physically unrealisable and
+    risks hardware on the real robot.
+    """
+    if u_prev is None:
+        return cs.MX.zeros(4), -INF * np.ones(4), INF * np.ones(4)
+    dt = float(go2_config.mpc_config.mpc_dt)
+    forces = u_k[12:24]
+    forces_prev = u_prev[12:24]
+    fz_rate = cs.vertcat(
+        (forces[2] - forces_prev[2]) / dt,
+        (forces[5] - forces_prev[5]) / dt,
+        (forces[8] - forces_prev[8]) / dt,
+        (forces[11] - forces_prev[11]) / dt,
+    )
+    bound = float(go2_config.LANDING_GRF_RATE_LIMIT) * np.ones(4)
+    return fz_rate, -bound, bound
+
+
+def landing_force_peak_constraints(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """Cap total vertical GRF across all four feet at N × body weight."""
+    forces = u_k[12:24]
+    fz_total = forces[2] + forces[5] + forces[8] + forces[11]
+    body_weight = float(go2_config.composite_mass) * float(
+        go2_config.experiment.gravity_constant
+    )
+    ub = float(go2_config.LANDING_GRF_PEAK_LIMIT_BW) * body_weight
+    return fz_total, cs.DM(0.0), cs.DM(ub)

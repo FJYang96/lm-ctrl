@@ -186,6 +186,29 @@ grf_limits: float = 500.0
 # Derived from tau_max / I_effective for free-swinging links; see chat 2026-04-18.
 joint_acceleration_limits: np.ndarray = np.array([500.0, 500.0, 1000.0] * 4)
 
+# Fraction of URDF joint velocity max that the MPC may command. Leaves headroom
+# for PD tracking corrections and prevents motor speed saturation (calf joints
+# observed hitting v_max during aggressive flips). Loosened to allow rear-leg
+# extension speed needed for backflip takeoff angular velocity.
+JOINT_VEL_SAFETY_FACTOR: float = 0.95
+
+# Fraction of mu_ground used by the friction safety constraint. Real surfaces
+# are typically less grippy than the simulation value; this margin prevents
+# slip when the trajectory rides the friction cone edge.
+FRICTION_MARGIN: float = 0.85
+
+# Per-leg vertical GRF rate limit (N/s). NOTE: applies at every timestep,
+# not just landing — tightening it throttles takeoff thrust too, blunting
+# backflip rotation. 20000 N/s leaves takeoff thrust ~unaffected; landing peak
+# is still capped by LANDING_GRF_PEAK_LIMIT_BW. Scope-to-landing-only is the
+# proper long-term fix.
+LANDING_GRF_RATE_LIMIT: float = 10000
+
+# Peak total vertical GRF cap, in body-weight multiples. Caps Σ F_z across all
+# four feet to prevent the solver from concentrating excessive landing impulses.
+# Aligned with capability_limits.max_peak_grf_bodyweight_multiple.
+LANDING_GRF_PEAK_LIMIT_BW: float = 8.0
+
 # Mass comes from URDF (sum of all link masses)
 composite_mass: float = urdf_total_mass
 

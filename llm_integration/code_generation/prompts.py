@@ -147,7 +147,9 @@ Optional: mpc.set_slack_weights({{"your_constraint_func_name": weight, ...}})
   foot_height_constraints, no_slip_constraints, joint_limits_constraints,
   input_limits_constraints, body_clearance_constraints, link_clearance_constraints,
   torque_feasibility_constraints, angular_momentum_flight_constraint,
-  joint_acceleration_constraint.
+  joint_acceleration_constraint, joint_velocity_safety_constraints,
+  friction_margin_constraints, landing_force_rate_constraints,
+  landing_force_peak_constraints.
   IMPORTANT: Do NOT name your constraint functions with any of these names, or they
   will be treated as hard constraints (no slack) and solver failures become likely.
 
