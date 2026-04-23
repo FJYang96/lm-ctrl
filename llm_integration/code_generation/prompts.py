@@ -83,6 +83,16 @@ Key physics:
   redistribute angular momentum between base and legs but CANNOT create new angular
   momentum. Plan takeoff GRFs and timing to generate sufficient angular velocity
   BEFORE the feet leave the ground.
+- Linear momentum is STRICTLY CONSERVED during flight — the solver enforces this
+  as a hard constraint (linear_momentum_flight_constraint). The COM follows
+  projectile motion: horizontal velocity is constant, vertical velocity changes
+  only at -g (≈ -9.81 m/s²). Joint motion CANNOT translate the COM during flight.
+  All horizontal displacement and vertical launch velocity of the COM must come
+  from takeoff GRFs. Plan takeoff accordingly.
+- Terminal vertical velocity is BOUNDED by a hard constraint
+  (terminal_vertical_velocity_constraint): at the final timestep, COM vz must
+  lie in [-0.1, +0.5] m/s for a settled landing. Plan landing deceleration to
+  hit this window — don't let the horizon end mid-descent.
 - All forces during stance go through the feet and must satisfy the friction box
   (|fx| <= mu*fz AND |fy| <= mu*fz per foot). The per-phase breakdown in trajectory metrics
   shows what % of each motion occurs during stance vs flight — cross-reference this
@@ -149,7 +159,8 @@ Optional: mpc.set_slack_weights({{"your_constraint_func_name": weight, ...}})
   torque_feasibility_constraints, angular_momentum_flight_constraint,
   joint_acceleration_constraint, joint_velocity_safety_constraints,
   friction_margin_constraints, landing_force_rate_constraints,
-  landing_force_peak_constraints.
+  landing_force_peak_constraints, linear_momentum_flight_constraint,
+  terminal_vertical_velocity_constraint.
   IMPORTANT: Do NOT name your constraint functions with any of these names, or they
   will be treated as hard constraints (no slack) and solver failures become likely.
 

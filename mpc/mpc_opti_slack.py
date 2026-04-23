@@ -29,6 +29,8 @@ PHYSICS_CONSTRAINT_NAMES: set[str] = {
     "friction_margin_constraints",
     "landing_force_rate_constraints",
     "landing_force_peak_constraints",
+    "linear_momentum_flight_constraint",
+    "terminal_vertical_velocity_constraint",
 }
 
 STATE_ONLY_CONSTRAINT_NAMES = {
@@ -36,6 +38,14 @@ STATE_ONLY_CONSTRAINT_NAMES = {
     "joint_limits_constraints",
     "body_clearance_constraints",
     "link_clearance_constraints",
+    "terminal_vertical_velocity_constraint",
+}
+
+# Constraints that should ONLY be evaluated at the terminal step (k == horizon).
+# In the per-step path loop they are skipped entirely; the terminal loop picks
+# them up via STATE_ONLY_CONSTRAINT_NAMES.
+TERMINAL_ONLY_CONSTRAINT_NAMES = {
+    "terminal_vertical_velocity_constraint",
 }
 
 
@@ -172,9 +182,12 @@ class QuadrupedMPCOptiSlack:
             contact_k = self.P_contact[:, k]
             for constraint_fn in go2_config.mpc_config.path_constraints:
                 name = constraint_fn.__name__
+                if name in TERMINAL_ONLY_CONSTRAINT_NAMES:
+                    continue
                 if k == 0 and (
                     name == "torque_feasibility_constraints"
                     or name == "angular_momentum_flight_constraint"
+                    or name == "linear_momentum_flight_constraint"
                     or name == "joint_acceleration_constraint"
                     or name == "landing_force_rate_constraints"
                     or name == "foot_height_constraints"
@@ -204,6 +217,19 @@ class QuadrupedMPCOptiSlack:
                         self.horizon,
                         x_prev=self.X[:, k - 1],
                         u_prev=self.U[:, k - 1],
+                    )
+                elif name == "linear_momentum_flight_constraint":
+                    expr, lb, ub = constraint_fn(
+                        self.X[:, k],
+                        self.U[:, k],
+                        self.kindyn_model,
+                        go2_config,
+                        contact_k,
+                        k,
+                        self.horizon,
+                        x_prev=self.X[:, k - 1],
+                        u_prev=self.U[:, k - 1],
+                        contact_prev=self.P_contact[:, k - 1],
                     )
                 elif name == "joint_acceleration_constraint":
                     expr, lb, ub = constraint_fn(

@@ -209,6 +209,18 @@ LANDING_GRF_RATE_LIMIT: float = 10000
 # Aligned with capability_limits.max_peak_grf_bodyweight_multiple.
 LANDING_GRF_PEAK_LIMIT_BW: float = 8.0
 
+# Per-axis tolerance on linear-momentum conservation during flight (kg·m/s).
+# Bounds |P_k - P_{k-1} - [0,0,-m g dt]| during pure-flight step pairs. Tighter
+# values force cleaner projectile motion but risk infeasibility from integrator
+# discretization noise. Pairs with angular_momentum_flight_constraint's tol=0.5.
+LINEAR_MOMENTUM_FLIGHT_TOL: float = 0.2
+
+# Asymmetric bound on COM vertical velocity at the terminal MPC step (m/s).
+# Lower bound prevents hard-landing impact velocity; upper bound allows a small
+# post-landing rebound without triggering infeasibility.
+TERMINAL_VZ_LOWER: float = -0.1
+TERMINAL_VZ_UPPER: float = 0.5
+
 # Mass comes from URDF (sum of all link masses)
 composite_mass: float = urdf_total_mass
 

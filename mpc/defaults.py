@@ -54,11 +54,13 @@ else:
             constr.body_clearance_constraints,
             constr.link_clearance_constraints,
             constr.angular_momentum_flight_constraint,
+            constr.linear_momentum_flight_constraint,
             constr.joint_acceleration_constraint,
             constr.joint_velocity_safety_constraints,
             constr.friction_margin_constraints,
             constr.landing_force_rate_constraints,
             constr.landing_force_peak_constraints,
+            constr.terminal_vertical_velocity_constraint,
         ],
         path_constraint_params={
             "SWING_GRF_EPS": 0.0,

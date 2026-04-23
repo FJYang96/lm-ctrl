@@ -23,8 +23,10 @@ from .constraints import (
     joint_velocity_safety_constraints,
     landing_force_peak_constraints,
     landing_force_rate_constraints,
+    linear_momentum_flight_constraint,
     link_clearance_constraints,
     no_slip_constraints,
+    terminal_vertical_velocity_constraint,
     torque_feasibility_constraints,
 )
 from .dynamics.model import KinoDynamic_Model
@@ -50,11 +52,13 @@ class ComplementarityMPCConfig(MPCConfig):
             link_clearance_constraints,
             torque_feasibility_constraints,
             angular_momentum_flight_constraint,
+            linear_momentum_flight_constraint,
             joint_acceleration_constraint,
             joint_velocity_safety_constraints,
             friction_margin_constraints,
             landing_force_rate_constraints,
             landing_force_peak_constraints,
+            terminal_vertical_velocity_constraint,
         ]
     )
     path_constraint_params: dict[str, float] = field(

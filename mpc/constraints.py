@@ -533,3 +533,70 @@ def landing_force_peak_constraints(
     )
     ub = float(go2_config.LANDING_GRF_PEAK_LIMIT_BW) * body_weight
     return fz_total, cs.DM(0.0), cs.DM(ub)
+
+
+def linear_momentum_flight_constraint(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
+    x_prev: cs.MX | None = None,
+    u_prev: cs.MX | None = None,
+    contact_prev: cs.MX | None = None,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """Conserve centroidal linear momentum in free flight.
+
+    In flight, gravity is the only external force, so P_k - P_{k-1} =
+    [0, 0, -m g dt]. Since x[3:6] is CoM velocity (see dynamics/model.py),
+    P = m v_CoM exactly — no need for the centroidal momentum matrix.
+    Gated on BOTH step k and step k-1 being in pure flight so the
+    takeoff-transition step (where x_k absorbs the stance impulse) is
+    skipped. Pairs with angular_momentum_flight_constraint.
+    """
+    if x_prev is None or contact_prev is None:
+        return cs.MX.zeros(3), -INF * np.ones(3), INF * np.ones(3)
+
+    dt = float(go2_config.mpc_config.mpc_dt)
+    mass = float(go2_config.robot_data.mass)
+    g = float(go2_config.experiment.gravity_constant)
+    expected_dP = cs.DM([0.0, 0.0, -mass * g * dt])
+
+    P_k = mass * x_k[3:6]
+    P_prev = mass * x_prev[3:6]
+
+    c_k = cs.fmin(
+        contact_k[0] + contact_k[1] + contact_k[2] + contact_k[3], 1.0
+    )
+    c_p = cs.fmin(
+        contact_prev[0] + contact_prev[1] + contact_prev[2] + contact_prev[3], 1.0
+    )
+    is_flight = (1.0 - c_k) * (1.0 - c_p)
+
+    residual = (P_k - P_prev - expected_dP) * is_flight
+    tol = float(go2_config.LINEAR_MOMENTUM_FLIGHT_TOL) * np.ones(3)
+    return residual, -tol, tol
+
+
+def terminal_vertical_velocity_constraint(
+    x_k: cs.MX,
+    u_k: cs.MX,
+    kindyn_model: KinoDynamic_Model,
+    config: Any,
+    contact_k: cs.MX,
+    k: int = 0,
+    horizon: int = 1,
+) -> tuple[cs.MX, cs.MX, cs.MX]:
+    """Bound terminal CoM vertical velocity for a settled landing.
+
+    State-only constraint, active only at the terminal step (k == horizon).
+    Asymmetric bound: tight on descent (prevent hard impact), loose on
+    rebound (don't forbid a small positive velocity after landing).
+    """
+    if k < horizon:
+        return cs.MX.zeros(1), -INF * np.ones(1), INF * np.ones(1)
+    lower = np.array([float(go2_config.TERMINAL_VZ_LOWER)])
+    upper = np.array([float(go2_config.TERMINAL_VZ_UPPER)])
+    return x_k[5:6], lower, upper
