@@ -29,7 +29,7 @@ cd /workspace/lm-ctrl
 source "$SCRIPT_DIR/traj_config.sh"
 
 # Clean previous runs
-#rm -rf rl_isaac/trained_models/* 2>/dev/null
+rm -rf rl_isaac/trained_models/* 2>/dev/null
 echo "Cleaned rl_isaac/trained_models/"
 
 # GPU selection: automatically pick the GPU with the most free memory.
@@ -71,9 +71,9 @@ fi
 
 export PYTHONPATH="/workspace/lm-ctrl:${PYTHONPATH}"
 
-# ── Step 1: Train (includes periodic videos every 1M steps + final best model video) ──
-echo "[1/3] Training OPT-Mimic tracking policy (Isaac Lab PPO)..."
-echo "      Videos rendered every 1M steps + final best model video."
+# ── Step 1: Train (includes periodic videos every 1M steps) ──
+echo "[1/4] Training OPT-Mimic tracking policy (Isaac Lab PPO)..."
+echo "      Videos rendered every 1M steps (DR-on snapshots, unseeded)."
 
 $ISAAC_PYTHON -m rl_isaac.train \
     --state-traj "$STATE_TRAJ" \
@@ -193,7 +193,8 @@ echo "============================================================" >> "$LOG_FIL
 echo ""
 echo "============================================================"
 echo "Isaac Lab smoke test complete in ${EXPERIMENT_ELAPSED}s"
-echo "  Log:    $LOG_FILE"
-echo "  Videos: $OUTPUT_DIR/runs/"
-echo "  Best:   $OUTPUT_DIR/runs/best_model.mp4"
+echo "  Log:           $LOG_FILE"
+echo "  Clean eval:    $OUTPUT_DIR/rl_tracking.mp4  (+ eval_policy.json)"
+echo "  Training vids: $OUTPUT_DIR/runs/  (periodic, DR-on)"
+echo "  DR sweep:      $OUTPUT_DIR/dr_seeds/  ($N_DR_SEEDS seeds)"
 echo "============================================================"
