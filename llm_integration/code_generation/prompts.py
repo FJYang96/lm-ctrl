@@ -71,8 +71,11 @@ Key physics:
 - The MPC uses FULL-BODY DYNAMICS (not simplified centroidal). Forces couple through
   Jacobians — leg configuration affects how GRFs translate to COM acceleration.
   The mass matrix is configuration-dependent (changes as joints move).
-- Torque feasibility is enforced at 80% of motor limits to leave headroom for the
-  PD tracking controller. Design GRFs conservatively — don't max out forces.
+- Torque feasibility is enforced at 50% of motor limits to leave headroom for the
+  PD tracking controller and the RL residual policy. Design GRFs conservatively —
+  don't max out forces. Acrobatic motions that previously needed 80% torque must
+  now be re-shaped: longer takeoff phases, lower angular momentum demand, or
+  reduced apex height to fit within the 50% planning bound.
 - The solver is computationally heavy — keep constraints conservative and prefer
   wider bounds. Smooth reference trajectories help convergence.
 - Rotation: angle_change = angular_velocity × time

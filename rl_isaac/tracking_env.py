@@ -12,9 +12,10 @@ from isaaclab.sensors import ContactSensor
 
 from .env_cfg import Go2TrackingEnvCfg
 from .rewards import (
-    KP, KD, ACTION_LIMIT, CONTACT_GRACE_WINDOW,
+    KP, KD, ACTION_LIMIT, CONTACT_GRACE_WINDOW, TERM_CAUSE_NAMES,
     compute_tracking_errors, compute_rewards,
-    check_tracking_termination, check_body_contact, check_contact_mismatch,
+    tracking_termination_breakdown,
+    check_body_contact, contact_mismatch_diagnostics,
 )
 
 _MPC_JOINT_ORDER = [
@@ -44,6 +45,30 @@ class Go2TrackingEnv(DirectRLEnv):
         self._setup_contact_indices()
         self._env_origins = self._terrain.env_origins.clone()
         self._joint_reorder = self._build_joint_reorder(self._robot.joint_names)
+        # Phase-0.1 instrumentation: (cause, phase) histogram, accumulated per
+        # rollout. Train.py drains it via flush_term_diagnostics() each update.
+        self._term_phase_hist = torch.zeros(
+            len(TERM_CAUSE_NAMES), self._max_phase + 1,
+            dtype=torch.int64, device=self.device,
+        )
+        self._term_counts = {n: 0 for n in TERM_CAUSE_NAMES}
+        # Phase-0.2 instrumentation: per-phase tracking-error sums for the
+        # five metrics tracked by compute_tracking_errors. Drained per update
+        # by flush_phase_errors().
+        self._phase_err_metrics = (
+            "pos_error", "ori_error", "joint_error", "action_rate", "max_torque",
+        )
+        self._phase_err_sum = torch.zeros(
+            self._max_phase + 1, len(self._phase_err_metrics),
+            dtype=torch.float64, device=self.device,
+        )
+        self._phase_err_count = torch.zeros(
+            self._max_phase + 1, dtype=torch.int64, device=self.device,
+        )
+        # Phase-0.3 instrumentation: per-foot contact slip stats.
+        self._slip_count_per_foot = torch.zeros(4, dtype=torch.int64, device=self.device)
+        self._slip_force_sum_per_foot = torch.zeros(4, dtype=torch.float64, device=self.device)
+        self._slip_offset_abs_sum_per_foot = torch.zeros(4, dtype=torch.float64, device=self.device)
 
     def _build_joint_reorder(self, joint_names: list[str]) -> torch.Tensor | None:
         if joint_names == _MPC_JOINT_ORDER:
@@ -92,9 +117,21 @@ class Go2TrackingEnv(DirectRLEnv):
                     lo, hi = max(0, k - CONTACT_GRACE_WINDOW), min(N - 1, k + CONTACT_GRACE_WINDOW)
                     if np.any(ref.contact_sequence[foot, lo:hi + 1] != ref.contact_sequence[foot, k]):
                         near_transition[foot, k] = 1.0
+            # Phase-0.3: signed |distance in frames| from each phase to the
+            # nearest scheduled contact transition for each foot. Defaults to
+            # N (sentinel "no transition exists") for feet with constant
+            # schedule.
+            transition_offset = np.full((4, N), float(N), dtype=np.float32)
+            for foot in range(4):
+                cs = ref.contact_sequence[foot, :N]
+                trans = [k + 0.5 for k in range(N - 1) if cs[k] != cs[k + 1]]
+                if trans:
+                    for k in range(N):
+                        transition_offset[foot, k] = min(abs(k - t) for t in trans)
         else:
             contact_seq = -np.ones((4, N), dtype=np.float32)
             near_transition = np.ones((4, N), dtype=np.float32)
+            transition_offset = np.full((4, N), float(N), dtype=np.float32)
         to_t = lambda a: torch.tensor(a, device=self.device)
         self._ref_body_pos = to_t(st[:N + 1, MPC_X_BASE_POS].astype(np.float32))
         self._ref_body_quat = to_t(body_quat)
@@ -105,6 +142,7 @@ class Go2TrackingEnv(DirectRLEnv):
         self._ref_ff_torques = to_t(ref._ff_torques[:N].astype(np.float32))
         self._ref_contact_seq = to_t(contact_seq)
         self._ref_near_transition = to_t(near_transition)
+        self._ref_transition_offset = to_t(transition_offset)  # (4, N)
 
     def _setup_contact_indices(self):
         self._foot_body_ids, _ = self._contact_sensor.find_bodies("FL_foot|FR_foot|RL_foot|RR_foot")
@@ -181,18 +219,120 @@ class Go2TrackingEnv(DirectRLEnv):
             action_scaled, self._prev_action, self._last_torque,
         )
         self._prev_action = action_scaled.clone()
+
+        # ---- Phase-0.2 instrumentation: per-phase error accumulation ----
+        # Index by post-step phase (the index whose ref the actual state was
+        # measured against). first_step envs contribute 0 to action_rate (it
+        # references a stale prev_action) — exclude their action_rate sample.
+        ph_idx = self._phase.clamp(0, self._max_phase).long()
+        ones_b = torch.ones_like(ph_idx, dtype=self._phase_err_count.dtype)
+        self._phase_err_count.scatter_add_(0, ph_idx, ones_b)
+        for m_idx, mname in enumerate(self._phase_err_metrics):
+            vals = self._tracking_errors[mname].to(torch.float64)
+            if mname == "action_rate":
+                vals = torch.where(self._first_step, torch.zeros_like(vals), vals)
+            self._phase_err_sum[:, m_idx].scatter_add_(0, ph_idx, vals)
+
         forces = self._contact_sensor.data.net_forces_w_history
-        terminated = (
-            check_tracking_termination(self._tracking_errors, self._first_step)
-            | check_body_contact(forces, self._non_foot_body_ids)
-            | check_contact_mismatch(forces, self._foot_body_ids_t,
-                                     self._ref_contact_seq[:, phase].T, self._ref_near_transition[:, phase].T)
-            | torch.any(torch.isnan(self._robot.data.root_pos_w), dim=-1)
+
+        thresh_masks = tracking_termination_breakdown(self._tracking_errors, self._first_step)
+        body_mask = check_body_contact(forces, self._non_foot_body_ids)
+        cm_info = contact_mismatch_diagnostics(
+            forces, self._foot_body_ids_t,
+            self._ref_contact_seq[:, phase].T, self._ref_near_transition[:, phase].T,
         )
+        contact_mask = cm_info["any_mismatch"]
+        nan_mask = torch.any(torch.isnan(self._robot.data.root_pos_w), dim=-1)
+
+        # ---- Phase-0.3 instrumentation: per-foot slip stats ----
+        mismatch_pf = cm_info["mismatch_per_foot"]  # (n_envs, 4)
+        force_pf = cm_info["actual_force_per_foot"]  # (n_envs, 4)
+        if mismatch_pf.any():
+            phase_clamped = self._phase.clamp(0, self._max_phase - 1).long()
+            for foot_idx in range(4):
+                m = mismatch_pf[:, foot_idx]
+                if m.any():
+                    self._slip_count_per_foot[foot_idx] += int(m.sum().item())
+                    self._slip_force_sum_per_foot[foot_idx] += float(force_pf[:, foot_idx][m].sum().item())
+                    offsets = self._ref_transition_offset[foot_idx, phase_clamped[m]].to(torch.float64)
+                    self._slip_offset_abs_sum_per_foot[foot_idx] += float(offsets.sum().item())
+        thresh_any = (
+            thresh_masks["thresh_pos"] | thresh_masks["thresh_ori"]
+            | thresh_masks["thresh_joint"] | thresh_masks["thresh_rate"]
+            | thresh_masks["thresh_torque"]
+        )
+        terminated = thresh_any | body_mask | contact_mask | nan_mask
         truncated = self._phase >= self._max_phase
+
+        # ---- Phase-0.1 instrumentation: per-cause × per-phase histogram ----
+        cause_masks = {
+            "thresh_pos": thresh_masks["thresh_pos"],
+            "thresh_ori": thresh_masks["thresh_ori"],
+            "thresh_joint": thresh_masks["thresh_joint"],
+            "thresh_rate": thresh_masks["thresh_rate"],
+            "thresh_torque": thresh_masks["thresh_torque"],
+            "body": body_mask,
+            "contact": contact_mask,
+            "nan": nan_mask,
+            "trunc": truncated,
+        }
+        # Phase-0.4: expose latest masks + actual force-per-foot to evaluate.py
+        # for per-step termination-cause attribution and contact logging.
+        self._last_cause_masks = cause_masks
+        self._last_actual_force_per_foot = cm_info["actual_force_per_foot"]
+        phase_long = self._phase.clamp(0, self._max_phase).long()
+        for idx, name in enumerate(TERM_CAUSE_NAMES):
+            m = cause_masks[name]
+            if m.any():
+                phs = phase_long[m]
+                ones = torch.ones_like(phs, dtype=self._term_phase_hist.dtype)
+                self._term_phase_hist[idx].scatter_add_(0, phs, ones)
+                self._term_counts[name] += int(m.sum().item())
+
         if "log" not in self.extras:
             self.extras["log"] = {}
+        # Backward-compat aggregates expected by callbacks.TrainingLogger.
+        self.extras["log"]["term_thresh"] = float(self._term_counts["thresh_pos"]
+                                                  + self._term_counts["thresh_ori"]
+                                                  + self._term_counts["thresh_joint"]
+                                                  + self._term_counts["thresh_rate"]
+                                                  + self._term_counts["thresh_torque"])
+        self.extras["log"]["term_body"] = float(self._term_counts["body"])
+        self.extras["log"]["term_contact"] = float(self._term_counts["contact"])
+        self.extras["log"]["term_nan"] = float(self._term_counts["nan"])
+        self.extras["log"]["term_trunc"] = float(self._term_counts["trunc"])
         return terminated, truncated
+
+    def flush_term_diagnostics(self) -> tuple[dict[str, int], torch.Tensor]:
+        """Return accumulated (counts dict, per-cause × per-phase histogram)
+        and reset both. Called once per PPO update by train.py."""
+        counts = dict(self._term_counts)
+        hist = self._term_phase_hist.clone()
+        self._term_phase_hist.zero_()
+        for k in self._term_counts:
+            self._term_counts[k] = 0
+        return counts, hist
+
+    def flush_phase_errors(self) -> tuple[torch.Tensor, torch.Tensor, tuple[str, ...]]:
+        """Return (sum tensor of shape (max_phase+1, n_metrics), count tensor
+        of shape (max_phase+1,), metric names) and reset both. Called once per
+        PPO update by train.py."""
+        sums = self._phase_err_sum.clone()
+        counts = self._phase_err_count.clone()
+        self._phase_err_sum.zero_()
+        self._phase_err_count.zero_()
+        return sums, counts, self._phase_err_metrics
+
+    def flush_slip_diagnostics(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return per-foot (count, force_sum, offset_abs_sum) and reset.
+        Caller divides sums by count for means. Called once per PPO update."""
+        counts = self._slip_count_per_foot.clone()
+        force_sum = self._slip_force_sum_per_foot.clone()
+        offset_sum = self._slip_offset_abs_sum_per_foot.clone()
+        self._slip_count_per_foot.zero_()
+        self._slip_force_sum_per_foot.zero_()
+        self._slip_offset_abs_sum_per_foot.zero_()
+        return counts, force_sum, offset_sum
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:

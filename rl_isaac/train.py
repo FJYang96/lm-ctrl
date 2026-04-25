@@ -120,7 +120,7 @@ def train(args):
     obs_dict, _ = env.reset()
     obs = obs_dict["policy"]
     total_steps = 0
-    best_ep_return = -float("inf")
+    best_ep_metric = (-float("inf"), -float("inf"))  # (mean_ep_length, mean_ep_return)
     next_video_step = 1_000_000
     t_start = time.time()
     logger.info(f"Starting training ({n_updates} updates)...")
@@ -181,9 +181,22 @@ def train(args):
             entropy=ppo_metrics["entropy"], ent_coef=ent_coef,
             dt=time.time() - t_update, term_info=log_extras,
         )
+        # Phase-0.1 instrumentation: drain per-cause × per-phase termination
+        # histogram from the env and append it to term_breakdown.csv. Drain
+        # AFTER log_update so the rolled-up counts that update_idx logged are
+        # the same ones written to the CSV.
+        _term_counts, _term_hist = env.flush_term_diagnostics()
+        logger.log_term_breakdown(update_idx, total_steps, _term_hist)
+        # Phase-0.2 instrumentation: per-phase tracking-error means.
+        _ph_sums, _ph_counts, _ph_metrics = env.flush_phase_errors()
+        logger.log_phase_errors(update_idx, total_steps, _ph_sums, _ph_counts, _ph_metrics)
+        # Phase-0.3 instrumentation: per-foot contact-mismatch slip stats.
+        _sl_c, _sl_f, _sl_o = env.flush_slip_diagnostics()
+        logger.log_slip_diagnostics(update_idx, total_steps, _sl_c, _sl_f, _sl_o)
 
-        if mean_ep_return > best_ep_return:
-            best_ep_return = mean_ep_return
+        current_ep_metric = (mean_ep_length, mean_ep_return)
+        if current_ep_metric > best_ep_metric:
+            best_ep_metric = current_ep_metric
             save_checkpoint(output_dir / "best_model", actor_critic, obs_normalizer, total_steps)
         if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:
             save_checkpoint(output_dir / "checkpoints" / f"step_{total_steps}", actor_critic, obs_normalizer, total_steps)
@@ -195,11 +208,12 @@ def train(args):
             logger.save_reward_curve(str(output_dir), total_steps)
 
     logger.info(f"Training complete in {time.time() - t_start:.1f}s ({total_steps:,} steps)")
-    logger.info(f"Best ep_return: {best_ep_return:.2f}")
+    logger.info(f"Best (ep_length, ep_return): ({best_ep_metric[0]:.2f}, {best_ep_metric[1]:.2f})")
     save_checkpoint(output_dir / "final_model", actor_critic, obs_normalizer, total_steps)
     logger.save_reward_curve(str(output_dir), total_steps)
-    logger.info("Rendering final best model video...")
-    render_video(env, actor_critic, obs_normalizer, output_dir, total_steps, logger, label="best_model")
+    # Final best_model.mp4 render removed: redundant with run_smoke_test.sh
+    # Step [2/4] (clean rl_tracking.mp4) and Step [3/4] (DR-on dr_seeds/*.mp4).
+    # Periodic runs/step_<N>.mp4 files still show training progression.
     env.close()
     simulation_app.close()
 

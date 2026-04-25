@@ -63,14 +63,14 @@ def render_video(
             obs_normalizer.load_state_dict(best_ckpt["normalizer_state_dict"])
         obs_normalizer.eval()
 
-        # Reset env, then set env 0 to phase 0 with no DR.
+        # Reset env, then set env 0 to phase 0. Keep DR (joint_offset,
+        # torque_scale) from the env.reset() call so eval matches training
+        # distribution — policy is trained with DR, so zero-DR eval is OOD.
         env.reset()
         env._phase[0] = 0
         env._prev_action[0] = 0
         env._last_torque[0] = 0
         env._first_step[0] = True
-        env._joint_offset[0] = 0
-        env._torque_scale[0] = 1.0
 
         env_0 = torch.tensor([0], device=device, dtype=torch.long)
         env._robot.write_root_pose_to_sim(torch.cat([

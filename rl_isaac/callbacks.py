@@ -6,6 +6,7 @@ reward_curve.png with same smoothing.
 
 from __future__ import annotations
 
+import csv
 import logging
 from pathlib import Path
 
@@ -14,6 +15,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from .rewards import TERM_CAUSE_NAMES
+
 
 class TrainingLogger:
     """Logs training metrics to experiment.log and tracks reward history."""
@@ -21,6 +24,12 @@ class TrainingLogger:
     def __init__(self, output_dir: Path, total_timesteps: int, num_envs: int, max_phase: int):
         self.output_dir = Path(output_dir)
         self.log_path = self.output_dir / "experiment.log"
+        self.term_csv_path = self.output_dir / "term_breakdown.csv"
+        self._term_csv_initialised = False
+        self.phase_err_csv_path = self.output_dir / "phase_errors.csv"
+        self._phase_err_csv_initialised = False
+        self.slip_csv_path = self.output_dir / "slip_log.csv"
+        self._slip_csv_initialised = False
         self.reward_history: list[float] = []
         self.timestep_history: list[int] = []
 
@@ -111,6 +120,96 @@ class TrainingLogger:
             f"{term_str}"
         )
         self._logger.info(msg)
+
+    def log_term_breakdown(self, update_idx: int, total_steps: int, hist):
+        """Append per-cause × per-phase termination histogram for one update.
+
+        `hist`: int tensor of shape (n_causes, max_phase+1). Rows with zero
+        events are skipped to keep the CSV compact.
+        """
+        try:
+            arr = hist.cpu().numpy()
+        except AttributeError:
+            arr = np.asarray(hist)
+        if arr.size == 0 or not arr.any():
+            return
+        if not self._term_csv_initialised:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            new_file = not self.term_csv_path.exists()
+            with self.term_csv_path.open("a", newline="") as f:
+                w = csv.writer(f)
+                if new_file:
+                    w.writerow(["update_idx", "total_steps", "cause", "phase", "count"])
+            self._term_csv_initialised = True
+        with self.term_csv_path.open("a", newline="") as f:
+            w = csv.writer(f)
+            for c_idx, name in enumerate(TERM_CAUSE_NAMES):
+                row = arr[c_idx]
+                nz = np.nonzero(row)[0]
+                for p in nz:
+                    w.writerow([update_idx, total_steps, name, int(p), int(row[p])])
+
+    def log_phase_errors(self, update_idx: int, total_steps: int,
+                         sums, counts, metric_names: tuple[str, ...]):
+        """Append one row per phase index for this update. Skips phases with
+        zero samples in the rollout window."""
+        try:
+            sums_np = sums.cpu().numpy()
+            counts_np = counts.cpu().numpy()
+        except AttributeError:
+            sums_np = np.asarray(sums)
+            counts_np = np.asarray(counts)
+        if counts_np.sum() == 0:
+            return
+        if not self._phase_err_csv_initialised:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            new_file = not self.phase_err_csv_path.exists()
+            with self.phase_err_csv_path.open("a", newline="") as f:
+                w = csv.writer(f)
+                if new_file:
+                    header = ["update_idx", "total_steps", "phase", "n_samples"]
+                    header.extend(f"mean_{m}" for m in metric_names)
+                    w.writerow(header)
+            self._phase_err_csv_initialised = True
+        with self.phase_err_csv_path.open("a", newline="") as f:
+            w = csv.writer(f)
+            for p_idx in range(counts_np.shape[0]):
+                n = int(counts_np[p_idx])
+                if n == 0:
+                    continue
+                means = sums_np[p_idx] / n
+                w.writerow([update_idx, total_steps, p_idx, n,
+                            *[f"{v:.6g}" for v in means]])
+
+    def log_slip_diagnostics(self, update_idx: int, total_steps: int,
+                             counts, force_sum, offset_sum):
+        """Append per-foot mismatch stats. Skips foot rows with zero events."""
+        try:
+            c = counts.cpu().numpy()
+            f = force_sum.cpu().numpy()
+            o = offset_sum.cpu().numpy()
+        except AttributeError:
+            c = np.asarray(counts); f = np.asarray(force_sum); o = np.asarray(offset_sum)
+        if int(c.sum()) == 0:
+            return
+        if not self._slip_csv_initialised:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            new_file = not self.slip_csv_path.exists()
+            with self.slip_csv_path.open("a", newline="") as fh:
+                w = csv.writer(fh)
+                if new_file:
+                    w.writerow(["update_idx", "total_steps", "foot",
+                                "n_mismatches", "mean_force", "mean_abs_offset"])
+            self._slip_csv_initialised = True
+        with self.slip_csv_path.open("a", newline="") as fh:
+            w = csv.writer(fh)
+            for foot_idx in range(c.shape[0]):
+                n = int(c[foot_idx])
+                if n == 0:
+                    continue
+                w.writerow([update_idx, total_steps, foot_idx, n,
+                            f"{f[foot_idx] / n:.6g}",
+                            f"{o[foot_idx] / n:.6g}"])
 
     def save_reward_curve(self, plot_dir: str, total_steps: int):
         """Save reward curve plot (same as rl/callbacks.py)."""

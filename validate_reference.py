@@ -528,7 +528,7 @@ def _check_torque_feasibility(
         abs_tau[k] = np.abs(tau_k)
 
     hardware_limits = np.asarray(go2_config.robot_data.joint_efforts, dtype=np.float64)
-    planning_limits = 0.8 * hardware_limits
+    planning_limits = 0.5 * hardware_limits
 
     hardware_viol = abs_tau > (hardware_limits + 1e-6)
     planning_viol = abs_tau > (planning_limits + 1e-6)
@@ -537,7 +537,7 @@ def _check_torque_feasibility(
     n_planning_viol = int(np.count_nonzero(planning_viol))
 
     details.append(f"hardware torque limit violations: {n_hardware_viol}")
-    details.append(f"planning-safe torque violations (80%): {n_planning_viol}")
+    details.append(f"planning-safe torque violations (50%): {n_planning_viol}")
 
     peak_per_joint = np.max(abs_tau, axis=0)
     for j in range(12):

@@ -85,8 +85,8 @@ $ISAAC_PYTHON -m rl_isaac.train \
     --headless --enable_cameras \
     $CONTACT_SEQ_FLAG
 
-# ── Step 2: Evaluate best model (Isaac Lab PhysX) ──
-echo "[2/3] Evaluating best model (Isaac Lab)..."
+# ── Step 2: Evaluate best model (Isaac Lab PhysX) — clean deterministic ──
+echo "[2/4] Evaluating best model (clean, deterministic)..."
 MODEL_PATH="$OUTPUT_DIR/best_model"
 
 EVAL_CONTACT_FLAG=""
@@ -100,11 +100,78 @@ $ISAAC_PYTHON -m rl_isaac.evaluate \
     --grf-traj "$GRF_TRAJ" \
     --joint-vel-traj "$JOINT_VEL_TRAJ" \
     --output-video "$OUTPUT_DIR/rl_tracking.mp4" \
+    --output-json "$OUTPUT_DIR/eval_policy.json" \
     --headless --enable_cameras \
     $EVAL_CONTACT_FLAG 2>&1 | tee -a "$LOG_FILE"
 
-# ── Step 3: Generate comparison frames ──
-echo "[3/3] Generating comparison frames..."
+# ── Step 3: Robustness sanity (20-seed DR sweep) ──
+N_DR_SEEDS=${N_DR_SEEDS:-20}
+echo ""
+echo "[3/4] Robustness sweep ($N_DR_SEEDS seeds, DR enabled)..."
+DR_OUT="$OUTPUT_DIR/dr_seeds"
+mkdir -p "$DR_OUT"
+for ((SEED=0; SEED<N_DR_SEEDS; SEED++)); do
+    SEED_LOG="$DR_OUT/seed_${SEED}.stdout"
+    $ISAAC_PYTHON -m rl_isaac.evaluate \
+        --model-path "$MODEL_PATH" \
+        --state-traj "$STATE_TRAJ" \
+        --grf-traj "$GRF_TRAJ" \
+        --joint-vel-traj "$JOINT_VEL_TRAJ" \
+        --output-video "$DR_OUT/dr_seed_${SEED}.mp4" \
+        --output-json  "$DR_OUT/dr_seed_${SEED}.json" \
+        --enable-dr --seed "$SEED" \
+        --headless --enable_cameras \
+        $EVAL_CONTACT_FLAG > "$SEED_LOG" 2>&1
+done
+$ISAAC_PYTHON - <<PY 2>&1 | tee -a "$LOG_FILE"
+import json, os
+out_dir = "$DR_OUT"
+clean_p = "$OUTPUT_DIR/eval_policy.json"
+n_seeds = $N_DR_SEEDS
+clean = json.load(open(clean_p)) if os.path.exists(clean_p) else None
+n_pass = 0
+n_total = 0
+print()
+print("=" * 70)
+print("EVAL SUMMARY")
+print("=" * 70)
+if clean is not None:
+    cs = "PASS" if (clean["frames_tracked"] == clean["max_phase"] and clean["termination_cause"] == "trunc") else "FAIL"
+    print(f"clean (DR off, seed=0): {clean['frames_tracked']}/{clean['max_phase']}  cause={clean['termination_cause']}  rms_ori={clean['rms_ori']:.4f}  [{cs}]")
+print()
+print(f"DR sweep ({n_seeds} seeds):")
+print(f"  {'seed':>4}  {'frames':>8}  {'cause':>10}  {'rms_ori':>8}  status")
+fails = []
+for s in range(n_seeds):
+    p = f"{out_dir}/dr_seed_{s}.json"
+    if not os.path.exists(p):
+        print(f"  {s:>4}  MISSING")
+        continue
+    r = json.load(open(p))
+    n_total += 1
+    ok = (r["frames_tracked"] == r["max_phase"]) and r["termination_cause"] == "trunc"
+    if ok: n_pass += 1
+    else: fails.append(s)
+    print(f"  {s:>4}  {r['frames_tracked']:>3}/{r['max_phase']:<3}  {str(r['termination_cause']):>10}  {r['rms_ori']:.4f}  {'PASS' if ok else 'FAIL'}")
+print()
+rate = (n_pass / n_total) if n_total else 0.0
+# Wilson 95% CI lower bound for a binomial — quick heuristic robustness number.
+import math
+if n_total:
+    z = 1.96
+    p_hat = rate
+    denom = 1 + z*z/n_total
+    centre = (p_hat + z*z/(2*n_total)) / denom
+    half = (z * math.sqrt(p_hat*(1-p_hat)/n_total + z*z/(4*n_total*n_total))) / denom
+    lo, hi = max(0.0, centre - half), min(1.0, centre + half)
+    print(f"Robustness: {n_pass}/{n_total} pass  ({rate:.1%}, 95% CI [{lo:.1%}, {hi:.1%}])")
+if fails:
+    print(f"Failed seeds: {fails}")
+print("=" * 70)
+PY
+
+# ── Step 4: Generate comparison frames ──
+echo "[4/4] Generating comparison frames..."
 if [ -f "$PLANNED_VIDEO" ]; then
     $ISAAC_PYTHON -m rl_isaac.generate_frames \
         --planned "$PLANNED_VIDEO" \

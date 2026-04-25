@@ -11,15 +11,15 @@ import torch
 # ---------------------------------------------------------------------------
 # Actuation constants (Go2-tuned)
 # ---------------------------------------------------------------------------
-KP = 25.0
-KD = 1.5
+KP = 50.0
+KD = 3.0
 TORQUE_LIMITS = torch.tensor([
     23.7, 23.7, 45.43,  # FL
     23.7, 23.7, 45.43,  # FR
     23.7, 23.7, 45.43,  # RL
     23.7, 23.7, 45.43,  # RR
 ], dtype=torch.float32)
-ACTION_LIMIT = 0.2
+ACTION_LIMIT = 0.4
 
 # ---------------------------------------------------------------------------
 # Reward sigmas and weights (OPT-Mimic Eq. 16, Go2-tuned)
@@ -41,6 +41,12 @@ W_TORQUE = 0.1
 # ---------------------------------------------------------------------------
 TERM_MULTIPLIER = 2.5
 CONTACT_GRACE_WINDOW = 12  # 240ms at 50Hz
+
+# Phase-0 instrumentation: stable order for CSV column layout.
+TERM_CAUSE_NAMES = (
+    "thresh_pos", "thresh_ori", "thresh_joint", "thresh_rate", "thresh_torque",
+    "body", "contact", "nan", "trunc",
+)
 
 
 def quat_error_vec(q_ref: torch.Tensor, q_actual: torch.Tensor) -> torch.Tensor:
@@ -93,17 +99,25 @@ def compute_rewards(te: dict[str, torch.Tensor]) -> torch.Tensor:
     }
 
 
+def tracking_termination_breakdown(
+    te: dict[str, torch.Tensor], first_step: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    """Per-cause masks for the OPT-Mimic threshold terminations."""
+    return {
+        "thresh_pos": te["pos_error"] > TERM_MULTIPLIER * SIGMA_POS,
+        "thresh_ori": te["ori_error"] > TERM_MULTIPLIER * SIGMA_ORI,
+        "thresh_joint": te["joint_error"] > TERM_MULTIPLIER * SIGMA_JOINT,
+        "thresh_rate": (~first_step) & (te["action_rate"] > TERM_MULTIPLIER * SIGMA_SMOOTH),
+        "thresh_torque": te["max_torque"] > TERM_MULTIPLIER * SIGMA_TORQUE,
+    }
+
+
 def check_tracking_termination(
     te: dict[str, torch.Tensor], first_step: torch.Tensor,
 ) -> torch.Tensor:
     """OPT-Mimic Sec III-C.4: terminate if any error > 2.5 * sigma."""
-    return (
-        (te["pos_error"] > TERM_MULTIPLIER * SIGMA_POS)
-        | (te["ori_error"] > TERM_MULTIPLIER * SIGMA_ORI)
-        | (te["joint_error"] > TERM_MULTIPLIER * SIGMA_JOINT)
-        | ((~first_step) & (te["action_rate"] > TERM_MULTIPLIER * SIGMA_SMOOTH))
-        | (te["max_torque"] > TERM_MULTIPLIER * SIGMA_TORQUE)
-    )
+    m = tracking_termination_breakdown(te, first_step)
+    return m["thresh_pos"] | m["thresh_ori"] | m["thresh_joint"] | m["thresh_rate"] | m["thresh_torque"]
 
 
 def check_body_contact(
@@ -116,16 +130,48 @@ def check_body_contact(
     return (non_foot > 1.0).any(dim=-1)
 
 
+def contact_mismatch_diagnostics(
+    net_forces: torch.Tensor, foot_ids: torch.Tensor,
+    ref_contact: torch.Tensor, near_transition: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    """Per-foot contact-mismatch view used by both termination and slip logging.
+
+    Returns dict with:
+      mismatch_per_foot: (n_envs, 4) bool — true where actual ≠ expected and
+                        we are NOT inside the ±CONTACT_GRACE_WINDOW around a
+                        scheduled transition. Gated by has_info.
+      actual_force_per_foot: (n_envs, 4) float — peak |force| per foot over
+                        the contact-sensor history window.
+      any_mismatch: (n_envs,) bool — true if any foot mismatched (used for
+                        termination).
+    """
+    n_envs = net_forces.shape[0]
+    device = net_forces.device
+    has_info = ref_contact[:, 0] >= 0
+    if not has_info.any():
+        zeros_b = torch.zeros(n_envs, 4, dtype=torch.bool, device=device)
+        zeros_f = torch.zeros(n_envs, 4, dtype=net_forces.dtype, device=device)
+        return {
+            "mismatch_per_foot": zeros_b,
+            "actual_force_per_foot": zeros_f,
+            "any_mismatch": torch.zeros(n_envs, dtype=torch.bool, device=device),
+        }
+    foot_forces = torch.max(torch.norm(net_forces[:, :, foot_ids], dim=-1), dim=1)[0]
+    actual = foot_forces > 1.0
+    expected = ref_contact > 0.5
+    mismatch = (actual != expected) & (near_transition < 0.5) & has_info.unsqueeze(-1)
+    return {
+        "mismatch_per_foot": mismatch,
+        "actual_force_per_foot": foot_forces,
+        "any_mismatch": mismatch.any(dim=-1),
+    }
+
+
 def check_contact_mismatch(
     net_forces: torch.Tensor, foot_ids: torch.Tensor,
     ref_contact: torch.Tensor, near_transition: torch.Tensor,
 ) -> torch.Tensor:
     """Terminate on foot contact mismatch outside the grace window."""
-    has_info = ref_contact[:, 0] >= 0
-    if not has_info.any():
-        return torch.zeros(net_forces.shape[0], dtype=torch.bool, device=net_forces.device)
-    foot_forces = torch.max(torch.norm(net_forces[:, :, foot_ids], dim=-1), dim=1)[0]
-    actual = foot_forces > 1.0
-    expected = ref_contact > 0.5
-    mismatch = (actual != expected) & (near_transition < 0.5)
-    return has_info & mismatch.any(dim=-1)
+    return contact_mismatch_diagnostics(
+        net_forces, foot_ids, ref_contact, near_transition,
+    )["any_mismatch"]

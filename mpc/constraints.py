@@ -341,8 +341,13 @@ def torque_feasibility_constraints(
     # tau = M_jb · a_base + M_jj · qddot_j + h_j - (J^T·F)_j
     tau_joints = M_jb @ a_base + M_jj @ q_ddot_j + h_j - JtF_j
 
-    # 80% of actual limits to leave headroom for PD tracking corrections
-    torque_limits = go2_config.robot_data.joint_efforts * 0.8
+    # 50% of actual limits to leave headroom for PD tracking corrections.
+    # Tightened from 0.8 → 0.5 in backflip loop Iteration 1 (Tier B #15):
+    # iter_12 reference report showed FF saturation at the 0.80 bound on
+    # multiple joints, leaving only 20% of effort_limit for the policy to
+    # correct deviations. Tracking failed at 37/55 frames with a body-contact
+    # termination consistent with takeoff under-thrust due to PD lag.
+    torque_limits = go2_config.robot_data.joint_efforts * 0.5
 
     return tau_joints, -torque_limits, torque_limits
 
