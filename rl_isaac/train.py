@@ -11,6 +11,7 @@ Usage (inside Docker):
 from __future__ import annotations
 
 import argparse
+import re
 import time
 from pathlib import Path
 
@@ -26,6 +27,16 @@ parser.add_argument("--total-timesteps", type=int, default=50_000_000)
 parser.add_argument("--num-envs", type=int, default=4096)
 parser.add_argument("--n-epochs", type=int, default=5)
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--use-wandb", action="store_true",
+                    help="Enable Weights & Biases logging (optional).")
+parser.add_argument("--wandb-project", type=str, default="lm-ctrl",
+                    help="W&B project name.")
+parser.add_argument("--wandb-entity", type=str, default="",
+                    help="W&B entity/team name (optional).")
+parser.add_argument("--wandb-run-name", type=str, default="",
+                    help="W&B run display name (optional).")
+parser.add_argument("--wandb-mode", type=str, default="online", choices=["online", "offline", "disabled"],
+                    help="W&B mode: online, offline, or disabled.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -77,6 +88,7 @@ def train(args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     logger = TrainingLogger(output_dir, args.total_timesteps, args.num_envs, 0)
+    wandb_run = None
 
     logger.info("Creating environment...")
     cfg = Go2TrackingEnvCfg()
@@ -100,6 +112,48 @@ def train(args):
     ppo_cfg.num_mini_batches = max(1, samples_per_update // 5000)
     logger.info(f"Training: {args.total_timesteps} steps, {n_updates} updates, "
                 f"{ppo_cfg.num_learning_epochs} epochs, {ppo_cfg.num_mini_batches} minibatches")
+
+    if args.use_wandb and args.wandb_mode != "disabled":
+        try:
+            import wandb  # type: ignore
+            traj_name = Path(args.state_traj).resolve().parent.name
+            iter_match = re.search(r"iter_(\d+)", Path(args.state_traj).name)
+            iter_suffix = f"-iter{iter_match.group(1)}" if iter_match else ""
+            default_run_name = f"{traj_name}{iter_suffix}"
+            wandb_kwargs = {
+                "project": args.wandb_project,
+                "name": args.wandb_run_name or default_run_name,
+                "mode": args.wandb_mode,
+                "config": {
+                    "seed": args.seed,
+                    "total_timesteps": args.total_timesteps,
+                    "num_envs": num_envs,
+                    "n_epochs": ppo_cfg.num_learning_epochs,
+                    "n_steps": n_steps,
+                    "samples_per_update": samples_per_update,
+                    "n_updates": n_updates,
+                    "num_mini_batches": ppo_cfg.num_mini_batches,
+                    "state_traj": args.state_traj,
+                    "grf_traj": args.grf_traj,
+                    "joint_vel_traj": args.joint_vel_traj,
+                    "contact_sequence": args.contact_sequence,
+                    "ppo_cfg": vars(ppo_cfg),
+                    "env_cfg": {
+                        "decimation": cfg.decimation,
+                        "sim_dt": cfg.sim.dt,
+                        "scene_env_spacing": cfg.scene.env_spacing,
+                    },
+                },
+                "dir": str(output_dir),
+            }
+            if args.wandb_entity:
+                wandb_kwargs["entity"] = args.wandb_entity
+            wandb_run = wandb.init(**wandb_kwargs)
+            logger.info(f"W&B enabled: project={args.wandb_project} mode={args.wandb_mode}")
+        except ImportError:
+            logger.info("W&B requested but package not installed. Install with `pip install wandb`.")
+        except Exception as exc:
+            logger.info(f"W&B initialization failed; continuing without W&B. Error: {exc}")
 
     actor_critic = OPTMimicActorCritic(
         num_obs=33, num_privileged_obs=0, num_actions=12,
@@ -181,6 +235,31 @@ def train(args):
             entropy=ppo_metrics["entropy"], ent_coef=ent_coef,
             dt=time.time() - t_update, term_info=log_extras,
         )
+        if wandb_run is not None:
+            wandb.log({
+                "train/ep_return": mean_ep_return,
+                "train/ep_length": mean_ep_length,
+                "reward/r_pos": log_extras.get("r_pos", 0.0),
+                "reward/r_ori": log_extras.get("r_ori", 0.0),
+                "reward/r_joint": log_extras.get("r_joint", 0.0),
+                "reward/r_smooth": log_extras.get("r_smooth", 0.0),
+                "reward/r_torque": log_extras.get("r_torque", 0.0),
+                "algo/policy_loss": ppo_metrics["pg_loss"],
+                "algo/value_loss": ppo_metrics["vf_loss"],
+                "algo/approx_kl": ppo_metrics["approx_kl"],
+                "algo/clip_frac": ppo_metrics["clip_frac"],
+                "algo/entropy": ppo_metrics["entropy"],
+                "algo/entropy_coef": ent_coef,
+                "algo/lr": optimizer.param_groups[0]["lr"],
+                "diag/grad_norm": grad_norm,
+                "diag/action_std_mean": actor_critic.action_std.mean().item(),
+                "diag/term_thresh": log_extras.get("term_thresh", 0.0),
+                "diag/term_body": log_extras.get("term_body", 0.0),
+                "diag/term_contact": log_extras.get("term_contact", 0.0),
+                "diag/term_nan": log_extras.get("term_nan", 0.0),
+                "diag/term_trunc": log_extras.get("term_trunc", 0.0),
+                "perf/update_dt_sec": time.time() - t_update,
+            }, step=total_steps)
         # Phase-0.1 instrumentation: drain per-cause × per-phase termination
         # histogram from the env and append it to term_breakdown.csv. Drain
         # AFTER log_update so the rolled-up counts that update_idx logged are
@@ -198,6 +277,8 @@ def train(args):
         if current_ep_metric > best_ep_metric:
             best_ep_metric = current_ep_metric
             save_checkpoint(output_dir / "best_model", actor_critic, obs_normalizer, total_steps)
+            if wandb_run is not None:
+                wandb.log({"checkpoint/best_step": total_steps}, step=total_steps)
         if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:
             save_checkpoint(output_dir / "checkpoints" / f"step_{total_steps}", actor_critic, obs_normalizer, total_steps)
         if total_steps >= next_video_step:
@@ -211,6 +292,24 @@ def train(args):
     logger.info(f"Best (ep_length, ep_return): ({best_ep_metric[0]:.2f}, {best_ep_metric[1]:.2f})")
     save_checkpoint(output_dir / "final_model", actor_critic, obs_normalizer, total_steps)
     logger.save_reward_curve(str(output_dir), total_steps)
+    if wandb_run is not None:
+        wandb.log({
+            "train/final_total_steps": total_steps,
+            "train/best_ep_length": best_ep_metric[0],
+            "train/best_ep_return": best_ep_metric[1],
+        }, step=total_steps)
+        reward_curve_path = output_dir / "reward_curve.png"
+        if reward_curve_path.exists():
+            wandb.log({"plots/reward_curve_final": wandb.Image(str(reward_curve_path))}, step=total_steps)
+        for artifact_path in [
+            output_dir / "experiment.log",
+            output_dir / "term_breakdown.csv",
+            output_dir / "phase_errors.csv",
+            output_dir / "slip_log.csv",
+        ]:
+            if artifact_path.exists():
+                wandb.save(str(artifact_path))
+        wandb.finish()
     # Final best_model.mp4 render removed: redundant with run_smoke_test.sh
     # Step [2/4] (clean rl_tracking.mp4) and Step [3/4] (DR-on dr_seeds/*.mp4).
     # Periodic runs/step_<N>.mp4 files still show training progression.

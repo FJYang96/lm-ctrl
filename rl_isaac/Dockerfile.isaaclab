@@ -14,3 +14,6 @@ RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install --no-cache-dir \
     liecasadi \
     adam-robotics \
     git+https://github.com/FJYang96/gym-quadruped.git
+
+# Keep W&B in a separate layer to maximize cache reuse for existing deps.
+RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install --no-cache-dir wandb

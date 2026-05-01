@@ -20,13 +20,22 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PYTHON="/home/aryanroy/miniconda3/bin/python3"
+# SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# PYTHON="/home/aryanroy/miniconda3/bin/python3"
 
 # Non-interactive matplotlib
+# conda init
+# conda activate quadruped_pympc_ros2_jazzy_env
+source .env
 export MPLBACKEND=Agg
 # Use EGL for headless OpenGL rendering (avoids gladLoadGL errors)
 export MUJOCO_GL=egl
+# Single-thread to avoid deadlocks in OpenBLAS/MUMPS
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 cd "$SCRIPT_DIR"
-exec "$PYTHON" llm_main.py "$@"
+exec python llm_main.py "$@"

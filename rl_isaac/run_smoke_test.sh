@@ -11,6 +11,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 IMAGE_NAME="lm-ctrl-isaaclab:latest"
 
 # If not inside the container, ensure image exists and re-launch inside Docker
@@ -20,7 +21,14 @@ if [ ! -d "/workspace/isaaclab" ]; then
         docker build -t "$IMAGE_NAME" -f rl_isaac/Dockerfile.isaaclab .
     fi
     echo "Launching inside Docker..."
-    exec docker run --gpus all -v "$(pwd)":/workspace/lm-ctrl --entrypoint bash \
+    DOCKER_ENV_ARGS=()
+    if [ -f "$REPO_ROOT/.env" ]; then
+        DOCKER_ENV_ARGS+=(--env-file "$REPO_ROOT/.env")
+    fi
+    exec docker run --gpus all --network host \
+        -v "$REPO_ROOT":/workspace/lm-ctrl \
+        "${DOCKER_ENV_ARGS[@]}" \
+        --entrypoint bash \
         "$IMAGE_NAME" /workspace/lm-ctrl/rl_isaac/run_smoke_test.sh "$@"
 fi
 
@@ -71,6 +79,26 @@ fi
 
 export PYTHONPATH="/workspace/lm-ctrl:${PYTHONPATH}"
 
+# Optional W&B wiring: credentials come from env (e.g., .env via --env-file).
+WANDB_FLAGS=""
+if [ -n "${WANDB_API_KEY:-}" ]; then
+    WANDB_PROJECT="${WANDB_PROJECT:-lm-ctrl}"
+    WANDB_MODE="${WANDB_MODE:-online}"
+    WANDB_ENTITY_FLAG=""
+    if [ -n "${WANDB_ENTITY:-}" ]; then
+        WANDB_ENTITY_FLAG="--wandb-entity ${WANDB_ENTITY}"
+    fi
+    WANDB_RUN_NAME="${WANDB_RUN_NAME:-}"
+    WANDB_RUN_NAME_FLAG=""
+    if [ -n "$WANDB_RUN_NAME" ]; then
+        WANDB_RUN_NAME_FLAG="--wandb-run-name ${WANDB_RUN_NAME}"
+    fi
+    WANDB_FLAGS="--use-wandb --wandb-project ${WANDB_PROJECT} --wandb-mode ${WANDB_MODE} ${WANDB_ENTITY_FLAG} ${WANDB_RUN_NAME_FLAG}"
+    echo "W&B enabled (project=$WANDB_PROJECT, mode=$WANDB_MODE)"
+else
+    echo "W&B disabled (WANDB_API_KEY not set)"
+fi
+
 # ── Step 1: Train (includes periodic videos every 1M steps) ──
 echo "[1/4] Training OPT-Mimic tracking policy (Isaac Lab PPO)..."
 echo "      Videos rendered every 1M steps (DR-on snapshots, unseeded)."
@@ -83,6 +111,7 @@ $ISAAC_PYTHON -m rl_isaac.train \
     --total-timesteps "$TIMESTEPS" \
     --num-envs "$NUM_ENVS" \
     --headless --enable_cameras \
+    $WANDB_FLAGS \
     $CONTACT_SEQ_FLAG
 
 # ── Step 2: Evaluate best model (Isaac Lab PhysX) — clean deterministic ──

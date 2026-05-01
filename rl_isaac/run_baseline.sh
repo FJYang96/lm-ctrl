@@ -9,6 +9,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 IMAGE_NAME="lm-ctrl-isaaclab:latest"
 
 # If not inside the container, ensure image exists and re-launch inside Docker
@@ -18,7 +19,14 @@ if [ ! -d "/workspace/isaaclab" ]; then
         docker build -t "$IMAGE_NAME" -f rl_isaac/Dockerfile.isaaclab .
     fi
     echo "Launching inside Docker..."
-    exec docker run --gpus all -v "$(pwd)":/workspace/lm-ctrl --entrypoint bash \
+    DOCKER_ENV_ARGS=()
+    if [ -f "$REPO_ROOT/.env" ]; then
+        DOCKER_ENV_ARGS+=(--env-file "$REPO_ROOT/.env")
+    fi
+    exec docker run --gpus all --network host \
+        -v "$REPO_ROOT":/workspace/lm-ctrl \
+        "${DOCKER_ENV_ARGS[@]}" \
+        --entrypoint bash \
         "$IMAGE_NAME" /workspace/lm-ctrl/rl_isaac/run_baseline.sh "$@"
 fi
 
@@ -34,7 +42,7 @@ echo "Cleaned rl_isaac/eval_output/"
 GPU_ID=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits 2>/dev/null \
     | sort -t',' -k2 -nr | head -1 | cut -d',' -f1 | tr -d ' ')
 GPU_ID=${GPU_ID:-0}
-export CUDA_VISIBLE_DEVICES=$GPU_ID
+# export CUDA_VISIBLE_DEVICES=$GPU_ID
 echo "Selected GPU $GPU_ID"
 
 ISAAC_PYTHON="${ISAAC_PYTHON:-/workspace/isaaclab/_isaac_sim/python.sh}"
