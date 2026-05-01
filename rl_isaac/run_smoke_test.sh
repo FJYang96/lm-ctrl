@@ -78,6 +78,7 @@ if [ -f "$CONTACT_SEQ" ]; then
 fi
 
 export PYTHONPATH="/workspace/lm-ctrl:${PYTHONPATH}"
+export WANDB_START_METHOD="${WANDB_START_METHOD:-thread}"
 
 # Optional W&B wiring: credentials come from env (e.g., .env via --env-file).
 WANDB_FLAGS=""
@@ -94,7 +95,19 @@ if [ -n "${WANDB_API_KEY:-}" ]; then
         WANDB_RUN_NAME_FLAG="--wandb-run-name ${WANDB_RUN_NAME}"
     fi
     WANDB_FLAGS="--use-wandb --wandb-project ${WANDB_PROJECT} --wandb-mode ${WANDB_MODE} ${WANDB_ENTITY_FLAG} ${WANDB_RUN_NAME_FLAG}"
-    echo "W&B enabled (project=$WANDB_PROJECT, mode=$WANDB_MODE)"
+    KEY_LEN=${#WANDB_API_KEY}
+    KEY_LAST4="${WANDB_API_KEY: -4}"
+    echo "W&B preflight:"
+    echo "  API key present: yes (len=${KEY_LEN}, suffix=...${KEY_LAST4})"
+    echo "  Project: ${WANDB_PROJECT}"
+    echo "  Entity: ${WANDB_ENTITY:-<default account>}"
+    echo "  Mode: ${WANDB_MODE}"
+    echo "  start_method: ${WANDB_START_METHOD}"
+    if [ -n "$WANDB_RUN_NAME" ]; then
+        echo "  Run name override: ${WANDB_RUN_NAME}"
+    else
+        echo "  Run name override: <auto from trajectory>"
+    fi
 else
     echo "W&B disabled (WANDB_API_KEY not set)"
 fi

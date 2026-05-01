@@ -115,6 +115,10 @@ def train(args):
 
     if args.use_wandb and args.wandb_mode != "disabled":
         try:
+            # Work around W&B git ownership issues in Docker bind mounts by
+            # explicitly setting program_relpath and disabling git/code capture.
+            os.environ.setdefault("WANDB_PROGRAM_RELPATH", "rl_isaac/train.py")
+            os.environ.setdefault("WANDB_START_METHOD", "thread")
             import wandb  # type: ignore
             traj_name = Path(args.state_traj).resolve().parent.name
             iter_match = re.search(r"iter_(\d+)", Path(args.state_traj).name)
@@ -124,6 +128,16 @@ def train(args):
                 "project": args.wandb_project,
                 "name": args.wandb_run_name or default_run_name,
                 "mode": args.wandb_mode,
+                # Explicitly set program_relpath to bypass W&B's git-based
+                # inference path that can fail in Docker bind mounts with
+                # Git "dubious ownership" checks.
+                "settings": wandb.Settings(
+                    program_relpath=os.environ["WANDB_PROGRAM_RELPATH"],
+                    disable_git=True,
+                    disable_code=True,
+                    start_method=os.environ["WANDB_START_METHOD"],
+                ),
+                "save_code": False,
                 "config": {
                     "seed": args.seed,
                     "total_timesteps": args.total_timesteps,
@@ -150,6 +164,16 @@ def train(args):
                 wandb_kwargs["entity"] = args.wandb_entity
             wandb_run = wandb.init(**wandb_kwargs)
             logger.info(f"W&B enabled: project={args.wandb_project} mode={args.wandb_mode}")
+            logger.info(
+                "W&B run started: "
+                f"entity={wandb_run.entity} project={wandb_run.project} "
+                f"name={wandb_run.name} id={wandb_run.id}"
+            )
+            logger.info(f"W&B start_method: {os.environ['WANDB_START_METHOD']}")
+            if getattr(wandb_run, "url", None):
+                logger.info(f"W&B URL: {wandb_run.url}")
+            # Emit an explicit startup marker so users can verify first sync.
+            wandb.log({"system/wandb_started": 1}, step=0)
         except ImportError:
             logger.info("W&B requested but package not installed. Install with `pip install wandb`.")
         except Exception as exc:

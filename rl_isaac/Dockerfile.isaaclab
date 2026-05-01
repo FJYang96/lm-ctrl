@@ -17,3 +17,7 @@ RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install --no-cache-dir \
 
 # Keep W&B in a separate layer to maximize cache reuse for existing deps.
 RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install --no-cache-dir wandb
+
+# W&B/protobuf compatibility fix:
+# some Isaac stack deps can pull protobuf>=4, which breaks older generated *_pb2 code.
+RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install --no-cache-dir "protobuf==3.20.3"
