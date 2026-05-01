@@ -79,7 +79,8 @@ class FeedbackPipeline:
     def run_pipeline(self, command: str) -> dict[str, Any]:
         """Run the complete LLM feedback pipeline for a given command."""
         logger.info(f"Pipeline started: '{command}'")
-        run_dir = self.results_dir / f"{command.replace(' ', '_')}_{int(time.time())}"
+        slug = command.replace(' ', '_')[:180]
+        run_dir = self.results_dir / f"{slug}_{int(time.time())}"
         run_dir.mkdir(exist_ok=True)
 
         self.iteration_summaries = []
