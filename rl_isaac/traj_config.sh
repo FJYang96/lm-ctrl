@@ -7,8 +7,8 @@
 #   ./rl_isaac/evaluate_policy.sh
 # ============================================================
 
-TRAJ_DIR="results/llm_iterations/sit_1777434581"
-ITER_NUM=1
+TRAJ_DIR="results/llm_iterations/jump_180"
+ITER_NUM=18
 
 # ── Resolve file paths from TRAJ_DIR + ITER_NUM ──
 STATE_TRAJ="$TRAJ_DIR/state_traj_iter_${ITER_NUM}.npy"

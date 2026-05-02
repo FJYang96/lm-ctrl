@@ -6,6 +6,9 @@ temporarily loading the best model weights and restoring them afterward.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import torch
@@ -24,6 +27,63 @@ def save_checkpoint(path: Path, actor_critic, obs_normalizer, step: int):
     }, path / "checkpoint.pt")
 
 
+def render_video_external(
+    output_dir: Path,
+    total_steps: int,
+    state_traj: str,
+    grf_traj: str,
+    joint_vel_traj: str,
+    contact_sequence: str = "",
+    logger=None,
+    label: str = "",
+) -> None:
+    """Render a video in a separate process via rl_isaac.evaluate.
+
+    This avoids mutating the training env and avoids creating a second
+    simulation context in-process.
+    """
+    best_model_dir = output_dir / "best_model"
+    best_ckpt = best_model_dir / "checkpoint.pt"
+    if not best_ckpt.exists():
+        if logger:
+            logger.info("  No best model checkpoint yet, skipping video.")
+        return
+
+    video_dir = output_dir / "runs"
+    video_dir.mkdir(parents=True, exist_ok=True)
+    stem = label if label else f"step_{total_steps:07d}"
+    video_path = video_dir / f"{stem}.mp4"
+    json_path = video_dir / f"{stem}.json"
+
+    cmd = [
+        sys.executable, "-m", "rl_isaac.evaluate",
+        "--model-path", str(best_model_dir),
+        "--state-traj", state_traj,
+        "--grf-traj", grf_traj,
+        "--joint-vel-traj", joint_vel_traj,
+        "--output-video", str(video_path),
+        "--output-json", str(json_path),
+        "--headless", "--enable_cameras",
+    ]
+    if contact_sequence:
+        cmd.extend(["--contact-sequence", contact_sequence])
+
+    env = os.environ.copy()
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    env["PYTHONPATH"] = f"{repo_root}:{env.get('PYTHONPATH', '')}"
+
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if proc.returncode != 0:
+        if logger:
+            logger.info(f"  Video render failed (exit={proc.returncode})")
+            stderr_tail = "\n".join(proc.stderr.splitlines()[-20:])
+            if stderr_tail:
+                logger.info(stderr_tail)
+        return
+    if logger:
+        logger.info(f"  Video saved: {video_path}")
+
+
 def render_video(
     env: Go2TrackingEnv,
     actor_critic: OPTMimicActorCritic,
@@ -32,21 +92,18 @@ def render_video(
     total_steps: int,
     logger=None,
     label: str = "",
-) -> torch.Tensor:
+) -> None:
     """Render best-model video showing one robot from starting position.
 
     Temporarily loads best model, sets env 0 to phase 0 with no DR,
     zooms camera onto env 0, runs deterministic rollout, captures frames,
-    restores training weights, resets env.
-
-    Returns new obs tensor after env reset.
+    restores model/normalizer weights.
     """
     best_path = output_dir / "best_model" / "checkpoint.pt"
     if not best_path.exists():
         if logger:
             logger.info("  No best model checkpoint yet, skipping video.")
-        obs_dict, _ = env.reset()
-        return obs_dict["policy"]
+        return
 
     train_ac_state = {k: v.clone() for k, v in actor_critic.state_dict().items()}
     train_norm_state = {k: v.clone() for k, v in obs_normalizer.state_dict().items()}
@@ -139,5 +196,3 @@ def render_video(
     if was_training:
         actor_critic.train()
         obs_normalizer.train()
-    obs_dict, _ = env.reset()
-    return obs_dict["policy"]

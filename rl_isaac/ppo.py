@@ -48,14 +48,15 @@ def ppo_update(
     metrics = {"pg_loss": 0.0, "vf_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0, "clip_frac": 0.0}
     n_updates = 0
 
+    adv_norm = (adv_flat - adv_flat.mean()) / (adv_flat.std() + 1e-8)
+
     for _ in range(cfg.num_learning_epochs):
         perm = torch.randperm(total_samples, device=device)
         for mb in range(n_minibatches):
             idx = perm[mb * batch_size:(mb + 1) * batch_size]
             mb_obs, mb_act = obs_flat[idx], act_flat[idx]
             mb_old_lp, mb_ret = lp_flat[idx], ret_flat[idx]
-            mb_adv = adv_flat[idx]
-            mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+            mb_adv = adv_norm[idx]
 
             actor_critic._update_distribution(mb_obs)
             new_lp = actor_critic.get_actions_log_prob(mb_act)

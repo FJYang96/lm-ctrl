@@ -91,6 +91,8 @@ class TrainingLogger:
         ent_coef: float,
         dt: float,
         term_info: dict | None = None,
+        episodes_finished: int | None = None,
+        term_trunc_rate: float | None = None,
     ):
         self.reward_history.append(ep_return)
         self.timestep_history.append(total_steps)
@@ -107,6 +109,8 @@ class TrainingLogger:
                 f"term: thresh={t_thresh:.0f} body={t_body:.0f} "
                 f"cntct={t_contact:.0f} nan={t_nan:.0f} trunc={t_trunc:.0f}"
             )
+            if episodes_finished is not None and term_trunc_rate is not None:
+                term_str += f" done={episodes_finished:d} trunc_rate={term_trunc_rate:.3f}"
 
         msg = (
             f"[step {total_steps:>9,}  update {update_idx + 1:>5}]  "

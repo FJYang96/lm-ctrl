@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import re
 import time
+from collections import deque
 from pathlib import Path
 
 from isaaclab.app import AppLauncher
@@ -37,6 +38,12 @@ parser.add_argument("--wandb-run-name", type=str, default="",
                     help="W&B run display name (optional).")
 parser.add_argument("--wandb-mode", type=str, default="online", choices=["online", "offline", "disabled"],
                     help="W&B mode: online, offline, or disabled.")
+parser.add_argument(
+    "--video-render-interval",
+    type=int,
+    default=5_000_000,
+    help="Environment steps between periodic best-model training videos (runs/step_*.mp4).",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -46,7 +53,7 @@ simulation_app = app_launcher.app
 # Ensure repo root is on sys.path (must be AFTER AppLauncher which resets sys.path)
 # AppLauncher may register a 'utils' namespace package that shadows ours,
 # so we force-load our utils package into sys.modules.
-import os, sys, types, importlib, importlib.util  # noqa: E401,E402
+import importlib, importlib.util, os, sys, types  # noqa: E401,E402,I001
 _repo_root = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, _repo_root)
 for _mod_name, _mod_file in [
@@ -71,7 +78,7 @@ for mod_name, attrs in [("mujoco.viewer", {"Handle": type("Handle", (), {})}), (
 if "glfw.library" not in sys.modules:
     sys.modules["glfw.library"] = types.ModuleType("glfw.library")
 
-import numpy as np  # noqa: E402
+import numpy as np  # noqa: E402,I001
 import torch  # noqa: E402
 from rsl_rl.modules import EmpiricalNormalization  # noqa: E402
 
@@ -81,7 +88,7 @@ from rl_isaac.network import OPTMimicActorCritic  # noqa: E402
 from rl_isaac.train_cfg import OPTMimicPPOCfg  # noqa: E402
 from rl_isaac.callbacks import TrainingLogger  # noqa: E402
 from rl_isaac.ppo import compute_gae, ppo_update  # noqa: E402
-from rl_isaac.video import save_checkpoint, render_video  # noqa: E402
+from rl_isaac.video import save_checkpoint, render_video_external  # noqa: E402
 
 
 def train(args):
@@ -151,6 +158,7 @@ def train(args):
                     "grf_traj": args.grf_traj,
                     "joint_vel_traj": args.joint_vel_traj,
                     "contact_sequence": args.contact_sequence,
+                    "video_render_interval": args.video_render_interval,
                     "ppo_cfg": vars(ppo_cfg),
                     "env_cfg": {
                         "decimation": cfg.decimation,
@@ -199,7 +207,12 @@ def train(args):
     obs = obs_dict["policy"]
     total_steps = 0
     best_ep_metric = (-float("inf"), -float("inf"))  # (mean_ep_length, mean_ep_return)
-    next_video_step = 1_000_000
+    video_interval = max(1, args.video_render_interval)
+    next_video_step = video_interval
+    running_return = torch.zeros(num_envs, device=device)
+    running_length = torch.zeros(num_envs, device=device)
+    ep_return_window = deque(maxlen=1000)
+    ep_length_window = deque(maxlen=1000)
     t_start = time.time()
     logger.info(f"Starting training ({n_updates} updates)...")
 
@@ -210,8 +223,9 @@ def train(args):
 
         # Rollout collection
         ep_returns, ep_lengths = [], []
-        running_return = torch.zeros(num_envs, device=device)
-        running_length = torch.zeros(num_envs, device=device)
+        update_done_count = 0
+        update_terminated_count = 0
+        update_truncated_count = 0
         for step in range(n_steps):
             obs_norm = obs_normalizer(obs)
             with torch.no_grad():
@@ -223,11 +237,18 @@ def train(args):
             obs = obs_dict["policy"]
             dones = terminated | truncated
             rew_buf[step], done_buf[step] = rewards, dones
+            update_done_count += int(dones.sum().item())
+            update_terminated_count += int(terminated.sum().item())
+            update_truncated_count += int(truncated.sum().item())
             running_return += rewards
             running_length += 1
             if dones.any():
-                ep_returns.extend(running_return[dones].tolist())
-                ep_lengths.extend(running_length[dones].tolist())
+                done_returns = running_return[dones].tolist()
+                done_lengths = running_length[dones].tolist()
+                ep_returns.extend(done_returns)
+                ep_lengths.extend(done_lengths)
+                ep_return_window.extend(done_returns)
+                ep_length_window.extend(done_lengths)
                 running_return[dones] = 0
                 running_length[dones] = 0
 
@@ -243,9 +264,13 @@ def train(args):
         )
 
         total_steps += samples_per_update
-        mean_ep_return = np.mean(ep_returns) if ep_returns else 0.0
-        mean_ep_length = np.mean(ep_lengths) if ep_lengths else n_steps
+        mean_ep_return = np.mean(ep_return_window) if ep_return_window else 0.0
+        mean_ep_length = np.mean(ep_length_window) if ep_length_window else 0.0
+        episodes_finished = len(ep_returns)
         log_extras = env.extras.get("log", {})
+        term_denom = max(1.0, float(episodes_finished))
+        mean_ep_length_ratio = mean_ep_length / max(1.0, float(max_phase))
+        term_trunc_rate = update_truncated_count / max(1, update_done_count)
         grad_norm = sum(p.grad.data.norm(2).item() ** 2 for p in actor_critic.parameters() if p.grad is not None) ** 0.5
 
         logger.log_update(
@@ -258,11 +283,15 @@ def train(args):
             approx_kl=ppo_metrics["approx_kl"], clip_frac=ppo_metrics["clip_frac"],
             entropy=ppo_metrics["entropy"], ent_coef=ent_coef,
             dt=time.time() - t_update, term_info=log_extras,
+            episodes_finished=episodes_finished,
+            term_trunc_rate=term_trunc_rate,
         )
         if wandb_run is not None:
             wandb.log({
                 "train/ep_return": mean_ep_return,
                 "train/ep_length": mean_ep_length,
+                "train/ep_length_ratio": mean_ep_length_ratio,
+                "train/episodes_finished": episodes_finished,
                 "reward/r_pos": log_extras.get("r_pos", 0.0),
                 "reward/r_ori": log_extras.get("r_ori", 0.0),
                 "reward/r_joint": log_extras.get("r_joint", 0.0),
@@ -277,11 +306,11 @@ def train(args):
                 "algo/lr": optimizer.param_groups[0]["lr"],
                 "diag/grad_norm": grad_norm,
                 "diag/action_std_mean": actor_critic.action_std.mean().item(),
-                "diag/term_thresh": log_extras.get("term_thresh", 0.0),
-                "diag/term_body": log_extras.get("term_body", 0.0),
-                "diag/term_contact": log_extras.get("term_contact", 0.0),
-                "diag/term_nan": log_extras.get("term_nan", 0.0),
-                "diag/term_trunc": log_extras.get("term_trunc", 0.0),
+                "diag/term_thresh_rate": log_extras.get("term_thresh", 0.0) / term_denom,
+                "diag/term_body_rate": log_extras.get("term_body", 0.0) / term_denom,
+                "diag/term_contact_rate": log_extras.get("term_contact", 0.0) / term_denom,
+                "diag/term_nan_rate": log_extras.get("term_nan", 0.0) / term_denom,
+                "diag/term_trunc_rate": term_trunc_rate,
                 "perf/update_dt_sec": time.time() - t_update,
             }, step=total_steps)
         # Phase-0.1 instrumentation: drain per-cause × per-phase termination
@@ -307,8 +336,16 @@ def train(args):
             save_checkpoint(output_dir / "checkpoints" / f"step_{total_steps}", actor_critic, obs_normalizer, total_steps)
         if total_steps >= next_video_step:
             logger.info(f"  Rendering best model video at step {total_steps:,}...")
-            obs = render_video(env, actor_critic, obs_normalizer, output_dir, total_steps, logger)
-            next_video_step = (total_steps // 1_000_000 + 1) * 1_000_000
+            render_video_external(
+                output_dir=output_dir,
+                total_steps=total_steps,
+                state_traj=args.state_traj,
+                grf_traj=args.grf_traj,
+                joint_vel_traj=args.joint_vel_traj,
+                contact_sequence=args.contact_sequence if args.contact_sequence else "",
+                logger=logger,
+            )
+            next_video_step = (total_steps // video_interval + 1) * video_interval
         if (update_idx + 1) % max(1, n_updates // 5) == 0 or update_idx == n_updates - 1:
             logger.save_reward_curve(str(output_dir), total_steps)
 
