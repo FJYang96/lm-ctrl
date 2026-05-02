@@ -1,8 +1,8 @@
 """OPT-Mimic ActorCritic network for RSL-RL.
 
-Architecture (proprioception-only obs, 33 dims per OPT-Mimic §III-C.1):
-  Actor:  33 -> 128 (ReLU) -> 128 (ReLU) -> 12 (Tanh)
-  Critic: 33 -> 512 (ReLU) -> 512 (ReLU) -> 1
+Architecture (proprioception-only obs):
+  Actor:  num_obs -> 128 (ReLU) -> 128 (ReLU) -> 12 (Tanh)
+  Critic: num_obs -> 512 (ReLU) -> 512 (ReLU) -> 1
   log_std: learnable param, init=-0.7, clamped [-2.0, 0.0]
   Orthogonal init: sqrt(2) for hidden, 0.01 for actor head, 1.0 for critic head
 """
@@ -47,7 +47,7 @@ class OPTMimicActorCritic(nn.Module):
     ):
         super().__init__()
 
-        # Actor: 33 -> 128 -> 128 -> 12 -> tanh
+        # Actor: num_obs -> 128 -> 128 -> 12 -> tanh
         self.actor = nn.Sequential(
             nn.Linear(num_obs, actor_hidden_dims[0]),
             nn.ReLU(),
@@ -57,7 +57,7 @@ class OPTMimicActorCritic(nn.Module):
             nn.Tanh(),
         )
 
-        # Critic: 33 -> 512 -> 512 -> 1
+        # Critic: num_obs -> 512 -> 512 -> 1
         self.critic = nn.Sequential(
             nn.Linear(num_obs, critic_hidden_dims[0]),
             nn.ReLU(),

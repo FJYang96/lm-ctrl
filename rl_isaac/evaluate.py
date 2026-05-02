@@ -85,13 +85,13 @@ from rl_isaac.tracking_env import Go2TrackingEnv
 from rl_isaac.network import OPTMimicActorCritic
 
 
-def load_checkpoint(model_path: str, device: str = "cpu"):
+def load_checkpoint(model_path: str, num_obs: int, device: str = "cpu"):
     """Load Isaac Lab checkpoint."""
     ckpt_file = Path(model_path) / "checkpoint.pt"
     if not ckpt_file.exists():
         ckpt_file = Path(model_path)
     ckpt = torch.load(ckpt_file, map_location=device, weights_only=False)
-    ac = OPTMimicActorCritic(num_obs=33, num_privileged_obs=0, num_actions=12)
+    ac = OPTMimicActorCritic(num_obs=num_obs, num_privileged_obs=0, num_actions=12)
     ac.load_state_dict(ckpt["model_state_dict"])
     ac.eval()
     return ac, ckpt.get("normalizer_state_dict", None), ckpt.get("step", 0)
@@ -271,14 +271,14 @@ def main():
 
     # Load model or use baseline
     actor_critic = None
-    obs_normalizer = EmpiricalNormalization(shape=[33], until=1e8).to(device)
+    obs_normalizer = EmpiricalNormalization(shape=[cfg.observation_space], until=1e8).to(device)
     obs_normalizer.eval()
 
     if ff_only_mode:
         print("Running FF-only rollout (zero RL residuals)...")
     else:
         actor_critic, normalizer_state, step = load_checkpoint(
-            args_cli.model_path, str(device),
+            args_cli.model_path, cfg.observation_space, str(device),
         )
         actor_critic = actor_critic.to(device)
         if normalizer_state:

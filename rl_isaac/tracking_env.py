@@ -183,17 +183,29 @@ class Go2TrackingEnv(DirectRLEnv):
         self._robot.set_joint_effort_target(self._to_isaac_order(torque))
 
     def _get_observations(self) -> dict:
-        """OPT-Mimic §III-C.1: proprioception-only (33 dims).
+        """OPT-Mimic §III-C.1: proprioception-only (34 dims).
 
-        quat(4) + joint_pos(12) + base_ang_vel(3) + joint_vel(12) + phase(2) = 33.
+        projected_gravity(3) + yaw_trig(2) + joint_pos(12) + base_ang_vel(3)
+        + joint_vel(12) + phase(2) = 34.
         Base position and linear velocity are NOT included — they require a state
         estimator on the real robot, which the paper deliberately avoids.
         """
         phase = self._phase.clamp(0, self._max_phase - 1)
         joint_pos = self._to_mpc_order(self._robot.data.joint_pos) + self._joint_offset
         angle = 2.0 * torch.pi * phase.float() / float(self._max_phase)
+        q = self._robot.data.root_quat_w
+        w, x, y, z = q.unbind(dim=-1)
+        projected_gravity = torch.stack([
+            2.0 * (w * y - x * z),
+            -2.0 * (w * x + y * z),
+            -1.0 + 2.0 * (x * x + y * y),
+        ], dim=-1)
+        yaw_sin = 2.0 * (w * z + x * y)
+        yaw_cos = 1.0 - 2.0 * (y * y + z * z)
+        yaw_norm = torch.clamp(torch.sqrt(yaw_cos.square() + yaw_sin.square()), min=1e-6)
+        yaw_trig = torch.stack([yaw_cos / yaw_norm, yaw_sin / yaw_norm], dim=-1)
         obs = torch.cat([
-            self._robot.data.root_quat_w, joint_pos,
+            projected_gravity, yaw_trig, joint_pos,
             self._robot.data.root_ang_vel_w,
             self._to_mpc_order(self._robot.data.joint_vel),
             torch.stack([torch.cos(angle), torch.sin(angle)], dim=-1),
