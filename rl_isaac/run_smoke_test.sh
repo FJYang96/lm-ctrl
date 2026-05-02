@@ -37,7 +37,7 @@ cd /workspace/lm-ctrl
 source "$SCRIPT_DIR/traj_config.sh"
 
 # Clean previous runs
-rm -rf rl_isaac/trained_models/* 2>/dev/null
+#rm -rf rl_isaac/trained_models/* 2>/dev/null
 echo "Cleaned rl_isaac/trained_models/"
 
 # GPU selection: automatically pick the GPU with the most free memory.
