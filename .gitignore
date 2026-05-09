@@ -4,6 +4,8 @@
 results/
 *.npy
 *.mp4
+.claude/
+slip_recovery_demo/
 
 ### Custom ###
 ./jnrh2023/
