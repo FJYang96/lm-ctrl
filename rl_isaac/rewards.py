@@ -19,7 +19,7 @@ TORQUE_LIMITS = torch.tensor([
     23.7, 23.7, 45.43,  # RL
     23.7, 23.7, 45.43,  # RR
 ], dtype=torch.float32)
-ACTION_LIMIT = 0.4
+ACTION_LIMIT = 0.6
 
 # ---------------------------------------------------------------------------
 # Reward sigmas and weights (OPT-Mimic Eq. 16, Go2-tuned)
