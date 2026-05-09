@@ -93,7 +93,13 @@ def solve_trajectory(
         U_opt = sol.value(mpc.U)
         status = 0
     except Exception as e:
-        print(f"Optimization failed: {e}")
+        # Strip multi-line CasADi traceback noise — keep only the return_status line.
+        msg = str(e)
+        ret_line = next(
+            (line for line in msg.split("\n") if "return_status" in line),
+            msg.split("\n")[-1] if msg else "unknown",
+        )
+        logger.info(f"Optimization failed: {ret_line.strip()}")
         mpc._last_solution = None
         X_opt = mpc.opti.debug.value(mpc.X)
         U_opt = mpc.opti.debug.value(mpc.U)

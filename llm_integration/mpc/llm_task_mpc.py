@@ -138,6 +138,11 @@ class LLMTaskMPC:
         self.solver_iterations: int | None = None
         self.last_error: str | None = None
         self.infeasibility_info: str | None = None
+        # Last primal/dual infeasibility (post-solve diagnostics — small values
+        # mean the iterate is near-feasible/near-optimal even if the solver did
+        # not formally converge).
+        self.last_inf_pr: float = float("nan")
+        self.last_inf_du: float = float("nan")
 
         # Original config values (stored during task config creation)
         self._original_duration: float | None = None
@@ -442,6 +447,12 @@ class LLMTaskMPC:
 
             stats = self.mpc.opti.stats()
             self.solver_iterations = stats["iter_count"]
+            # Capture last primal/dual infeasibility for "near-feasible" detection.
+            iters = stats.get("iterations") or {}
+            inf_pr = iters.get("inf_pr") or []
+            inf_du = iters.get("inf_du") or []
+            self.last_inf_pr = float(inf_pr[-1]) if inf_pr else float("nan")
+            self.last_inf_du = float(inf_du[-1]) if inf_du else float("nan")
             if result[3] != 0:
                 self.last_error = stats["return_status"]
 

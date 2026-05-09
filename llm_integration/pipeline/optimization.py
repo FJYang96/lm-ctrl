@@ -439,6 +439,8 @@ def solve_trajectory_optimization(
         objective_value = float("inf")
 
     # Create metrics dict
+    inf_pr = float(self.current_task_mpc.last_inf_pr)
+    inf_du = float(self.current_task_mpc.last_inf_du)
     metrics = {
         "converged": status == 0,
         "status": "success" if status == 0 else "failed",
@@ -451,7 +453,13 @@ def solve_trajectory_optimization(
         if status != 0
         else None,
         "hardness_report": hardness_report,
+        "inf_pr": inf_pr,
+        "inf_du": inf_du,
     }
+    if status != 0:
+        logger.info(
+            f"Solver residuals: inf_pr={inf_pr:.2e}, inf_du={inf_du:.2e}"
+        )
 
     # Analyze trajectory using LLM MPC time step
     mpc_dt = config_summary["time_step"]

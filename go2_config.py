@@ -324,8 +324,11 @@ duration: float = 1.0
 default_pre_flight_stance_duration: float = 0.3
 default_flight_duration: float = 0.4
 
-# Default MPC time steps per constraint mode
-default_mpc_dt_complementarity: float = 0.02
+# Default MPC time steps per constraint mode.
+# 0.04 keeps ~25-step horizons for 1-second motions, giving ~4x faster IPOPT
+# iterations than dt=0.02 while preserving enough resolution for fast aerial
+# motion (flight phase ~10 steps).
+default_mpc_dt_complementarity: float = 0.04
 default_mpc_dt_standard: float = 0.1
 
 # Select constraint mode: "standard" or "complementarity"
@@ -354,17 +357,26 @@ def __getattr__(name: str) -> Any:
 
 solver_config: dict[str, Any] = {
     "expand": False,
-    "ipopt.print_level": 5,
-    "print_time": True,
-    "ipopt.max_iter": 3000,
+    "ipopt.print_level": 0,
+    "print_time": False,
+    "ipopt.max_iter": 2000,
     "ipopt.linear_solver": "mumps",
-    "ipopt.tol": 1e-4,
-    "ipopt.acceptable_tol": 1e-3,
+    # Looser convergence tolerances let IPOPT terminate as soon as the iterate
+    # is "good enough" instead of grinding to high accuracy. RL with domain
+    # randomization can absorb the residual physics drift this allows.
+    "ipopt.tol": 1e-3,
+    "ipopt.acceptable_tol": 1e-2,
+    "ipopt.acceptable_iter": 5,
+    "ipopt.acceptable_constr_viol_tol": 1e-2,
+    "ipopt.acceptable_dual_inf_tol": 1e2,
     "ipopt.mu_init": 1e-2,
     "ipopt.mu_strategy": "adaptive",
     "ipopt.alpha_for_y": "primal",
     "ipopt.recalc_y": "yes",
-    "ipopt.max_wall_time": 7200.0,
+    # 900s caps failed solves at 15 min (down from 7200s = 2 hours). Solo
+    # converged solves take ~9-12 min; under CPU contention they slow to
+    # 12-15 min, so 15 min is a reasonable upper bound for any one solve.
+    "ipopt.max_wall_time": 900.0,
 }
 
 plot_quantities = [

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -150,35 +151,45 @@ class FeedbackPipeline:
                             "iterate. !!\n\n" + motion_quality_report
                         )
 
-                llm_eval = evaluate_iteration_unified(
-                    command=command, trajectory_analysis=trajectory_analysis,
-                    constraint_code=constraint_code, opt_success=opt_success,
-                    error_info=error_info if not opt_success else None,
-                    motion_quality_report=motion_quality_report,
-                    hardness_report=hardness_report, mpc_dt=mpc_dt,
-                    current_slack_weights=self.current_slack_weights,
-                    constraint_violations=constraint_violations,
-                    reference_analysis=ref_analysis,
-                    run_dir=run_dir, iteration=iteration,
-                )
+                # Run scoring + summary LLM calls in parallel — they share
+                # the same inputs but produce independent outputs, so doing
+                # them concurrently halves their wall-clock cost.
+                # Score is needed before summary (summary takes score as input),
+                # so launch both with score=placeholder first, then update.
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    score_future = executor.submit(
+                        evaluate_iteration_unified,
+                        command=command, trajectory_analysis=trajectory_analysis,
+                        constraint_code=constraint_code, opt_success=opt_success,
+                        error_info=error_info if not opt_success else None,
+                        motion_quality_report=motion_quality_report,
+                        hardness_report=hardness_report, mpc_dt=mpc_dt,
+                        current_slack_weights=self.current_slack_weights,
+                        constraint_violations=constraint_violations,
+                        reference_analysis=ref_analysis,
+                        run_dir=run_dir, iteration=iteration,
+                    )
+                    summary_future = executor.submit(
+                        generate_iteration_summary,
+                        command=command, iteration=iteration, score=0.0,
+                        constraint_code=constraint_code,
+                        trajectory_analysis=trajectory_analysis,
+                        opt_success=opt_success,
+                        error_info=error_info if not opt_success else None,
+                        simulation_result=simulation_result,
+                        hardness_report=hardness_report, mpc_dt=mpc_dt,
+                        current_slack_weights=self.current_slack_weights,
+                        reference_analysis=ref_analysis,
+                        constraint_violations=constraint_violations,
+                        motion_quality_report=motion_quality_report,
+                        run_dir=run_dir,
+                    )
+                    llm_eval = score_future.result()
+                    iter_summary = summary_future.result()
                 score = llm_eval.get("score", 0.0 if not opt_success else 0.5)
+                iter_summary["score"] = score
                 logger.info(f"Score: {score:.2f} | {llm_eval.get('summary', '')}")
                 self.all_scores.append(score)
-
-                iter_summary = generate_iteration_summary(
-                    command=command, iteration=iteration, score=score,
-                    constraint_code=constraint_code,
-                    trajectory_analysis=trajectory_analysis,
-                    opt_success=opt_success,
-                    error_info=error_info if not opt_success else None,
-                    simulation_result=simulation_result,
-                    hardness_report=hardness_report, mpc_dt=mpc_dt,
-                    current_slack_weights=self.current_slack_weights,
-                    reference_analysis=ref_analysis,
-                    constraint_violations=constraint_violations,
-                    motion_quality_report=motion_quality_report,
-                    run_dir=run_dir,
-                )
                 iter_summary["constraint_code"] = constraint_code
                 self.iteration_summaries.append(iter_summary)
                 feedback_data = {

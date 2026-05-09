@@ -210,6 +210,10 @@ def create_restricted_globals(
         allowed_imports = ALLOWED_IMPORTS
 
     restricted_globals: dict[str, Any] = {
+        # Common module-level identifiers some LLM-generated scripts reference
+        # (e.g. `if __name__ == "__main__":` guards). Set a sentinel value so
+        # those guards evaluate False without raising NameError.
+        "__name__": "__llm_constraint__",
         "__builtins__": {
             # Basic Python built-ins needed for constraint functions
             "abs": abs,

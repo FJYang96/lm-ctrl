@@ -77,7 +77,14 @@ Do NOT include iteration, score, or success — set automatically.
 Return ONLY valid JSON, no extra text."""
 
     metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
-    solver_status = "converged" if opt_success else "failed"
+    if opt_success:
+        solver_status = "converged"
+    else:
+        inf_pr = (error_info or {}).get("inf_pr")
+        inf_du = (error_info or {}).get("inf_du")
+        pr_str = f"{inf_pr:.2e}" if isinstance(inf_pr, (int, float)) else "n/a"
+        du_str = f"{inf_du:.2e}" if isinstance(inf_du, (int, float)) else "n/a"
+        solver_status = f"failed (inf_pr={pr_str}, inf_du={du_str})"
     error_text = format_error_info(error_info)
     error_line = f"\n{error_text}" if error_text else ""
 

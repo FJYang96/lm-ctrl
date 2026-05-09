@@ -106,7 +106,17 @@ Return JSON: {{"score": <float>, "criteria": [{{"name": "", "target": "", "achie
 Return ONLY valid JSON."""
 
     metrics_text = format_trajectory_metrics_text(trajectory_analysis, opt_success)
-    solver_status = "CONVERGED (success)" if opt_success else "FAILED (did not converge)"
+    if opt_success:
+        solver_status = "CONVERGED (success)"
+    else:
+        inf_pr = (error_info or {}).get("inf_pr")
+        inf_du = (error_info or {}).get("inf_du")
+        pr_str = f"{inf_pr:.2e}" if isinstance(inf_pr, (int, float)) else "n/a"
+        du_str = f"{inf_du:.2e}" if isinstance(inf_du, (int, float)) else "n/a"
+        solver_status = (
+            f"FAILED (did not converge) — primal residual inf_pr={pr_str}, "
+            f"dual residual inf_du={du_str}. Score is still capped at 0.40."
+        )
     error_text = format_error_info(error_info)
     error_line = f"\n{error_text}" if error_text else ""
 

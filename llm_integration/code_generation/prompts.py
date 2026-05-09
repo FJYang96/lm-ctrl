@@ -139,6 +139,9 @@ Include these calls (items 4-6 are REQUIRED — solver FAILS without them):
      Prefer the shortest duration that fits the motion — fewer timesteps make
      the solver's job easier. Start short, extend only after convergence.
   3. mpc.set_time_step({mpc_dt})              # defaults to {mpc_dt}
+     SPEED: solver wall-time scales ~linearly with horizon. dt={mpc_dt}s is the
+     sweet spot — keep dt >= 0.04s unless the motion truly requires finer
+     resolution. dt < 0.025 makes the solver crawl and rarely improves quality.
   4. mpc.set_contact_sequence(array)       # ← REQUIRED — solver FAILS without this
   5. mpc.add_constraint(constraint_func)   # ← REQUIRED — solver FAILS without this
   6. mpc.set_reference_trajectory(func)    # ← REQUIRED — solver FAILS without this
@@ -297,7 +300,8 @@ Rotation: SO3 (from liecasadi)
 
 ITERATION 1: Minimal viable constraints
   - Maximum 2-3 constraints, bounds 2-3x wider than you think necessary
-  - Goal: Solver converges, motion happens (even if imperfect)
+  - Use dt >= 0.04s (default {mpc_dt}s). Smaller dt = slower solver.
+  - Goal: Solver converges fast, motion happens (even if imperfect)
 
 LATER ITERATIONS: You receive scores for ALL past iterations, plus 3 sampled
   iterations (the best + 2 random, weighted by score) with their constraint code
@@ -305,9 +309,13 @@ LATER ITERATIONS: You receive scores for ALL past iterations, plus 3 sampled
   what works, low scores show what to avoid and why. You decide whether to tweak
   a good approach or pivot to something new.
 
+  Solver budget: max_iter=2000, max_wall_time=900s, tol=1e-3, acceptable_tol=1e-2.
+  If you hit those bounds your problem is too hard — widen bounds, shorten
+  duration, drop constraints. A converged solution with imperfect task
+  completion is far more valuable than an unconverged one.
+
   If the solver is failing → first try shorter duration and wider bounds
-  (simplify the problem). A converged solution with imperfect task completion
-  is far more valuable than an unconverged one.
+  (simplify the problem).
 
 == 8. TASK ==
 Generate MPC configuration and constraints for the requested behavior.
