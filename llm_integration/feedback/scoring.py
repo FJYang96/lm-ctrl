@@ -91,6 +91,10 @@ Read the task command to understand what was asked. Use ALL available data to de
 
 TASK COMPLETION: Score proportional to how close the trajectory gets to the goal. Lower if motion quality is poor.
 
+DIRECTION CHECK: The trajectory metrics include a "Direction summary" with signed rotation (roll/pitch/yaw) and translation (dx/dy/dz). Compare these signs against the task command's semantics. The reported magnitudes may look correct while the signs are opposite of what the task asks for — that is a failed task, not a success. Cap such cases at <=0.4 regardless of magnitude.
+
+TERMINAL STATE CHECK: The trajectory must end at the initial standing configuration regardless of the mid-trajectory motion. Inspect the terminal state metrics — final COM xy and height, final roll/pitch/yaw (compared as unwrapped values, not modulo 2pi), final linear velocity, final angular velocity, and the deviation of final joint angles from initial. Penalize trajectories whose terminal state is far from the initial state: cap at <=0.6 if any of (a) terminal linear or angular velocity is not small, (b) terminal orientation differs noticeably from the initial orientation, (c) terminal joint angles deviate noticeably from the initial joint angles, or (d) terminal COM height or xy is far from initial. A trajectory that performs the requested motion but ends in an unrecoverable pose is not a success.
+
 MOTION QUALITY: Use the motion quality report numbers to assess physical plausibility. Penalize physics exploits (phantom forces, energy from nowhere, feet below ground). Penalize exceeding capability limits: {_cap}.
 
 SCORING GUIDE:

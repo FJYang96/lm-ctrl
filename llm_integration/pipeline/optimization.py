@@ -94,6 +94,24 @@ def analyze_trajectory(
             "trajectory_duration": float((len(state_traj) - 1) * mpc_dt),
         }
 
+        # Terminal-vs-initial state deltas (how close the trajectory ends to
+        # where it started — checked by the scoring LLM under TERMINAL STATE CHECK).
+        com_dxy_final = float(np.linalg.norm(com_positions[-1, 0:2] - com_positions[0, 0:2]))
+        com_dz_final = float(com_positions[-1, 2] - com_positions[0, 2])
+        # Use unwrapped (raw) Euler difference, not modulo 2pi, so a full-rotation
+        # motion that lands at angle 2pi is flagged as different from the start at 0.
+        eul_diff = euler_angles[-1] - euler_angles[0]
+        joint_dev = joint_angles[-1] - joint_angles[0]
+        metrics["terminal_dxy_from_init"] = com_dxy_final
+        metrics["terminal_dz_from_init"] = com_dz_final
+        metrics["terminal_droll_rad"] = float(eul_diff[0])
+        metrics["terminal_dpitch_rad"] = float(eul_diff[1])
+        metrics["terminal_dyaw_rad"] = float(eul_diff[2])
+        metrics["terminal_joint_dev_max"] = float(np.max(np.abs(joint_dev)))
+        metrics["terminal_joint_dev_mean"] = float(np.mean(np.abs(joint_dev)))
+        metrics["terminal_lin_speed"] = float(np.linalg.norm(com_velocities[-1]))
+        metrics["terminal_ang_speed"] = float(np.linalg.norm(angular_velocities[-1]))
+
         # Flight phase analysis
         initial_height = com_positions[0, 2]
         import go2_config

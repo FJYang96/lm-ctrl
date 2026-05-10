@@ -319,7 +319,17 @@ LATER ITERATIONS: You receive scores for ALL past iterations, plus 3 sampled
 
 == 8. TASK ==
 Generate MPC configuration and constraints for the requested behavior.
-Think about: What motion is needed? What constraints will FORCE that motion?"""
+Think about: What motion is needed? What constraints will FORCE that motion?
+
+In addition to the requested behavior, the trajectory must end at a state
+matching the initial standing configuration on every state component: COM
+position, orientation (compared as unwrapped Euler, not modulo 2pi), joint
+angles, and all linear and angular velocities. This holds for every motion
+regardless of what it does in between. The reference trajectory's final
+timesteps must drive every state component back to the initial state, and
+the constraints should tighten near progress -> 1 to make the optimizer
+respect this ending. If you don't end at the initial state, the robot
+cannot be deployed and continue from the end of the trajectory."""
 
     return base
 

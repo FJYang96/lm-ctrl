@@ -26,6 +26,31 @@ def format_trajectory_metrics_text(
     if "error" in ta:
         return f"Trajectory analysis error: {ta['error']}"
 
+    def _signed(v: float) -> str:
+        if abs(v) < 1e-2:
+            return "~0"
+        return "+" if v > 0 else "-"
+
+    roll_t = ta.get("total_roll_rotation", 0.0)
+    pitch_t = ta.get("total_pitch_rotation", 0.0)
+    yaw_t = ta.get("total_yaw_rotation", 0.0)
+    com_dx = ta.get("com_displacement_x", 0.0)
+    com_dy = ta.get("com_displacement_y", 0.0)
+    com_dz = ta.get("max_com_height", 0.0) - ta.get("initial_com_height", 0.0)
+    lines.append(
+        "Direction summary (sign matters — must match the task semantics):"
+    )
+    lines.append(
+        f"  Rotation:  roll={_signed(roll_t)} ({roll_t*57.3:+.0f}deg)  "
+        f"pitch={_signed(pitch_t)} ({pitch_t*57.3:+.0f}deg)  "
+        f"yaw={_signed(yaw_t)} ({yaw_t*57.3:+.0f}deg)"
+    )
+    lines.append(
+        f"  Translation: dx={_signed(com_dx)} ({com_dx:+.2f}m)  "
+        f"dy={_signed(com_dy)} ({com_dy:+.2f}m)  "
+        f"peak_dz={_signed(com_dz)} ({com_dz:+.2f}m)"
+    )
+
     lines.append("Position:")
     lines.append(
         f"  Height: initial={ta['initial_com_height']:.3f}m, "
