@@ -7,7 +7,7 @@
 #   ./rl_isaac/evaluate_policy.sh
 # ============================================================
 
-TRAJ_DIR="results/llm_iterations/do_a_backflip:_start_from_the_default_full_stance;_push_off_with_front_feet_first_to_almost_stand_up_and_then_take_off_from_back_legs_thrust;_land_first_on_the_front_feet_and_quick_1778333268"
+TRAJ_DIR="results/llm_iterations/do_a_backflip:_start_from_the_default_full_stance;_push_off_with_front_feet_first_to_almost_stand_up_and_then_take_off_from_back_legs_thrust;_land_first_on_the_front_feet_and_quick_1778391065"
 ITER_NUM=1
 
 # ── Resolve file paths from TRAJ_DIR + ITER_NUM ──
