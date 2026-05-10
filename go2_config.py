@@ -325,10 +325,9 @@ default_pre_flight_stance_duration: float = 0.3
 default_flight_duration: float = 0.4
 
 # Default MPC time steps per constraint mode.
-# 0.04 keeps ~25-step horizons for 1-second motions, giving ~4x faster IPOPT
-# iterations than dt=0.02 while preserving enough resolution for fast aerial
-# motion (flight phase ~10 steps).
-default_mpc_dt_complementarity: float = 0.04
+# 0.05 keeps 20-step horizons for 1-second motions; together with BFGS
+# Hessian this gets per-iter wall time down to ~3 min on aerial flips.
+default_mpc_dt_complementarity: float = 0.05
 default_mpc_dt_standard: float = 0.1
 
 # Select constraint mode: "standard" or "complementarity"
@@ -373,10 +372,16 @@ solver_config: dict[str, Any] = {
     "ipopt.mu_strategy": "adaptive",
     "ipopt.alpha_for_y": "primal",
     "ipopt.recalc_y": "yes",
-    # 900s caps failed solves at 15 min (down from 7200s = 2 hours). Solo
-    # converged solves take ~9-12 min; under CPU contention they slow to
-    # 12-15 min, so 15 min is a reasonable upper bound for any one solve.
-    "ipopt.max_wall_time": 900.0,
+    # BFGS Hessian: 3-5x faster per IPOPT iter than exact, at the cost of
+    # needing more iters to converge. With history=50 it tracks curvature
+    # well enough on this quadruped problem to reliably terminate inside
+    # the wall-time budget when the LLM problem is reasonable.
+    "ipopt.hessian_approximation": "limited-memory",
+    "ipopt.limited_memory_max_history": 50,
+    # 300s wall-time gives BFGS enough room to fully converge on harder
+    # motions like backflip/frontflip while still keeping per-iter total
+    # under 6 min. Easy motions (sideflip) converge well before the cap.
+    "ipopt.max_wall_time": 300.0,
 }
 
 plot_quantities = [

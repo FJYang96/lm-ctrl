@@ -309,7 +309,7 @@ LATER ITERATIONS: You receive scores for ALL past iterations, plus 3 sampled
   what works, low scores show what to avoid and why. You decide whether to tweak
   a good approach or pivot to something new.
 
-  Solver budget: max_iter=2000, max_wall_time=900s, tol=1e-3, acceptable_tol=1e-2.
+  Solver budget: max_iter=2000, max_wall_time=300s, tol=1e-3, acceptable_tol=1e-2.
   If you hit those bounds your problem is too hard — widen bounds, shorten
   duration, drop constraints. A converged solution with imperfect task
   completion is far more valuable than an unconverged one.
