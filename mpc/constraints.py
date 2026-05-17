@@ -267,7 +267,10 @@ def link_clearance_constraints(
         heights.append(fk_fun(H, joint_positions)[2, 3])
 
     link_heights = cs.vertcat(*heights)
-    min_clearance = 0.01 * np.ones(len(link_names))  # 1cm above ground
+    clearance = go2_config.mpc_config.path_constraint_params.get(
+        "LINK_CLEARANCE_MIN", 0.02
+    )
+    min_clearance = clearance * np.ones(len(link_names))
     return link_heights, min_clearance, INF * np.ones(len(link_names))
 
 

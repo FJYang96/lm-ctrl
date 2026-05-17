@@ -41,7 +41,7 @@ class ReferenceTrajectory:
         grf_traj: np.ndarray,
         feedforward_torques: np.ndarray | None = None,
         contact_sequence: np.ndarray | None = None,
-        control_dt: float = 0.02,
+        control_dt: float = 0.05,
     ):
         self.state_traj = state_traj.copy()
         self.joint_vel_traj = joint_vel_traj.copy()
@@ -149,7 +149,7 @@ class ReferenceTrajectory:
         joint_vel_traj_path: str,
         grf_traj_path: str,
         contact_sequence_path: str | None = None,
-        control_dt: float = 0.02,
+        control_dt: float = 0.05,
     ) -> ReferenceTrajectory:
         """Load from .npy files (e.g. results/ directory)."""
         contact_seq = None

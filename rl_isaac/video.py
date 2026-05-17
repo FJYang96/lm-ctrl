@@ -32,59 +32,93 @@ def render_video(
     total_steps: int,
     logger=None,
     label: str = "",
-) -> torch.Tensor:
-    """Render best-model video showing one robot from starting position.
+    use_best_model: bool = True,
+    clean_eval: bool = False,
+) -> tuple[torch.Tensor, int]:
+    """Render a deterministic phase-0 video showing one robot.
 
-    Temporarily loads best model, sets env 0 to phase 0 with no DR,
-    zooms camera onto env 0, runs deterministic rollout, captures frames,
-    restores training weights, resets env.
+    By default this temporarily loads best_model.  Training can pass
+    use_best_model=False, clean_eval=True to probe the current policy under
+    the same nominal phase-0 condition used by smoke-test evaluation.
 
-    Returns new obs tensor after env reset.
+    Returns (new_obs, tracked_env_steps) after resetting the env.
     """
     best_path = output_dir / "best_model" / "checkpoint.pt"
-    if not best_path.exists():
+    if use_best_model and not best_path.exists():
         if logger:
             logger.info("  No best model checkpoint yet, skipping video.")
         obs_dict, _ = env.reset()
-        return obs_dict["policy"]
+        return obs_dict["policy"], 0
 
-    train_ac_state = {k: v.clone() for k, v in actor_critic.state_dict().items()}
-    train_norm_state = {k: v.clone() for k, v in obs_normalizer.state_dict().items()}
+    train_ac_state = None
+    train_norm_state = None
     was_training = actor_critic.training
+    tracked_steps = 0
 
     try:
         device = env.device
         max_phase = env._max_phase
+        horizon = env._episode_horizon
+        video_fps = int(round(1.0 / env._env_dt))
 
-        best_ckpt = torch.load(best_path, map_location=device, weights_only=False)
-        actor_critic.load_state_dict(best_ckpt["model_state_dict"])
+        if use_best_model:
+            train_ac_state = {k: v.clone() for k, v in actor_critic.state_dict().items()}
+            train_norm_state = {k: v.clone() for k, v in obs_normalizer.state_dict().items()}
+            best_ckpt = torch.load(best_path, map_location=device, weights_only=False)
+            actor_critic.load_state_dict(best_ckpt["model_state_dict"])
+            if "normalizer_state_dict" in best_ckpt:
+                obs_normalizer.load_state_dict(best_ckpt["normalizer_state_dict"])
         actor_critic.eval()
-        if "normalizer_state_dict" in best_ckpt:
-            obs_normalizer.load_state_dict(best_ckpt["normalizer_state_dict"])
         obs_normalizer.eval()
 
-        # Reset env, then set env 0 to phase 0. Keep DR (joint_offset,
-        # torque_scale) from the env.reset() call so eval matches training
-        # distribution — policy is trained with DR, so zero-DR eval is OOD.
+        # Reset env, then put the rendered rollout on the phase-0 reference.
+        # For clean checkpoint selection, mirror evaluate.py across the whole
+        # vectorized batch so the observation normalizer sees the same rollout
+        # distribution as the smoke-test clean eval.
         env.reset()
-        env._phase[0] = 0
-        env._prev_action[0] = 0
-        env._last_torque[0] = 0
-        env._first_step[0] = True
+        if clean_eval:
+            reset_ids = env._robot._ALL_INDICES
+            ref_phases = torch.zeros(env.num_envs, device=device)
+            env._phase[:] = 0.0
+            env._prev_action[:] = 0
+            env._last_torque[:] = 0
+            env._first_step[:] = True
+            env._joint_offset[:] = 0.0
+            env._torque_scale[:] = 1.0
+        else:
+            reset_ids = torch.tensor([0], device=device, dtype=torch.long)
+            ref_phases = torch.zeros(1, device=device)
+            env._phase[0] = 0.0
+            env._prev_action[0] = 0
+            env._last_torque[0] = 0
+            env._first_step[0] = True
 
-        env_0 = torch.tensor([0], device=device, dtype=torch.long)
+        if clean_eval:
+            mat = env._robot.root_physx_view.get_material_properties()
+            reset_ids_cpu = torch.arange(env.num_envs, dtype=torch.long)
+            mat[reset_ids_cpu, :, 0] = 1.0
+            mat[reset_ids_cpu, :, 1] = 1.0
+            mat[reset_ids_cpu, :, 2] = 0.0
+            env._robot.root_physx_view.set_material_properties(mat, reset_ids_cpu)
+
+        ref0 = env._sample_reference(ref_phases)
+        ref_pos = ref0["body_pos"].clone()
+        if clean_eval:
+            ref_pos = ref_pos + env._env_origins
+        else:
+            ref_pos = ref_pos + env._env_origins[0:1]
         env._robot.write_root_pose_to_sim(torch.cat([
-            env._ref_body_pos[0:1].clone() + env._env_origins[0:1],
-            env._ref_body_quat[0:1].clone(),
-        ], dim=-1), env_0)
+            ref_pos,
+            ref0["body_quat"].clone(),
+        ], dim=-1), reset_ids)
         env._robot.write_root_velocity_to_sim(torch.cat([
-            env._ref_body_vel[0:1].clone(),
-            env._ref_body_ang_vel[0:1].clone(),
-        ], dim=-1), env_0)
+            ref0["body_vel"].clone(),
+            ref0["body_ang_vel"].clone(),
+        ], dim=-1), reset_ids)
         env._robot.write_joint_state_to_sim(
-            env._to_isaac_order(env._ref_joint_pos[0:1].clone()),
-            env._to_isaac_order(env._ref_joint_vel[0:1].clone()),
-            None, env_0,
+            env._to_isaac_order(ref0["joint_pos"].clone()),
+            env._to_isaac_order(ref0["joint_vel"].clone()),
+            None, reset_ids,
         )
 
         # Zoom camera close to env 0 so only one robot is visible.
@@ -102,7 +136,7 @@ def render_video(
         env._reset_idx = lambda env_ids: None
 
         images = []
-        for _ in range(max_phase):
+        for _ in range(horizon):
             obs = env._get_observations()["policy"]
             with torch.no_grad():
                 actions = actor_critic.act_inference(obs_normalizer(obs))
@@ -116,15 +150,16 @@ def render_video(
                 break
 
         env._reset_idx = original_reset
+        tracked_steps = len(images)
 
         if images:
             video_dir = output_dir / "runs"
             video_dir.mkdir(parents=True, exist_ok=True)
             video_path = video_dir / (f"{label}.mp4" if label else f"step_{total_steps:07d}.mp4")
             import imageio
-            imageio.mimsave(str(video_path), images, fps=50)
+            imageio.mimsave(str(video_path), images, fps=video_fps)
             if logger:
-                logger.info(f"  Video saved: {video_path} ({len(images)}/{max_phase} frames)")
+                logger.info(f"  Video saved: {video_path} ({len(images)}/{horizon} env steps, {max_phase} MPC frames)")
         elif logger:
             logger.info(f"  No frames captured at step {total_steps}")
 
@@ -134,10 +169,12 @@ def render_video(
             logger.info(f"  Video render failed: {e}")
             logger.info(traceback.format_exc())
 
-    actor_critic.load_state_dict(train_ac_state)
-    obs_normalizer.load_state_dict(train_norm_state)
+    if train_ac_state is not None:
+        actor_critic.load_state_dict(train_ac_state)
+    if train_norm_state is not None:
+        obs_normalizer.load_state_dict(train_norm_state)
     if was_training:
         actor_critic.train()
         obs_normalizer.train()
     obs_dict, _ = env.reset()
-    return obs_dict["policy"]
+    return obs_dict["policy"], tracked_steps

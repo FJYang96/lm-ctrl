@@ -9,6 +9,7 @@
 
 
 set -e
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMAGE_NAME="lm-ctrl-isaaclab:latest"
@@ -27,6 +28,10 @@ fi
 cd /workspace/lm-ctrl
 
 source "$SCRIPT_DIR/traj_config.sh"
+
+if [ ! -f "$PLANNED_VIDEO" ] && [ -f "$TRAJ_DIR/debug_trajectory_iter_${ITER_NUM}.mp4" ]; then
+    PLANNED_VIDEO="$TRAJ_DIR/debug_trajectory_iter_${ITER_NUM}.mp4"
+fi
 
 # Clean previous runs
 #rm -rf rl_isaac/trained_models/* 2>/dev/null
@@ -53,6 +58,9 @@ TIMESTEPS=${1:-100000000}
 NUM_ENVS=${2:-4096}
 
 RUN_TAG="isaaclab_run_$(date +%Y%m%d_%H%M%S)"
+if [ -n "${RUN_TAG_SUFFIX:-}" ]; then
+    RUN_TAG="${RUN_TAG}_${RUN_TAG_SUFFIX}"
+fi
 OUTPUT_DIR="rl_isaac/trained_models/$RUN_TAG"
 LOG_FILE="$OUTPUT_DIR/experiment.log"
 
@@ -84,6 +92,16 @@ $ISAAC_PYTHON -m rl_isaac.train \
     --num-envs "$NUM_ENVS" \
     --headless --enable_cameras \
     $CONTACT_SEQ_FLAG
+
+# ── Step 1b: Select checkpoint using a fresh clean eval env ──
+echo "[1b/4] Selecting best checkpoint with fresh clean rollout..."
+$ISAAC_PYTHON -m rl_isaac.select_checkpoint \
+    --run-dir "$OUTPUT_DIR" \
+    --state-traj "$STATE_TRAJ" \
+    --grf-traj "$GRF_TRAJ" \
+    --joint-vel-traj "$JOINT_VEL_TRAJ" \
+    --headless \
+    $CONTACT_SEQ_FLAG 2>&1 | tee -a "$LOG_FILE"
 
 # ── Step 2: Evaluate best model (Isaac Lab PhysX) — clean deterministic ──
 echo "[2/4] Evaluating best model (clean, deterministic)..."

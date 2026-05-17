@@ -66,6 +66,7 @@ class ComplementarityMPCConfig(MPCConfig):
             "SWING_GRF_EPS": 0.0,
             "STANCE_HEIGHT_EPS": 0.005,
             "NO_SLIP_EPS": 0.005,
+            "LINK_CLEARANCE_MIN": 0.02,
         }
     )
 

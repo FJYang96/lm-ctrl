@@ -28,6 +28,7 @@ if go2_config.CONSTRAINT_MODE == "complementarity":
             "STANCE_HEIGHT_EPS": 0.04,
             "NO_SLIP_EPS": 0.01,
             "BODY_CLEARANCE_MIN": 0.02,
+            "LINK_CLEARANCE_MIN": 0.02,
         },
         _contact_sequence=None,
     )
@@ -67,6 +68,7 @@ else:
             "STANCE_HEIGHT_EPS": 0.02,
             "NO_SLIP_EPS": 0.005,
             "BODY_CLEARANCE_MIN": 0.02,
+            "LINK_CLEARANCE_MIN": 0.02,
         },
         _contact_sequence=None,
     )

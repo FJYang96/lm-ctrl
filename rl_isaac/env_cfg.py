@@ -1,7 +1,8 @@
 """Go2 OPT-Mimic tracking environment configuration for Isaac Lab.
 
-Matches the MJX implementation exactly: 1kHz physics, 50Hz control (decimation=20),
-explicit torque actuation with stiffness=0/damping=0, and ContactSensor for termination.
+Uses 1kHz physics and 100Hz residual-policy control while tracking MPC
+references generated at 20Hz.  The environment interpolates the reference
+trajectory between MPC frames.
 """
 
 from __future__ import annotations
@@ -23,16 +24,30 @@ class Go2TrackingEnvCfg(DirectRLEnvCfg):
     """Configuration for Go2 OPT-Mimic trajectory tracking."""
 
     # --- Env ---
-    decimation: int = 20  # 50Hz control / 1kHz physics = 20 substeps (matches N_SUBSTEPS)
+    decimation: int = 10  # 100Hz control / 1kHz physics = 10 substeps
+    mpc_dt: float = 0.05  # 20Hz MPC reference trajectory
     episode_length_s: float = 10.0  # overridden by trajectory length at runtime
     action_space: int = 12
     observation_space: int = 33  # OPT-Mimic: quat(4)+joints(12)+ang_vel(3)+joint_vel(12)+phase(2)
     state_space: int = 0
+    enable_domain_randomization: bool = True
+    phase0_reset_prob: float = 0.5
+    clean_phase0_reset_prob: float = 0.0
+    phase0_curriculum: bool = True
+    phase0_curriculum_min_frac: float = 0.6
+    joint_offset_std: float = 0.01
+    torque_scale_std: float = 0.05
+    friction_mean: float = 0.9
+    friction_std: float = 0.10
+    friction_min: float = 0.6
+    friction_max: float = 1.2
+    restitution_std: float = 0.03
+    restitution_max: float = 0.10
 
     # --- Simulation ---
     sim: SimulationCfg = SimulationCfg(
         dt=0.001,  # 1kHz physics (matches MJX sim_dt)
-        render_interval=20,
+        render_interval=10,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",

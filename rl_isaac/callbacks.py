@@ -53,18 +53,22 @@ class TrainingLogger:
         if max_phase > 0:
             self._write_header(total_timesteps, num_envs, max_phase)
 
-    def _write_header(self, total_timesteps, num_envs, max_phase):
+    def _write_header(self, total_timesteps, num_envs, max_phase, mpc_dt: float = 0.02,
+                      env_dt: float | None = None, phase_inc: float | None = None):
         self._logger.info("")
         self._logger.info("=" * 60)
         self._logger.info("TRAINING: ISAAC LAB PPO LEARNING LOG (OPT-MIMIC)")
         self._logger.info("=" * 60)
         self._logger.info(f"Timesteps: {total_timesteps}  Envs: {num_envs}")
-        self._logger.info(f"Trajectory: {max_phase} steps, {max_phase * 0.02:.2f}s")
+        self._logger.info(f"Trajectory: {max_phase} MPC frames, {max_phase * mpc_dt:.2f}s")
+        if env_dt is not None and phase_inc is not None:
+            self._logger.info(f"Control dt: {env_dt:.3f}s  phase_inc={phase_inc:.3f}")
         self._logger.info("=" * 60)
 
-    def update_header(self, total_timesteps, num_envs, max_phase):
+    def update_header(self, total_timesteps, num_envs, max_phase, mpc_dt: float = 0.02,
+                      env_dt: float | None = None, phase_inc: float | None = None):
         """Rewrite header once we know the actual max_phase from the env."""
-        self._write_header(total_timesteps, num_envs, max_phase)
+        self._write_header(total_timesteps, num_envs, max_phase, mpc_dt, env_dt, phase_inc)
 
     def info(self, msg: str):
         """Log an info message to both file and stdout."""

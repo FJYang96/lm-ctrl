@@ -79,6 +79,7 @@ class HoppingMPCConfig(MPCConfig):
             "SWING_GRF_EPS": 0.0,
             "STANCE_HEIGHT_EPS": 0.02,
             "NO_SLIP_EPS": 0.005,
+            "LINK_CLEARANCE_MIN": 0.02,
         }
     )
 

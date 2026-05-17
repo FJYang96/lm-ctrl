@@ -13,16 +13,45 @@ import cv2
 import numpy as np
 
 
+def read_video_frames(video_path: Path) -> list[np.ndarray]:
+    cap = cv2.VideoCapture(str(video_path))
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+    cap.release()
+    return frames
+
+
+def trim_static_tail(frames: list[np.ndarray], *, min_tail: int = 10, diff_threshold: float = 0.5) -> list[np.ndarray]:
+    """Drop a repeated final hold so comparison frames cover the active motion."""
+    if len(frames) <= min_tail:
+        return frames
+    last = frames[-1]
+    changed_idx = None
+    for idx in range(len(frames) - 2, -1, -1):
+        diff = np.mean(np.abs(frames[idx].astype(np.float32) - last.astype(np.float32)))
+        if diff > diff_threshold:
+            changed_idx = idx
+            break
+    if changed_idx is None:
+        return frames
+    tail_len = len(frames) - changed_idx - 1
+    if tail_len < min_tail:
+        return frames
+    return frames[: changed_idx + 2]
+
+
 def extract_and_save(video_path: Path, output_dir: Path, num_frames: int) -> int:
     """Extract evenly-spaced frames from a video and save as PNGs.
 
     Returns number of frames saved.
     """
-    cap = cv2.VideoCapture(str(video_path))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
+    frames = trim_static_tail(read_video_frames(video_path))
+    total = len(frames)
     if total == 0:
-        cap.release()
         print(f"  No frames in {video_path}")
         return 0
 
@@ -32,13 +61,9 @@ def extract_and_save(video_path: Path, output_dir: Path, num_frames: int) -> int
     output_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
     for i, idx in enumerate(indices):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
-        ret, frame = cap.read()
-        if ret:
-            cv2.imwrite(str(output_dir / f"frame_{i + 1:03d}.png"), frame)
+        frame = frames[int(idx)]
+        if cv2.imwrite(str(output_dir / f"frame_{i + 1:03d}.png"), frame):
             saved += 1
-
-    cap.release()
     return saved
 
 

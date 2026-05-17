@@ -11,6 +11,7 @@ Usage (inside Docker):
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -87,19 +88,54 @@ def train(args):
     cfg.contact_sequence_path = args.contact_sequence if args.contact_sequence else ""
     env = Go2TrackingEnv(cfg, render_mode="rgb_array")
     max_phase = env._max_phase
+    rollout_steps = env._episode_horizon
     num_envs = env.num_envs
     device = env.device
-    logger.update_header(args.total_timesteps, num_envs, max_phase)
+    logger.update_header(args.total_timesteps, num_envs, max_phase,
+                         env._mpc_dt, env._env_dt, env._phase_inc)
 
     ppo_cfg = OPTMimicPPOCfg()
     ppo_cfg.seed = args.seed
     ppo_cfg.num_learning_epochs = args.n_epochs
-    n_steps = max_phase
+    n_steps = rollout_steps
+    ppo_cfg.num_steps_per_env = n_steps
     samples_per_update = n_steps * num_envs
     n_updates = max(1, args.total_timesteps // samples_per_update)
     ppo_cfg.num_mini_batches = max(1, samples_per_update // 5000)
+    logger.info(f"Reference: {max_phase} MPC frames at {env._mpc_dt:.3f}s; "
+                f"rollout: {n_steps} env steps at {env._env_dt:.3f}s "
+                f"(phase_inc={env._phase_inc:.3f})")
     logger.info(f"Training: {args.total_timesteps} steps, {n_updates} updates, "
                 f"{ppo_cfg.num_learning_epochs} epochs, {ppo_cfg.num_mini_batches} minibatches")
+
+    target_phase0_prob = float(getattr(cfg, "phase0_reset_prob", 0.0))
+    curriculum_enabled = bool(getattr(cfg, "phase0_curriculum", False)) and target_phase0_prob > 0.0
+    curriculum_min_frac = float(getattr(cfg, "phase0_curriculum_min_frac", 0.6))
+    curriculum_min_frac = min(max(curriculum_min_frac, 0.0), 1.0)
+    curriculum_switch_step = None
+    curriculum_state = {
+        "enabled": curriculum_enabled,
+        "initial_phase0_reset_prob": 0.0 if curriculum_enabled else target_phase0_prob,
+        "target_phase0_reset_prob": target_phase0_prob,
+        "min_switch_frac": curriculum_min_frac,
+        "min_switch_step": int(args.total_timesteps * curriculum_min_frac),
+        "switched": False,
+        "switch_step": None,
+        "switch_reason": None,
+    }
+
+    def write_curriculum_state():
+        with (output_dir / "curriculum.json").open("w") as f:
+            json.dump(curriculum_state, f, indent=2)
+
+    if curriculum_enabled:
+        env.cfg.phase0_reset_prob = 0.0
+        logger.info(
+            "Reset curriculum: random-phase DR resets first; "
+            f"switch to phase0_reset_prob={target_phase0_prob:.2f} after "
+            f"clean phase-0 completion or {curriculum_min_frac:.0%} of training."
+        )
+    write_curriculum_state()
 
     actor_critic = OPTMimicActorCritic(
         num_obs=33, num_privileged_obs=0, num_actions=12,
@@ -121,6 +157,7 @@ def train(args):
     obs = obs_dict["policy"]
     total_steps = 0
     best_ep_metric = (-float("inf"), -float("inf"))  # (mean_ep_length, mean_ep_return)
+    best_phase0_steps = -1
     next_video_step = 1_000_000
     t_start = time.time()
     logger.info(f"Starting training ({n_updates} updates)...")
@@ -197,18 +234,56 @@ def train(args):
         current_ep_metric = (mean_ep_length, mean_ep_return)
         if current_ep_metric > best_ep_metric:
             best_ep_metric = current_ep_metric
-            save_checkpoint(output_dir / "best_model", actor_critic, obs_normalizer, total_steps)
+            save_checkpoint(output_dir / "best_training_model", actor_critic, obs_normalizer, total_steps)
         if (update_idx + 1) % max(1, n_updates // 10) == 0 or update_idx == n_updates - 1:
             save_checkpoint(output_dir / "checkpoints" / f"step_{total_steps}", actor_critic, obs_normalizer, total_steps)
         if total_steps >= next_video_step:
-            logger.info(f"  Rendering best model video at step {total_steps:,}...")
-            obs = render_video(env, actor_critic, obs_normalizer, output_dir, total_steps, logger)
+            save_checkpoint(
+                output_dir / "video_checkpoints" / f"step_{total_steps}",
+                actor_critic, obs_normalizer, total_steps,
+            )
+            logger.info(f"  Rendering current clean phase-0 video at step {total_steps:,}...")
+            obs, phase0_steps = render_video(
+                env, actor_critic, obs_normalizer, output_dir, total_steps, logger,
+                use_best_model=False, clean_eval=True,
+            )
+            if phase0_steps > best_phase0_steps:
+                best_phase0_steps = phase0_steps
+                save_checkpoint(output_dir / "best_model", actor_critic, obs_normalizer, total_steps)
+                logger.info(
+                    f"  New best clean phase-0 model: "
+                    f"{best_phase0_steps}/{env._episode_horizon} env steps"
+                )
+            if curriculum_enabled and not curriculum_state["switched"]:
+                reached_clean = best_phase0_steps >= env._episode_horizon
+                reached_warmup = total_steps >= curriculum_state["min_switch_step"]
+                if reached_clean or reached_warmup:
+                    env.cfg.phase0_reset_prob = target_phase0_prob
+                    curriculum_switch_step = total_steps
+                    reason = "clean_phase0_complete" if reached_clean else "warmup_complete"
+                    curriculum_state.update({
+                        "switched": True,
+                        "switch_step": int(total_steps),
+                        "switch_reason": reason,
+                    })
+                    write_curriculum_state()
+                    logger.info(
+                        "  Reset curriculum switch: "
+                        f"phase0_reset_prob={target_phase0_prob:.2f} "
+                        f"at step {total_steps:,} ({reason})."
+                    )
             next_video_step = (total_steps // 1_000_000 + 1) * 1_000_000
         if (update_idx + 1) % max(1, n_updates // 5) == 0 or update_idx == n_updates - 1:
             logger.save_reward_curve(str(output_dir), total_steps)
 
     logger.info(f"Training complete in {time.time() - t_start:.1f}s ({total_steps:,} steps)")
     logger.info(f"Best (ep_length, ep_return): ({best_ep_metric[0]:.2f}, {best_ep_metric[1]:.2f})")
+    logger.info(f"Best clean phase-0 steps: {best_phase0_steps}/{env._episode_horizon}")
+    if curriculum_enabled and not curriculum_state["switched"]:
+        curriculum_state["switch_step"] = int(curriculum_switch_step) if curriculum_switch_step else None
+        write_curriculum_state()
+    if not (output_dir / "best_model" / "checkpoint.pt").exists():
+        save_checkpoint(output_dir / "best_model", actor_critic, obs_normalizer, total_steps)
     save_checkpoint(output_dir / "final_model", actor_critic, obs_normalizer, total_steps)
     logger.save_reward_curve(str(output_dir), total_steps)
     # Final best_model.mp4 render removed: redundant with run_smoke_test.sh

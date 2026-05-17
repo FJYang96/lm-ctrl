@@ -11,36 +11,37 @@ import torch
 # ---------------------------------------------------------------------------
 # Actuation constants (Go2-tuned)
 # ---------------------------------------------------------------------------
-KP = 50.0
-KD = 3.0
+KP = 80.0
+KD = 4.0
 TORQUE_LIMITS = torch.tensor([
     23.7, 23.7, 45.43,  # FL
     23.7, 23.7, 45.43,  # FR
     23.7, 23.7, 45.43,  # RL
     23.7, 23.7, 45.43,  # RR
 ], dtype=torch.float32)
-ACTION_LIMIT = 0.6
+ACTION_LIMIT = 0.8
+FF_SCALE = 1.0
 
 # ---------------------------------------------------------------------------
 # Reward sigmas and weights (OPT-Mimic Eq. 16, Go2-tuned)
 # ---------------------------------------------------------------------------
 SIGMA_POS = 0.10
-SIGMA_ORI = 0.25
+SIGMA_ORI = 0.18
 SIGMA_JOINT = 0.5
 SIGMA_SMOOTH = 1.0
 SIGMA_TORQUE = 40.0
 
-W_POS = 0.3
-W_ORI = 0.3
-W_JOINT = 0.2
-W_SMOOTH = 0.1
-W_TORQUE = 0.1
+W_POS = 0.35
+W_ORI = 0.40
+W_JOINT = 0.15
+W_SMOOTH = 0.05
+W_TORQUE = 0.05
 
 # ---------------------------------------------------------------------------
 # Termination
 # ---------------------------------------------------------------------------
-TERM_MULTIPLIER = 2.5
-CONTACT_GRACE_WINDOW = 12  # 240ms at 50Hz
+TERM_MULTIPLIER = 3.0
+CONTACT_GRACE_WINDOW = 12  # tolerant contact-transition grace in MPC frames
 
 # Phase-0 instrumentation: stable order for CSV column layout.
 TERM_CAUSE_NAMES = (

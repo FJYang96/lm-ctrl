@@ -112,6 +112,7 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True,
 
     device = env.device
     max_phase = env._max_phase
+    horizon = env._episode_horizon
     torque_limits = TORQUE_LIMITS.to(device)
 
     # Seed BEFORE reset so DR samples drawn inside _reset_idx are reproducible.
@@ -126,7 +127,7 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True,
     # torque_scale). Friction/restitution come from the env's initial reset
     # either way; with --seed they are reproducible.
     env.reset()
-    env._phase[:] = 0
+    env._phase[:] = 0.0
     env._prev_action[:] = 0
     env._last_torque[:] = 0
     env._first_step[:] = True
@@ -136,12 +137,13 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True,
 
     # Write reference state at phase 0
     all_ids = env._robot._ALL_INDICES
-    ref_pos = env._ref_body_pos[0:1].expand(env.num_envs, -1).clone() + env._env_origins
-    ref_quat = env._ref_body_quat[0:1].expand(env.num_envs, -1).clone()
-    ref_vel = env._ref_body_vel[0:1].expand(env.num_envs, -1).clone()
-    ref_ang_vel = env._ref_body_ang_vel[0:1].expand(env.num_envs, -1).clone()
-    ref_jpos = env._ref_joint_pos[0:1].expand(env.num_envs, -1).clone()
-    ref_jvel = env._ref_joint_vel[0:1].expand(env.num_envs, -1).clone()
+    ref0 = env._sample_reference(torch.zeros(env.num_envs, device=device))
+    ref_pos = ref0["body_pos"].clone() + env._env_origins
+    ref_quat = ref0["body_quat"].clone()
+    ref_vel = ref0["body_vel"].clone()
+    ref_ang_vel = ref0["body_ang_vel"].clone()
+    ref_jpos = ref0["joint_pos"].clone()
+    ref_jvel = ref0["joint_vel"].clone()
 
     env._robot.write_root_pose_to_sim(
         torch.cat([ref_pos, ref_quat], dim=-1), all_ids,
@@ -161,7 +163,8 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True,
         "pos_err": [], "ori_err": [], "joint_err": [],
         "max_torque": [], "torque_saturation_frac": [],
         "actual_contact": [], "expected_contact": [],
-        "phase_at_step": [],
+        "nonfoot_force": [], "nonfoot_body_id": [],
+        "phase_at_step": [], "ref_root_pos": [], "ref_joint_pos": [],
     }
     use_policy = actor_critic is not None
     termination = {"cause": None, "frame": None}
@@ -171,7 +174,7 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True,
     original_reset = env._reset_idx
     env._reset_idx = lambda env_ids: None
 
-    for step_idx in range(max_phase):
+    for step_idx in range(horizon):
         if use_policy:
             obs = env._get_observations()["policy"]
             with torch.no_grad():
@@ -186,10 +189,13 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True,
         root_pos = (env._robot.data.root_pos_w[0] - env._env_origins[0]).cpu().numpy()
         root_quat = env._robot.data.root_quat_w[0].cpu().numpy()
         joint_pos = env._to_mpc_order(env._robot.data.joint_pos)[0].cpu().numpy()
+        phase_value = float(env._phase[0].clamp(0.0, float(max_phase)).item())
+        ref_step = env._sample_reference(env._phase[0:1])
         positions.append({
             "root_pos": root_pos.copy(),
             "root_quat": root_quat.copy(),
             "joint_pos": joint_pos.copy(),
+            "phase": phase_value,
         })
 
         # Per-step diagnostics for env 0 (Phase-0.4 instrumentation)
@@ -203,11 +209,14 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True,
             float((torque_abs > 0.9 * torque_limits).float().mean().item())
         )
         actual_contact = (env._last_actual_force_per_foot[0] > 1.0).cpu().numpy().astype(int).tolist()
-        ph = int(env._phase[0].clamp(0, max_phase - 1).item())
-        expected_contact = (env._ref_contact_seq[:, ph] > 0.5).cpu().numpy().astype(int).tolist()
+        expected_contact = (ref_step["contact"][0] > 0.5).cpu().numpy().astype(int).tolist()
         per_step["actual_contact"].append(actual_contact)
         per_step["expected_contact"].append(expected_contact)
-        per_step["phase_at_step"].append(ph)
+        per_step["nonfoot_force"].append(float(env._last_nonfoot_force[0].item()))
+        per_step["nonfoot_body_id"].append(int(env._last_nonfoot_body_id[0].item()))
+        per_step["phase_at_step"].append(phase_value)
+        per_step["ref_root_pos"].append(ref_step["body_pos"][0].cpu().numpy().copy())
+        per_step["ref_joint_pos"].append(ref_step["joint_pos"][0].cpu().numpy().copy())
 
         if render:
             frame = env.render()
@@ -231,7 +240,8 @@ def execute_rollout(env, actor_critic, obs_normalizer, render=True,
                     termination["cause"] = name
                     break
             termination["frame"] = step_idx + 1
-            print(f"  Env 0 terminated at step {step_idx + 1}/{max_phase} "
+            print(f"  Env 0 terminated at env step {step_idx + 1}/{horizon} "
+                  f"(phase={phase_value:.3f}/{max_phase}) "
                   f"(cause={termination['cause']})")
             break
 
@@ -257,6 +267,8 @@ def main():
     cfg.contact_sequence_path = (
         args_cli.contact_sequence if args_cli.contact_sequence else ""
     )
+    cfg.enable_domain_randomization = bool(args_cli.enable_dr)
+    cfg.clean_phase0_reset_prob = 0.0
     # Close-up camera with fixed world-frame position
     cfg.viewer = ViewerCfg(
         eye=(2.5, 2.5, 1.5),
@@ -268,6 +280,7 @@ def main():
     env = Go2TrackingEnv(cfg, render_mode="rgb_array")
     device = env.device
     max_phase = env._max_phase
+    horizon = env._episode_horizon
 
     # Load model or use baseline
     actor_critic = None
@@ -293,8 +306,17 @@ def main():
         enable_dr=bool(args_cli.enable_dr), seed=args_cli.seed,
     )
 
-    # Compute tracking errors
-    n_tracked = len(positions)
+    # Compute tracking errors.  The rollout runs at the env/control rate
+    # (100Hz), while frames_tracked reports completed 20Hz MPC reference
+    # frames for compatibility with the smoke-test acceptance gate.
+    n_env_steps = len(positions)
+    final_phase = positions[-1]["phase"] if positions else 0.0
+    complete = (
+        termination["cause"] == "trunc"
+        or n_env_steps >= horizon
+        or final_phase >= max_phase - 0.5 * env._phase_inc
+    )
+    n_tracked = int(max_phase if complete else np.floor(final_phase + 1.0e-6))
     mode_label = "FF-ONLY (PD+FF, zero residual)" if ff_only_mode else "RL POLICY"
     mode_key = "ff_only" if ff_only_mode else "policy"
 
@@ -302,25 +324,23 @@ def main():
     print("=" * 50)
     print(f"ISAAC LAB TRACKING: {mode_label}")
     print("=" * 50)
-    print(f"  Steps tracked: {n_tracked}/{max_phase}")
+    print(f"  MPC frames tracked: {n_tracked}/{max_phase}")
+    print(f"  Env steps tracked: {n_env_steps}/{horizon}  phase={final_phase:.3f}")
     print(f"  Termination cause: {termination['cause']}  frame: {termination['frame']}")
 
     pos_rms = float("nan")
     joint_rms = float("nan")
     ori_rms = float("nan")
-    if n_tracked > 0:
-        # Phase is incremented before reward/done check, so the reference
-        # position at phase k+1 is what we compare against after step k.
-        ref_idx = min(n_tracked, max_phase)
-        ref_positions = env._ref_body_pos[1:ref_idx + 1].cpu().numpy()
-        actual_positions = np.array([p["root_pos"] for p in positions[:ref_idx]])
+    if n_env_steps > 0:
+        ref_positions = np.array(per_step["ref_root_pos"][:n_env_steps])
+        actual_positions = np.array([p["root_pos"] for p in positions[:n_env_steps]])
         pos_rms = float(np.sqrt(np.mean((ref_positions - actual_positions) ** 2)))
 
-        ref_joints = env._ref_joint_pos[1:ref_idx + 1].cpu().numpy()
-        actual_joints = np.array([p["joint_pos"] for p in positions[:ref_idx]])
+        ref_joints = np.array(per_step["ref_joint_pos"][:n_env_steps])
+        actual_joints = np.array([p["joint_pos"] for p in positions[:n_env_steps]])
         joint_rms = float(np.sqrt(np.mean((ref_joints - actual_joints) ** 2)))
 
-        ori_arr = np.asarray(per_step["ori_err"][:ref_idx], dtype=np.float64)
+        ori_arr = np.asarray(per_step["ori_err"][:n_env_steps], dtype=np.float64)
         ori_rms = float(np.sqrt(np.mean(ori_arr ** 2)))
 
         print(f"  Position RMS:  {pos_rms:.4f} m")
@@ -331,29 +351,50 @@ def main():
     # ---- Phase-0.4: write eval JSON ----
     if args_cli.output_json:
         import json
+        phases_np = np.asarray(per_step["phase_at_step"], dtype=np.float64)
+
         # Per-phase arrays aligned to reference frame index. Pad with NaN /
         # null past the termination frame so the JSON shape is always
         # max_phase regardless of how many frames the rollout completed.
         def pad(arr, fill):
             out = list(arr)
-            while len(out) < max_phase:
+            while len(out) < horizon:
                 out.append(fill)
             return out
+
+        def per_ref_frame(arr, fill=None):
+            out = []
+            for ref_frame in range(1, max_phase + 1):
+                hits = np.nonzero(phases_np >= ref_frame - 1.0e-6)[0]
+                if len(hits) == 0:
+                    out.append(fill)
+                else:
+                    out.append(arr[int(hits[0])])
+            return out
+
         out_json = {
             "mode": mode_key,
             "enable_dr": bool(args_cli.enable_dr),
             "seed": args_cli.seed,
             "frames_tracked": n_tracked,
             "max_phase": int(max_phase),
+            "env_steps_tracked": n_env_steps,
+            "max_env_steps": int(horizon),
+            "phase_inc": float(env._phase_inc),
             "termination_cause": termination["cause"],
             "termination_frame": termination["frame"],
-            "per_phase_pos_err": pad(per_step["pos_err"], None),
-            "per_phase_ori_err": pad(per_step["ori_err"], None),
-            "per_phase_joint_err": pad(per_step["joint_err"], None),
+            "per_phase_pos_err": per_ref_frame(per_step["pos_err"], None),
+            "per_phase_ori_err": per_ref_frame(per_step["ori_err"], None),
+            "per_phase_joint_err": per_ref_frame(per_step["joint_err"], None),
+            "per_step_pos_err": pad(per_step["pos_err"], None),
+            "per_step_ori_err": pad(per_step["ori_err"], None),
+            "per_step_joint_err": pad(per_step["joint_err"], None),
             "per_step_max_torque": pad(per_step["max_torque"], None),
             "per_step_torque_saturation_frac": pad(per_step["torque_saturation_frac"], None),
             "per_step_contact_actual": pad(per_step["actual_contact"], None),
             "per_step_contact_expected": pad(per_step["expected_contact"], None),
+            "per_step_nonfoot_force": pad(per_step["nonfoot_force"], None),
+            "per_step_nonfoot_body_id": pad(per_step["nonfoot_body_id"], None),
             "per_step_phase": pad(per_step["phase_at_step"], None),
             "rms_pos": pos_rms,
             "rms_joint": joint_rms,
@@ -368,15 +409,16 @@ def main():
     # Save video
     if images:
         import imageio
+        video_fps = int(round(1.0 / env._env_dt))
 
         # Hold last frame for 2s so the video rests at the end
         last_frame = images[-1]
-        for _ in range(100):  # 2s at 50fps
+        for _ in range(2 * video_fps):
             images.append(last_frame)
 
         output_path = Path(args_cli.output_video)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        writer = imageio.get_writer(str(output_path), fps=50, macro_block_size=1)
+        writer = imageio.get_writer(str(output_path), fps=video_fps, macro_block_size=1)
         for frame in images:
             writer.append_data(frame)
         writer.close()
