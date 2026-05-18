@@ -222,7 +222,12 @@ P3 — DON'T OVER-CONSTRAIN: Use one-sided bounds with large finite numbers (low
   to fix failures — more constraints = smaller feasible region = harder problem.
 
 P4 — TERMINAL CONSTRAINTS: The base MPC does NOT enforce terminal state requirements.
-  For safe landing, tighten bounds as progress→1.0 (small velocities, stable orientation).
+  For safe landing, tighten bounds as progress→1.0 (small velocities, stable roll/pitch,
+  nominal standing height, feet planted when the motion ends on the ground).
+  Do NOT force final x/y position or yaw back to the initial value unless the user
+  explicitly asks to return to the start. Terminal position and heading must match
+  the requested task: locomotion should stay where it traveled, jump_180 should end
+  holding the 180deg yaw, and flips only need an upright settled landing posture.
   Use fmax(0, (progress - 0.8) / 0.2) for smooth late-activation ramps.
 
 P5 — ONE CONSTRAINT PER VARIABLE: Don't constrain the same variable in multiple
@@ -321,15 +326,18 @@ LATER ITERATIONS: You receive scores for ALL past iterations, plus 3 sampled
 Generate MPC configuration and constraints for the requested behavior.
 Think about: What motion is needed? What constraints will FORCE that motion?
 
-In addition to the requested behavior, the trajectory must end at a state
-matching the initial standing configuration on every state component: COM
-position, orientation (compared as unwrapped Euler, not modulo 2pi), joint
-angles, and all linear and angular velocities. This holds for every motion
-regardless of what it does in between. The reference trajectory's final
-timesteps must drive every state component back to the initial state, and
-the constraints should tighten near progress -> 1 to make the optimizer
-respect this ending. If you don't end at the initial state, the robot
-cannot be deployed and continue from the end of the trajectory."""
+In addition to the requested behavior, the trajectory must end in a deployable
+stable posture: low linear and angular velocity, upright roll/pitch, nominal
+standing height, feasible joint angles, and feet planted when the motion ends
+on the ground. Do NOT treat the initial x/y position or initial yaw as a
+universal terminal target. Preserve task displacement and task heading:
+- jump_180: finish at the 180deg yaw and HOLD it; never unwind to the original yaw.
+- locomotion / walk / trot / hop_forward / pronk / bound: finish at the traveled
+  location; never translate back to the start.
+- flips: land upright and settled; x/y drift and final yaw only need to be
+  physically reasonable unless the user requested a specific displacement/heading.
+The reference trajectory's final timesteps and any late-activating constraints
+should encode this motion-appropriate terminal state."""
 
     return base
 

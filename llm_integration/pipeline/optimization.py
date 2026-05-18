@@ -94,12 +94,13 @@ def analyze_trajectory(
             "trajectory_duration": float((len(state_traj) - 1) * mpc_dt),
         }
 
-        # Terminal-vs-initial state deltas (how close the trajectory ends to
-        # where it started — checked by the scoring LLM under TERMINAL STATE CHECK).
+        # Terminal-vs-initial deltas.  These are diagnostic, not universal
+        # objectives: locomotion should keep its displacement and jump_180
+        # should keep its yaw, while flips primarily need a stable landing.
         com_dxy_final = float(np.linalg.norm(com_positions[-1, 0:2] - com_positions[0, 0:2]))
         com_dz_final = float(com_positions[-1, 2] - com_positions[0, 2])
-        # Use unwrapped (raw) Euler difference, not modulo 2pi, so a full-rotation
-        # motion that lands at angle 2pi is flagged as different from the start at 0.
+        # Use unwrapped (raw) Euler difference so the scorer can distinguish
+        # commanded heading changes from unintended unwinding.
         eul_diff = euler_angles[-1] - euler_angles[0]
         joint_dev = joint_angles[-1] - joint_angles[0]
         metrics["terminal_dxy_from_init"] = com_dxy_final

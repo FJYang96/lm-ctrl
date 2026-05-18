@@ -67,9 +67,9 @@ Return a JSON object with these fields. Use dense key=value pairs, not prose:
     "solver": "<1 line: converged/failed, iteration count if failed, error type>",
     "motion_quality": "<1-3 dense lines, pipe-separated. ALL 10 sections: Smooth: jerk_rms=X max=X joint_max=X(jN,t=X) | Pen: foot=X body=X(link,depth,step) | GRF: phantom=X missing=X | Friction: violations=X worst_ratio=X | AngMom: flight_dev=X | Energy: disc=X% rate=X | Term: v=X w=X dh=X pitch=Xdeg | Contact: vz=X spread=X polygon=X | Joints: prox=X(jN,sN) | Manip: min=X pct_below=X>",
     "metrics": "<2-3 lines: height(init/max/gain/final), vel(max_com, terminal vx/vy/vz/wx/wy/wz), orient(roll/pitch/yaw max+total in deg), timing(dur, flight_start, flight_dur), GRF(max_total, max_foot, active%), actuator(max_jvel), phase(stance/flight steps, pitch per phase deg+%)>",
-    "terminal": "<1 line: vx=X vy=X vz=X wx=X wy=X wz=X | height=X | roll=Xdeg pitch=Xdeg yaw=Xdeg>",
+    "terminal": "<1 line: vx=X vy=X vz=X wx=X wy=X wz=X | height=X | roll=Xdeg pitch=Xdeg yaw=Xdeg | dx=X dy=X>",
     "hardness": "<1-2 lines: per constraint — name max_slack=X total=X steps=X-X worst_t=X>",
-    "violations": "<1-2 lines: terminal(x,y,z,vx,vy,vz,roll,pitch,yaw) | LLM constraints(name, count, max_dev, timesteps)>",
+    "violations": "<1-2 lines: terminal stability(vx,vy,vz,wx,wy,wz,height,roll,pitch; dx/dy/yaw are task-dependent) | LLM constraints(name, count, max_dev, timesteps)>",
     "reference": "<1-2 lines: ref height/pitch/vz ranges, RMSE(height=X pitch=X vz=X), plausibility(max_vz_jump=X consistency=X)>"
 }}
 
