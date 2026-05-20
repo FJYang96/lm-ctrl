@@ -37,7 +37,7 @@ def generate_constraints_with_retry(
 
     Args:
         system_prompt: System prompt for the LLM.
-        user_message: Initial user prompt (e.g. "Generate MPC for: backflip").
+        user_message: Initial user prompt.
         feedback_data: Structured feedback from the previous iteration (None on
             iteration 1).  Passed as keyword args to ``generate_constraints``
             which builds the context and calls the LLM in one shot.

@@ -6,9 +6,7 @@ This script implements the LLM feedback pipeline described in the research PDF,
 allowing users to generate quadruped behaviors through natural language commands.
 
 Usage:
-    python llm_main.py "do a backflip"
-    python llm_main.py "jump forward"
-    python llm_main.py "perform a front flip"
+    python llm_main.py "<natural language robot command>"
 
 The system will:
 1. Generate optimization constraints using an LLM (Anthropic or Gemini; see LLM_PROVIDER in .env)
@@ -40,14 +38,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="LLM-Enhanced Quadruped Control",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python llm_main.py "do a backflip"
-  python llm_main.py "jump as high as possible"
-  python llm_main.py "perform a front flip" --max-iterations 10
-  python llm_main.py "spin in a circle" --no-slack
-  python llm_main.py "jump forward" --max-iterations 5
-        """,
     )
 
     parser.add_argument(

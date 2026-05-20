@@ -286,7 +286,6 @@ class LLMTaskMPC:
 
         Args:
             weights: Dict mapping YOUR constraint function names to penalty weights.
-                     e.g. {"height_constraint": 1e4, "velocity_constraint": 1e2}
                      Physics constraints are always hard and cannot be softened.
         """
         self.slack_weights.update(weights)

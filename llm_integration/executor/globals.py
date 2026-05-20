@@ -210,9 +210,9 @@ def create_restricted_globals(
         allowed_imports = ALLOWED_IMPORTS
 
     restricted_globals: dict[str, Any] = {
-        # Common module-level identifiers some LLM-generated scripts reference
-        # (e.g. `if __name__ == "__main__":` guards). Set a sentinel value so
-        # those guards evaluate False without raising NameError.
+        # Common module-level identifiers some LLM-generated scripts reference.
+        # Set a sentinel value so script-entry guards evaluate False without
+        # raising NameError.
         "__name__": "__llm_constraint__",
         "__builtins__": {
             # Basic Python built-ins needed for constraint functions
@@ -360,8 +360,7 @@ def process_dynamic_imports(
                         if alias.name in allowed_imports:
                             alias_name = alias.asname if alias.asname else alias.name
                             # Always wrap allowed modules in their restricted proxy
-                            # to prevent bypassing restrictions via aliasing
-                            # (e.g. "import casadi" instead of "import casadi as cs")
+                            # to prevent bypassing restrictions via aliasing.
                             module = __import__(alias.name)
                             if alias.name == "numpy":
                                 globals_dict[alias_name] = _RestrictedNumpy(module)

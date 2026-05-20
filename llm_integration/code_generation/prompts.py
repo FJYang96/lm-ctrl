@@ -183,8 +183,7 @@ Parameters:
     u_k[0:12]  = joint velocities [rad/s] (3 per leg: hip, thigh, calf × FL, FR, RL, RR)
     u_k[12:24] = ground reaction forces [N] (3 per leg: fx, fy, fz × FL, FR, RL, RR)
   kindyn_model: robot kinematics/dynamics model with forward kinematics and Jacobian
-    functions for each foot (e.g. kindyn_model.forward_kinematics_FL_fun(H, joints))
-    — rarely needed, only for foot-position-based constraints
+    functions for each foot — rarely needed, only for foot-position-based constraints
   config: robot configuration object — access physical params via config.robot_data.mass,
     config.robot_data.grf_limits, config.experiment.mu_ground, etc.
     — rarely needed, physical limits are already in this prompt
@@ -198,13 +197,13 @@ Constraint application range:
   YOUR constraints are NEVER applied at k=horizon regardless of whether they use u_k.
   The initial state (k=0) is enforced separately by the solver. Design
   terminal constraints to tighten as progress approaches 1.0 — the last applied
-  step is k=horizon-1 (progress = (horizon-1)/horizon, e.g. 0.98 for horizon=50).
+  step is k=horizon-1 (progress = (horizon-1)/horizon).
 
 P1 — SMOOTH BOUNDS: Bounds must be continuous across timesteps. NEVER use if/else
   branches, contact_k-based step functions, or anything that creates sudden jumps.
   Use progress-based ramps: bound = start + progress * change. For phase-specific
   behavior, use Gaussians: exp(-((progress - center)/width)²).
-  IMPORTANT: Python if/else on CasADi symbolic variables (e.g. if x_k[2] > 0.3:)
+  IMPORTANT: Python if/else on CasADi symbolic variables
   silently converts the symbolic expression to a concrete boolean — this does NOT
   create a conditional constraint. Use cs.if_else(condition, true_val, false_val)
   for symbolic branching.
@@ -226,8 +225,10 @@ P4 — TERMINAL CONSTRAINTS: The base MPC does NOT enforce terminal state requir
   nominal standing height, feet planted when the motion ends on the ground).
   Do NOT force final x/y position or yaw back to the initial value unless the user
   explicitly asks to return to the start. Terminal position and heading must match
-  the requested task: locomotion should stay where it traveled, jump_180 should end
-  holding the 180deg yaw, and flips only need an upright settled landing posture.
+  the requested task: translating motions should stay where they traveled,
+  commanded heading changes should hold the requested heading, and aerial
+  rotations only need an upright settled landing posture unless the user asks
+  for a specific final displacement or heading.
   Use fmax(0, (progress - 0.8) / 0.2) for smooth late-activation ramps.
 
 P5 — ONE CONSTRAINT PER VARIABLE: Don't constrain the same variable in multiple
@@ -271,7 +272,7 @@ Physics rules:
   - Flight phases: ballistic z(t) = z0 + vz0*t - 0.5*g*t², GRF=0, angular momentum
     strictly conserved (enforced by solver)
   - Stance phases: GRF_z per grounded foot ≈ robot_mass * g / n_grounded_feet
-  - Use smooth interpolation (e.g. 10t³ - 15t⁴ + 6t⁵) for transitions
+  - Use smooth polynomial interpolation for transitions
   - Integrate angles from angular velocities — don't set angles without matching omega
   - Set IDX_INTEGRALS to 0.0, IDX_JOINTS to initial joint angles unless needed
   - GRF z-component for foot i at IDX_GRF_Z[i]
@@ -331,11 +332,13 @@ stable posture: low linear and angular velocity, upright roll/pitch, nominal
 standing height, feasible joint angles, and feet planted when the motion ends
 on the ground. Do NOT treat the initial x/y position or initial yaw as a
 universal terminal target. Preserve task displacement and task heading:
-- jump_180: finish at the 180deg yaw and HOLD it; never unwind to the original yaw.
-- locomotion / walk / trot / hop_forward / pronk / bound: finish at the traveled
-  location; never translate back to the start.
-- flips: land upright and settled; x/y drift and final yaw only need to be
-  physically reasonable unless the user requested a specific displacement/heading.
+- commanded heading changes must finish holding the requested heading change,
+  not unwind to the original yaw.
+- translating motions must finish at the traveled location, not translate back
+  to the start.
+- aerial rotations must land upright and settled; x/y drift and final yaw only
+  need to be physically reasonable unless the user requested a specific
+  displacement or heading.
 The reference trajectory's final timesteps and any late-activating constraints
 should encode this motion-appropriate terminal state."""
 
@@ -346,7 +349,7 @@ def get_user_prompt(command: str) -> str:
     """Create the initial user prompt from a natural language command.
 
     Args:
-        command: Natural language command (e.g., "do a backflip").
+        command: Natural language command.
 
     Returns:
         Formatted user prompt.

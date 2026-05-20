@@ -88,8 +88,8 @@ def render_failed_trajectory(
     Render the debug trajectory from a failed optimization for debugging.
 
     Even when the solver doesn't converge, the debug trajectory shows what
-    the solver was attempting. This is invaluable for understanding if the
-    approach was on the right track (e.g., 77% of a backflip).
+    the solver was attempting. This is invaluable for understanding whether
+    the approach was on the right track.
     """
 
     if self.env is None:

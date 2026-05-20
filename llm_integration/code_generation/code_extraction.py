@@ -180,8 +180,7 @@ def extract_raw_code(response: str) -> str:
         elif in_code_section and not stripped:
             python_lines.append(line)  # Keep empty lines within code
         elif in_code_section and stripped:
-            # Check if this might be a continuation of code
-            # (e.g., after a blank line in function body)
+            # Check if this might be a continuation of code after a blank line.
             if stripped.startswith("mpc.") or stripped.startswith("def "):
                 python_lines.append(line)
             else:

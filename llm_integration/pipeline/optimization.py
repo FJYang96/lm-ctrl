@@ -94,9 +94,9 @@ def analyze_trajectory(
             "trajectory_duration": float((len(state_traj) - 1) * mpc_dt),
         }
 
-        # Terminal-vs-initial deltas.  These are diagnostic, not universal
-        # objectives: locomotion should keep its displacement and jump_180
-        # should keep its yaw, while flips primarily need a stable landing.
+        # Terminal-vs-initial deltas are diagnostic, not universal objectives:
+        # translated positions and commanded headings should be preserved, while
+        # aerial rotations primarily need a stable landing.
         com_dxy_final = float(np.linalg.norm(com_positions[-1, 0:2] - com_positions[0, 0:2]))
         com_dz_final = float(com_positions[-1, 2] - com_positions[0, 2])
         # Use unwrapped (raw) Euler difference so the scorer can distinguish
