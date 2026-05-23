@@ -25,13 +25,15 @@ ACTION_LIMIT = 0.6
 # Reward sigmas and weights (OPT-Mimic Eq. 16, Go2-tuned)
 # ---------------------------------------------------------------------------
 SIGMA_POS = 0.10
-SIGMA_ORI = 0.25
+SIGMA_ORI = 0.15
+SIGMA_ORI_INC = 0.15 / 7.0  # TODO: 50 Hz is hardcoded in the paper; should be a parameter.
 SIGMA_JOINT = 0.5
 SIGMA_SMOOTH = 1.0
 SIGMA_TORQUE = 40.0
 
 W_POS = 0.3
 W_ORI = 0.3
+W_ORI_INC_MPPI = 0.5
 W_JOINT = 0.2
 W_SMOOTH = 0.1
 W_TORQUE = 0.1
@@ -60,6 +62,62 @@ def quat_error_vec(q_ref: torch.Tensor, q_actual: torch.Tensor) -> torch.Tensor:
         w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
         w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
     ], dim=-1)
+
+
+def _quat_normalize(q: torch.Tensor) -> torch.Tensor:
+    return q / torch.clamp(torch.linalg.norm(q, dim=-1, keepdim=True), min=1e-8)
+
+
+def _quat_inverse(q: torch.Tensor) -> torch.Tensor:
+    q_inv = q.clone()
+    q_inv[:, 1:] = -q_inv[:, 1:]
+    return q_inv
+
+
+def _quat_multiply(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+    w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
+    w2, x2, y2, z2 = q2[:, 0], q2[:, 1], q2[:, 2], q2[:, 3]
+    return torch.stack([
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    ], dim=-1)
+
+
+def compute_orientation_increment_error_sq(
+    ref_quat_t: torch.Tensor,
+    ref_quat_tp1: torch.Tensor,
+    actual_quat_t: torch.Tensor,
+    actual_quat_tp1: torch.Tensor,
+) -> torch.Tensor:
+    """Squared error between reference and actual orientation increments."""
+    ref_q_t = _quat_normalize(ref_quat_t)
+    ref_q_tp1 = _quat_normalize(ref_quat_tp1)
+    act_q_t = _quat_normalize(actual_quat_t)
+    act_q_tp1 = _quat_normalize(actual_quat_tp1)
+
+    ref_inc = _quat_multiply(_quat_inverse(ref_q_t), ref_q_tp1)
+    act_inc = _quat_multiply(_quat_inverse(act_q_t), act_q_tp1)
+    inc_err_vec = quat_error_vec(ref_inc, act_inc)
+    return (inc_err_vec ** 2).sum(dim=-1)
+
+
+def compute_orientation_increment_reward(
+    ref_quat_t: torch.Tensor,
+    ref_quat_tp1: torch.Tensor,
+    actual_quat_t: torch.Tensor,
+    actual_quat_tp1: torch.Tensor,
+    sigma: float = SIGMA_ORI_INC,
+) -> torch.Tensor:
+    """Gaussian reward term for orientation-increment tracking."""
+    inc_err_sq = compute_orientation_increment_error_sq(
+        ref_quat_t,
+        ref_quat_tp1,
+        actual_quat_t,
+        actual_quat_tp1,
+    )
+    return torch.exp(-inc_err_sq / (2.0 * sigma ** 2))
 
 
 def compute_tracking_errors(
