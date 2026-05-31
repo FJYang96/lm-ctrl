@@ -3,7 +3,9 @@
 
 results/
 *.npy
+*.npz
 *.mp4
+*.png
 .claude/
 slip_recovery_demo/
 
