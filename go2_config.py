@@ -354,9 +354,13 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+# IPOPT verbosity: 0 = quiet (default), 5 = full iteration log. Toggle at runtime
+# via set_solver_verbose() or mpc_replay.py --solver-verbose.
+_DEFAULT_IPOPT_PRINT_LEVEL = 0
+
 solver_config: dict[str, Any] = {
     "expand": False,
-    "ipopt.print_level": 0,
+    "ipopt.print_level": _DEFAULT_IPOPT_PRINT_LEVEL,
     "print_time": False,
     "ipopt.max_iter": 2000,
     "ipopt.linear_solver": "mumps",
@@ -383,6 +387,14 @@ solver_config: dict[str, Any] = {
     # under 6 min. Easy motions (sideflip) converge well before the cap.
     "ipopt.max_wall_time": 300.0,
 }
+
+
+def set_solver_verbose(verbose: bool) -> None:
+    """Enable or disable IPOPT console output (must run before MPC is built)."""
+    level = 5 if verbose else _DEFAULT_IPOPT_PRINT_LEVEL
+    solver_config["ipopt.print_level"] = level
+    solver_config["print_time"] = verbose
+
 
 plot_quantities = [
     "base_position",

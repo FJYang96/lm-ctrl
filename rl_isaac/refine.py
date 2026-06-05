@@ -45,6 +45,18 @@ parser.add_argument("--termination-weight-start", type=float, default=0.0)
 parser.add_argument("--termination-weight-end", type=float, default=0.0)
 parser.add_argument("--termination-anneal-iters", type=int, default=0)
 parser.add_argument("--torque-limit-scale", type=float, default=1.0)
+parser.add_argument(
+    "--source-dt",
+    type=float,
+    default=None,
+    help="MPC planning timestep in seconds (default: infer from go2_config / metadata).",
+)
+parser.add_argument(
+    "--control-dt",
+    type=float,
+    default=0.02,
+    help="MPPI / Isaac control timestep in seconds (50 Hz default).",
+)
 parser.add_argument("--render-best-every", type=int, default=10)
 parser.add_argument("--save-best-npy-every", type=int, default=1)
 parser.add_argument("--seed", type=int, default=0)
@@ -104,6 +116,11 @@ from rl_isaac.rewards import (  # noqa: E402
     compute_tracking_errors,
 )
 from rl_isaac.tracking_env import Go2TrackingEnv  # noqa: E402
+from rl_isaac.upsample_reference import (  # noqa: E402
+    resolve_source_dt,
+    save_reference_arrays,
+    upsample_reference_arrays,
+)
 
 
 @dataclass
@@ -161,7 +178,8 @@ def _seed_everything(seed: int) -> None:
 
 
 def _build_env(
-    paths: RefPaths, num_envs: int, render: bool, headless: bool = False
+    paths: RefPaths, num_envs: int, render: bool, headless: bool = False,
+    control_dt: float = 0.02,
 ) -> Go2TrackingEnv:
     cfg = Go2TrackingEnvCfg()
     cfg.scene.num_envs = num_envs
@@ -169,6 +187,7 @@ def _build_env(
     cfg.grf_traj_path = paths.grf_traj
     cfg.joint_vel_traj_path = paths.joint_vel_traj
     cfg.contact_sequence_path = paths.contact_sequence
+    cfg.control_dt = control_dt
     # In headless mode we avoid viewer/window setup; env.render() can still
     # produce RGB arrays when camera rendering is enabled.
     if render and not headless:
@@ -454,19 +473,70 @@ def refine(args: argparse.Namespace) -> None:
     print("============================================================")
 
     t0 = time.time()
-    ref = ReferenceTrajectory.from_files(
-        paths.state_traj,
-        paths.joint_vel_traj,
-        paths.grf_traj,
-        contact_sequence_path=paths.contact_sequence or None,
-        control_dt=0.02,
+    source_dt = resolve_source_dt(args.source_dt, paths.traj_dir or None)
+    control_dt = float(args.control_dt)
+    if control_dt <= 0.0:
+        raise ValueError("--control-dt must be > 0.")
+
+    contact_seq = (
+        np.load(paths.contact_sequence)
+        if paths.contact_sequence
+        else None
+    )
+    state_raw = np.load(paths.state_traj)
+    jvel_raw = np.load(paths.joint_vel_traj)
+    grf_raw = np.load(paths.grf_traj)
+    state_up, jvel_up, grf_up, contact_up, upsample_meta = upsample_reference_arrays(
+        state_raw,
+        jvel_raw,
+        grf_raw,
+        contact_seq,
+        source_dt=source_dt,
+        target_dt=control_dt,
+    )
+    upsampled_dir = run_dir / "upsampled_reference"
+    upsampled_paths = save_reference_arrays(
+        upsampled_dir,
+        state_up,
+        jvel_up,
+        grf_up,
+        contact_up,
+        upsample_meta,
+    )
+    env_paths = RefPaths(
+        state_traj=upsampled_paths["state_traj"],
+        grf_traj=upsampled_paths["grf_traj"],
+        joint_vel_traj=upsampled_paths["joint_vel_traj"],
+        contact_sequence=upsampled_paths.get("contact_sequence", ""),
+        traj_dir=paths.traj_dir,
+        iter_num=paths.iter_num,
+    )
+
+    print(
+        "Reference upsampling: "
+        f"source_dt={source_dt:.4f}s ({upsample_meta['source_horizon']} steps) -> "
+        f"control_dt={control_dt:.4f}s ({upsample_meta['target_horizon']} steps)"
+    )
+    if upsample_meta["upsampled"]:
+        print(f"Upsampled reference saved to: {upsampled_dir}")
+    else:
+        print("Reference already at control dt; skipping resample.")
+
+    ref = ReferenceTrajectory(
+        state_traj=state_up,
+        joint_vel_traj=jvel_up,
+        grf_traj=grf_up,
+        contact_sequence=contact_up,
+        control_dt=control_dt,
     )
     ff_seed = (
         FeedforwardComputer(KinoDynamic_Model())
         .precompute_trajectory(ref)
         .astype(np.float32)
     )
+    ref.set_feedforward(ff_seed)
     horizon = ref.max_phase
+    np.save(upsampled_dir / "upsampled_feedforward_torque_traj.npy", ff_seed)
 
     is_headless = bool(getattr(args, "headless", False))
     cameras_enabled = bool(getattr(args, "enable_cameras", False))
@@ -477,10 +547,11 @@ def refine(args: argparse.Namespace) -> None:
     # Isaac Lab permits only one simulation context per process.
     # Use a single env for both batched scoring and optional video capture.
     env = _build_env(
-        paths,
+        env_paths,
         num_envs=args.num_samples,
         render=rendering_enabled,
         headless=is_headless,
+        control_dt=control_dt,
     )
     device = env.device
 
@@ -612,7 +683,15 @@ def refine(args: argparse.Namespace) -> None:
         "created_at": datetime.now().isoformat(),
         "elapsed_sec": time.time() - t0,
         "paths": asdict(paths),
+        "upsampled_reference": {
+            "paths": upsampled_paths,
+            "metadata": upsample_meta,
+            "source_dt": source_dt,
+            "control_dt": control_dt,
+        },
         "settings": {
+            "source_dt": source_dt,
+            "control_dt": control_dt,
             "mppi_iters": args.mppi_iters,
             "num_samples": args.num_samples,
             "noise_std": args.noise_std,
@@ -644,6 +723,9 @@ def refine(args: argparse.Namespace) -> None:
             "final_mean_torque_traj": str(run_dir / "final_mean_torque_traj.npy"),
             "seed_feedforward_torque_traj": str(
                 run_dir / "seed_feedforward_torque_traj.npy"
+            ),
+            "upsampled_feedforward_torque_traj": str(
+                upsampled_dir / "upsampled_feedforward_torque_traj.npy"
             ),
             "metrics_csv": str(run_dir / "mppi_metrics.csv"),
             "videos_dir": str(video_dir),

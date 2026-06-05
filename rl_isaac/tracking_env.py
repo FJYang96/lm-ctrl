@@ -2,42 +2,60 @@
 
 from __future__ import annotations
 
-import torch
-import numpy as np
-
 import isaaclab.sim as sim_utils
+import numpy as np
+import torch
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor
 
 from .env_cfg import Go2TrackingEnvCfg
 from .rewards import (
-    KP, KD, ACTION_LIMIT, CONTACT_GRACE_WINDOW, TERM_CAUSE_NAMES,
-    compute_tracking_errors, compute_rewards,
+    ACTION_LIMIT,
+    CONTACT_GRACE_WINDOW,
+    KD,
+    KP,
+    TERM_CAUSE_NAMES,
+    check_body_contact,
+    compute_rewards,
+    compute_tracking_errors,
+    contact_mismatch_diagnostics,
     tracking_termination_breakdown,
-    check_body_contact, contact_mismatch_diagnostics,
 )
 
 _MPC_JOINT_ORDER = [
-    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
-    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
-    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
-    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
+    "FL_hip_joint",
+    "FL_thigh_joint",
+    "FL_calf_joint",
+    "FR_hip_joint",
+    "FR_thigh_joint",
+    "FR_calf_joint",
+    "RL_hip_joint",
+    "RL_thigh_joint",
+    "RL_calf_joint",
+    "RR_hip_joint",
+    "RR_thigh_joint",
+    "RR_calf_joint",
 ]
 
 
 class Go2TrackingEnv(DirectRLEnv):
     cfg: Go2TrackingEnvCfg
 
-    def __init__(self, cfg: Go2TrackingEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(
+        self, cfg: Go2TrackingEnvCfg, render_mode: str | None = None, **kwargs
+    ):
         super().__init__(cfg, render_mode, **kwargs)
         from .rewards import TORQUE_LIMITS
+
         self._torque_limits = TORQUE_LIMITS.to(self.device)
         self.actions = torch.zeros(self.num_envs, 12, device=self.device)
         self._phase = torch.zeros(self.num_envs, dtype=torch.int32, device=self.device)
         self._prev_action = torch.zeros(self.num_envs, 12, device=self.device)
         self._last_torque = torch.zeros(self.num_envs, 12, device=self.device)
-        self._first_step = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+        self._first_step = torch.ones(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
         self._joint_offset = torch.zeros(self.num_envs, 12, device=self.device)
         self._torque_scale = torch.ones(self.num_envs, device=self.device)
         self._tracking_errors: dict[str, torch.Tensor] = {}
@@ -48,27 +66,43 @@ class Go2TrackingEnv(DirectRLEnv):
         # Phase-0.1 instrumentation: (cause, phase) histogram, accumulated per
         # rollout. Train.py drains it via flush_term_diagnostics() each update.
         self._term_phase_hist = torch.zeros(
-            len(TERM_CAUSE_NAMES), self._max_phase + 1,
-            dtype=torch.int64, device=self.device,
+            len(TERM_CAUSE_NAMES),
+            self._max_phase + 1,
+            dtype=torch.int64,
+            device=self.device,
         )
         self._term_counts = {n: 0 for n in TERM_CAUSE_NAMES}
         # Phase-0.2 instrumentation: per-phase tracking-error sums for the
         # five metrics tracked by compute_tracking_errors. Drained per update
         # by flush_phase_errors().
         self._phase_err_metrics = (
-            "pos_error", "ori_error", "joint_error", "action_rate", "max_torque",
+            "pos_error",
+            "ori_error",
+            "joint_error",
+            "action_rate",
+            "max_torque",
         )
         self._phase_err_sum = torch.zeros(
-            self._max_phase + 1, len(self._phase_err_metrics),
-            dtype=torch.float64, device=self.device,
+            self._max_phase + 1,
+            len(self._phase_err_metrics),
+            dtype=torch.float64,
+            device=self.device,
         )
         self._phase_err_count = torch.zeros(
-            self._max_phase + 1, dtype=torch.int64, device=self.device,
+            self._max_phase + 1,
+            dtype=torch.int64,
+            device=self.device,
         )
         # Phase-0.3 instrumentation: per-foot contact slip stats.
-        self._slip_count_per_foot = torch.zeros(4, dtype=torch.int64, device=self.device)
-        self._slip_force_sum_per_foot = torch.zeros(4, dtype=torch.float64, device=self.device)
-        self._slip_offset_abs_sum_per_foot = torch.zeros(4, dtype=torch.float64, device=self.device)
+        self._slip_count_per_foot = torch.zeros(
+            4, dtype=torch.int64, device=self.device
+        )
+        self._slip_force_sum_per_foot = torch.zeros(
+            4, dtype=torch.float64, device=self.device
+        )
+        self._slip_offset_abs_sum_per_foot = torch.zeros(
+            4, dtype=torch.float64, device=self.device
+        )
 
     def _build_joint_reorder(self, joint_names: list[str]) -> torch.Tensor | None:
         if joint_names == _MPC_JOINT_ORDER:
@@ -78,7 +112,9 @@ class Go2TrackingEnv(DirectRLEnv):
             try:
                 reorder.append(joint_names.index(name))
             except ValueError:
-                raise RuntimeError(f"MPC joint '{name}' not in Isaac joints: {joint_names}")
+                raise RuntimeError(
+                    f"MPC joint '{name}' not in Isaac joints: {joint_names}"
+                )
         return torch.tensor(reorder, dtype=torch.long, device=self.device)
 
     def _to_isaac_order(self, mpc_joints: torch.Tensor) -> torch.Tensor:
@@ -92,30 +128,50 @@ class Go2TrackingEnv(DirectRLEnv):
         return isaac_joints[:, self._joint_reorder]
 
     def _load_reference_data(self):
-        from .reference import ReferenceTrajectory
-        from .feedforward import FeedforwardComputer
         from mpc.dynamics.model import KinoDynamic_Model
         from utils.conversion import (
-            MPC_X_BASE_POS, MPC_X_BASE_VEL, MPC_X_BASE_EUL,
-            MPC_X_BASE_ANG, MPC_X_Q_JOINTS, euler_to_quaternion,
+            MPC_X_BASE_ANG,
+            MPC_X_BASE_EUL,
+            MPC_X_BASE_POS,
+            MPC_X_BASE_VEL,
+            MPC_X_Q_JOINTS,
+            euler_to_quaternion,
         )
+
+        from .feedforward import FeedforwardComputer
+        from .reference import ReferenceTrajectory
+
         cfg = self.cfg
         ref = ReferenceTrajectory.from_files(
-            cfg.state_traj_path, cfg.joint_vel_traj_path, cfg.grf_traj_path,
-            contact_sequence_path=cfg.contact_sequence_path or None, control_dt=0.02,
+            cfg.state_traj_path,
+            cfg.joint_vel_traj_path,
+            cfg.grf_traj_path,
+            contact_sequence_path=cfg.contact_sequence_path or None,
+            control_dt=cfg.control_dt,
         )
-        ref.set_feedforward(FeedforwardComputer(KinoDynamic_Model()).precompute_trajectory(ref))
+        ref.set_feedforward(
+            FeedforwardComputer(KinoDynamic_Model()).precompute_trajectory(ref)
+        )
         N = ref.max_phase
         self._max_phase = N
         st = ref.state_traj
-        body_quat = np.array([euler_to_quaternion(st[k, MPC_X_BASE_EUL]) for k in range(N + 1)], dtype=np.float32)
+        body_quat = np.array(
+            [euler_to_quaternion(st[k, MPC_X_BASE_EUL]) for k in range(N + 1)],
+            dtype=np.float32,
+        )
         if ref.contact_sequence is not None:
             contact_seq = ref.contact_sequence[:, :N].astype(np.float32)
             near_transition = np.zeros((4, N), dtype=np.float32)
             for foot in range(4):
                 for k in range(N):
-                    lo, hi = max(0, k - CONTACT_GRACE_WINDOW), min(N - 1, k + CONTACT_GRACE_WINDOW)
-                    if np.any(ref.contact_sequence[foot, lo:hi + 1] != ref.contact_sequence[foot, k]):
+                    lo, hi = (
+                        max(0, k - CONTACT_GRACE_WINDOW),
+                        min(N - 1, k + CONTACT_GRACE_WINDOW),
+                    )
+                    if np.any(
+                        ref.contact_sequence[foot, lo : hi + 1]
+                        != ref.contact_sequence[foot, k]
+                    ):
                         near_transition[foot, k] = 1.0
             # Phase-0.3: signed |distance in frames| from each phase to the
             # nearest scheduled contact transition for each foot. Defaults to
@@ -133,23 +189,33 @@ class Go2TrackingEnv(DirectRLEnv):
             near_transition = np.ones((4, N), dtype=np.float32)
             transition_offset = np.full((4, N), float(N), dtype=np.float32)
         to_t = lambda a: torch.tensor(a, device=self.device)
-        self._ref_body_pos = to_t(st[:N + 1, MPC_X_BASE_POS].astype(np.float32))
+        self._ref_body_pos = to_t(st[: N + 1, MPC_X_BASE_POS].astype(np.float32))
         self._ref_body_quat = to_t(body_quat)
-        self._ref_joint_pos = to_t(st[:N + 1, MPC_X_Q_JOINTS].astype(np.float32))
+        self._ref_joint_pos = to_t(st[: N + 1, MPC_X_Q_JOINTS].astype(np.float32))
         self._ref_joint_vel = to_t(ref.joint_vel_traj[:N].astype(np.float32))
-        self._ref_body_vel = to_t(st[:N + 1, MPC_X_BASE_VEL].astype(np.float32))
-        self._ref_body_ang_vel = to_t(st[:N + 1, MPC_X_BASE_ANG].astype(np.float32))
+        self._ref_body_vel = to_t(st[: N + 1, MPC_X_BASE_VEL].astype(np.float32))
+        self._ref_body_ang_vel = to_t(st[: N + 1, MPC_X_BASE_ANG].astype(np.float32))
         self._ref_ff_torques = to_t(ref._ff_torques[:N].astype(np.float32))
         self._ref_contact_seq = to_t(contact_seq)
         self._ref_near_transition = to_t(near_transition)
         self._ref_transition_offset = to_t(transition_offset)  # (4, N)
 
     def _setup_contact_indices(self):
-        self._foot_body_ids, _ = self._contact_sensor.find_bodies("FL_foot|FR_foot|RL_foot|RR_foot")
+        self._foot_body_ids, _ = self._contact_sensor.find_bodies(
+            "FL_foot|FR_foot|RL_foot|RR_foot"
+        )
         all_ids = set(range(self._contact_sensor.num_bodies))
-        foot_set = set(self._foot_body_ids.tolist() if isinstance(self._foot_body_ids, torch.Tensor) else self._foot_body_ids)
-        self._non_foot_body_ids = torch.tensor(sorted(all_ids - foot_set), dtype=torch.long, device=self.device)
-        self._foot_body_ids_t = torch.tensor(sorted(foot_set), dtype=torch.long, device=self.device)
+        foot_set = set(
+            self._foot_body_ids.tolist()
+            if isinstance(self._foot_body_ids, torch.Tensor)
+            else self._foot_body_ids
+        )
+        self._non_foot_body_ids = torch.tensor(
+            sorted(all_ids - foot_set), dtype=torch.long, device=self.device
+        )
+        self._foot_body_ids_t = torch.tensor(
+            sorted(foot_set), dtype=torch.long, device=self.device
+        )
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
@@ -175,12 +241,16 @@ class Go2TrackingEnv(DirectRLEnv):
         actual_jpos = self._to_mpc_order(self._robot.data.joint_pos)
         actual_jvel = self._to_mpc_order(self._robot.data.joint_vel)
         target = self._ref_joint_pos[phase] + action_scaled + self._joint_offset
-        torque = (KP * (target - actual_jpos)
-                  + KD * (self._ref_joint_vel[phase] - actual_jvel)
-                  + self._ref_ff_torques[phase])
-        torque = torque.clamp(-self._torque_limits, self._torque_limits) * self._torque_scale.unsqueeze(-1)
+        torque = (
+            KP * (target - actual_jpos)
+            + KD * (self._ref_joint_vel[phase] - actual_jvel)
+            + self._ref_ff_torques[phase]
+        )
+        torque = torque.clamp(
+            -self._torque_limits, self._torque_limits
+        ) * self._torque_scale.unsqueeze(-1)
         self._last_torque = torque.clone()
-        self._robot.set_joint_effort_target(self._to_isaac_order(torque))
+        # self._robot.set_joint_effort_target(self._to_isaac_order(torque))
 
     def _get_observations(self) -> dict:
         """OPT-Mimic §III-C.1: proprioception-only (33 dims).
@@ -192,12 +262,16 @@ class Go2TrackingEnv(DirectRLEnv):
         phase = self._phase.clamp(0, self._max_phase - 1)
         joint_pos = self._to_mpc_order(self._robot.data.joint_pos) + self._joint_offset
         angle = 2.0 * torch.pi * phase.float() / float(self._max_phase)
-        obs = torch.cat([
-            self._robot.data.root_quat_w, joint_pos,
-            self._robot.data.root_ang_vel_w,
-            self._to_mpc_order(self._robot.data.joint_vel),
-            torch.stack([torch.cos(angle), torch.sin(angle)], dim=-1),
-        ], dim=-1)
+        obs = torch.cat(
+            [
+                self._robot.data.root_quat_w,
+                joint_pos,
+                self._robot.data.root_ang_vel_w,
+                self._to_mpc_order(self._robot.data.joint_vel),
+                torch.stack([torch.cos(angle), torch.sin(angle)], dim=-1),
+            ],
+            dim=-1,
+        )
         return {"policy": torch.nan_to_num(obs, nan=0.0)}
 
     def _get_rewards(self) -> torch.Tensor:
@@ -213,10 +287,15 @@ class Go2TrackingEnv(DirectRLEnv):
         phase = self._phase.clamp(0, self._max_phase - 1)
         action_scaled = self.actions * ACTION_LIMIT
         self._tracking_errors = compute_tracking_errors(
-            self._ref_body_pos[phase], self._ref_body_quat[phase], self._ref_joint_pos[phase],
-            self._robot.data.root_pos_w - self._env_origins, self._robot.data.root_quat_w,
+            self._ref_body_pos[phase],
+            self._ref_body_quat[phase],
+            self._ref_joint_pos[phase],
+            self._robot.data.root_pos_w - self._env_origins,
+            self._robot.data.root_quat_w,
             self._to_mpc_order(self._robot.data.joint_pos),
-            action_scaled, self._prev_action, self._last_torque,
+            action_scaled,
+            self._prev_action,
+            self._last_torque,
         )
         self._prev_action = action_scaled.clone()
 
@@ -235,11 +314,15 @@ class Go2TrackingEnv(DirectRLEnv):
 
         forces = self._contact_sensor.data.net_forces_w_history
 
-        thresh_masks = tracking_termination_breakdown(self._tracking_errors, self._first_step)
+        thresh_masks = tracking_termination_breakdown(
+            self._tracking_errors, self._first_step
+        )
         body_mask = check_body_contact(forces, self._non_foot_body_ids)
         cm_info = contact_mismatch_diagnostics(
-            forces, self._foot_body_ids_t,
-            self._ref_contact_seq[:, phase].T, self._ref_near_transition[:, phase].T,
+            forces,
+            self._foot_body_ids_t,
+            self._ref_contact_seq[:, phase].T,
+            self._ref_near_transition[:, phase].T,
         )
         contact_mask = cm_info["any_mismatch"]
         nan_mask = torch.any(torch.isnan(self._robot.data.root_pos_w), dim=-1)
@@ -253,12 +336,20 @@ class Go2TrackingEnv(DirectRLEnv):
                 m = mismatch_pf[:, foot_idx]
                 if m.any():
                     self._slip_count_per_foot[foot_idx] += int(m.sum().item())
-                    self._slip_force_sum_per_foot[foot_idx] += float(force_pf[:, foot_idx][m].sum().item())
-                    offsets = self._ref_transition_offset[foot_idx, phase_clamped[m]].to(torch.float64)
-                    self._slip_offset_abs_sum_per_foot[foot_idx] += float(offsets.sum().item())
+                    self._slip_force_sum_per_foot[foot_idx] += float(
+                        force_pf[:, foot_idx][m].sum().item()
+                    )
+                    offsets = self._ref_transition_offset[
+                        foot_idx, phase_clamped[m]
+                    ].to(torch.float64)
+                    self._slip_offset_abs_sum_per_foot[foot_idx] += float(
+                        offsets.sum().item()
+                    )
         thresh_any = (
-            thresh_masks["thresh_pos"] | thresh_masks["thresh_ori"]
-            | thresh_masks["thresh_joint"] | thresh_masks["thresh_rate"]
+            thresh_masks["thresh_pos"]
+            | thresh_masks["thresh_ori"]
+            | thresh_masks["thresh_joint"]
+            | thresh_masks["thresh_rate"]
             | thresh_masks["thresh_torque"]
         )
         terminated = thresh_any | body_mask | contact_mask | nan_mask
@@ -292,11 +383,13 @@ class Go2TrackingEnv(DirectRLEnv):
         if "log" not in self.extras:
             self.extras["log"] = {}
         # Backward-compat aggregates expected by callbacks.TrainingLogger.
-        self.extras["log"]["term_thresh"] = float(self._term_counts["thresh_pos"]
-                                                  + self._term_counts["thresh_ori"]
-                                                  + self._term_counts["thresh_joint"]
-                                                  + self._term_counts["thresh_rate"]
-                                                  + self._term_counts["thresh_torque"])
+        self.extras["log"]["term_thresh"] = float(
+            self._term_counts["thresh_pos"]
+            + self._term_counts["thresh_ori"]
+            + self._term_counts["thresh_joint"]
+            + self._term_counts["thresh_rate"]
+            + self._term_counts["thresh_torque"]
+        )
         self.extras["log"]["term_body"] = float(self._term_counts["body"])
         self.extras["log"]["term_contact"] = float(self._term_counts["contact"])
         self.extras["log"]["term_nan"] = float(self._term_counts["nan"])
@@ -341,7 +434,9 @@ class Go2TrackingEnv(DirectRLEnv):
         super()._reset_idx(env_ids)
         n = len(env_ids)
         self._joint_offset[env_ids] = torch.randn(n, 12, device=self.device) * 0.02
-        self._torque_scale[env_ids] = (1.0 + torch.randn(n, device=self.device) * 0.1).clamp(0.5, 1.5)
+        self._torque_scale[env_ids] = (
+            1.0 + torch.randn(n, device=self.device) * 0.1
+        ).clamp(0.5, 1.5)
         # Friction & restitution DR (OPT-Mimic paper Table I)
         mat = self._robot.root_physx_view.get_material_properties()
         env_ids_cpu = env_ids.cpu() if env_ids.device.type != "cpu" else env_ids
@@ -352,17 +447,27 @@ class Go2TrackingEnv(DirectRLEnv):
         mat[env_ids_cpu, :, 1] = friction.unsqueeze(-1).expand(-1, n_shapes)
         mat[env_ids_cpu, :, 2] = restitution.unsqueeze(-1).expand(-1, n_shapes)
         self._robot.root_physx_view.set_material_properties(mat, env_ids_cpu)
-        start = torch.randint(0, self._max_phase, (n,), device=self.device, dtype=torch.int32)
+        start = torch.randint(
+            0, self._max_phase, (n,), device=self.device, dtype=torch.int32
+        )
         self._phase[env_ids] = start
         ph = start.clamp(0, self._max_phase - 1).long()
         root_pos = self._ref_body_pos[ph].clone() + self._terrain.env_origins[env_ids]
-        self._robot.write_root_pose_to_sim(torch.cat([root_pos, self._ref_body_quat[ph].clone()], dim=-1), env_ids)
+        self._robot.write_root_pose_to_sim(
+            torch.cat([root_pos, self._ref_body_quat[ph].clone()], dim=-1), env_ids
+        )
         self._robot.write_root_velocity_to_sim(
-            torch.cat([self._ref_body_vel[ph].clone(), self._ref_body_ang_vel[ph].clone()], dim=-1), env_ids,
+            torch.cat(
+                [self._ref_body_vel[ph].clone(), self._ref_body_ang_vel[ph].clone()],
+                dim=-1,
+            ),
+            env_ids,
         )
         self._robot.write_joint_state_to_sim(
             self._to_isaac_order(self._ref_joint_pos[ph].clone()),
-            self._to_isaac_order(self._ref_joint_vel[ph].clone()), None, env_ids,
+            self._to_isaac_order(self._ref_joint_vel[ph].clone()),
+            None,
+            env_ids,
         )
         self._prev_action[env_ids] = 0.0
         self._last_torque[env_ids] = 0.0

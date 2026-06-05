@@ -23,10 +23,14 @@ class Go2TrackingEnvCfg(DirectRLEnvCfg):
     """Configuration for Go2 OPT-Mimic trajectory tracking."""
 
     # --- Env ---
-    decimation: int = 20  # 50Hz control / 1kHz physics = 20 substeps (matches N_SUBSTEPS)
+    decimation: int = (
+        20  # 50Hz control / 1kHz physics = 20 substeps (matches N_SUBSTEPS)
+    )
     episode_length_s: float = 10.0  # overridden by trajectory length at runtime
     action_space: int = 12
-    observation_space: int = 33  # OPT-Mimic: quat(4)+joints(12)+ang_vel(3)+joint_vel(12)+phase(2)
+    observation_space: int = (
+        33  # OPT-Mimic: quat(4)+joints(12)+ang_vel(3)+joint_vel(12)+phase(2)
+    )
     state_space: int = 0
 
     # --- Simulation ---
@@ -109,7 +113,7 @@ class Go2TrackingEnvCfg(DirectRLEnvCfg):
                 effort_limit=45.43,  # max across all joints (calf); per-joint limits applied manually
                 velocity_limit=30.0,
                 stiffness=0.0,  # NO implicit PD — we compute PD manually
-                damping=0.0,   # NO implicit PD — we compute PD manually
+                damping=0.0,  # NO implicit PD — we compute PD manually
             ),
         },
     )

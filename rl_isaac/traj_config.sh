@@ -7,8 +7,9 @@
 #   ./rl_isaac/evaluate_policy.sh
 # ============================================================
 
-TRAJ_DIR="results/llm_iterations/do_a_sideflip"
-ITER_NUM=3
+# TRAJ_DIR="results/llm_iterations/Do_a_side_flip_with_a_full_360_degree_roll_rotation._1780069031"
+TRAJ_DIR="results/mpc_replay"
+ITER_NUM=1
 
 # ── Resolve file paths from TRAJ_DIR + ITER_NUM ──
 STATE_TRAJ="$TRAJ_DIR/state_traj_iter_${ITER_NUM}.npy"
