@@ -8,7 +8,13 @@ import numpy as np
 
 import go2_config
 
-from ._helpers import _build_H, _eval_fk, _eval_jacobian
+from ._helpers import (
+    _build_H,
+    _eval_fk,
+    _eval_jacobian,
+    _foot_center_fk_funs,
+    _foot_center_jac_funs,
+)
 
 # Foot names in order matching the 4x3 GRF layout and contact_sequence rows
 _FOOT_NAMES = ("FL", "FR", "RL", "RR")
@@ -91,12 +97,8 @@ def _section_contact_quality(
                 break
 
     if landing_step is not None:
-        fk_funs = [
-            kindyn_model.forward_kinematics_FL_fun,
-            kindyn_model.forward_kinematics_FR_fun,
-            kindyn_model.forward_kinematics_RL_fun,
-            kindyn_model.forward_kinematics_RR_fun,
-        ]
+        fk_funs = _foot_center_fk_funs(kindyn_model)
+        R = float(go2_config.foot_sphere_radius)
 
         # Compute foot positions at landing
         com_pos_land = state_traj[landing_step, 0:3]
@@ -124,9 +126,9 @@ def _section_contact_quality(
             z = foot_positions[f_idx, 2]
             status = (
                 "OK"
-                if abs(z)
+                if abs(z - R)
                 < go2_config.analysis_thresholds["landing_foot_height_tolerance"]
-                else f"OFF ({z:.4f}m)"
+                else f"OFF ({z:.4f}m, target {R:.4f}m)"
             )
             lines.append(
                 f"    {_FOOT_NAMES[f_idx]}: x={foot_positions[f_idx, 0]:.3f} "
@@ -268,12 +270,7 @@ def _section_joint_quality(
 
     # Torque feasibility via J^T * F
     if torque_limits is not None:
-        jac_funs = [
-            kindyn_model.jacobian_FL_fun,
-            kindyn_model.jacobian_FR_fun,
-            kindyn_model.jacobian_RL_fun,
-            kindyn_model.jacobian_RR_fun,
-        ]
+        jac_funs = _foot_center_jac_funs(kindyn_model)
 
         torque_violations = 0
         worst_torque_ratio = 0.0
@@ -328,12 +325,7 @@ def _section_manipulability(
     """J. Manipulability."""
     lines: list[str] = []
 
-    jac_funs = [
-        kindyn_model.jacobian_FL_fun,
-        kindyn_model.jacobian_FR_fun,
-        kindyn_model.jacobian_RL_fun,
-        kindyn_model.jacobian_RR_fun,
-    ]
+    jac_funs = _foot_center_jac_funs(kindyn_model)
 
     min_manip = float("inf")
     min_manip_foot = 0

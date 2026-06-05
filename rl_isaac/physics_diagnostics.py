@@ -485,15 +485,48 @@ def _adam_foot_positions(
     base_euler: np.ndarray,
     q_joints: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """Foot origins in world frame via adam FK (same convention as MPC constraints)."""
+    """Foot sphere centers in world frame (same convention as MPC constraints)."""
     w_R_b = Rotation.from_euler("xyz", base_euler).as_matrix()
     H = np.eye(4)
     H[:3, :3] = w_R_b
     H[:3, 3] = base_pos
+    center_funs = [
+        model.foot_center_position_fl_fun,
+        model.foot_center_position_fr_fun,
+        model.foot_center_position_rl_fun,
+        model.foot_center_position_rr_fun,
+    ]
+    return {
+        foot: np.array(center_fun(H, q_joints)).flatten()
+        for foot, center_fun in zip(FOOT_NAMES, center_funs)
+    }
+
+
+def _isaac_foot_sphere_centers(
+    env,
+    model,
+    base_pos: np.ndarray,
+    base_euler: np.ndarray,
+    q_joints: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Isaac foot body origin + URDF collision offset rotated by adam FK."""
+    import go2_config
+
+    w_R_b = Rotation.from_euler("xyz", base_euler).as_matrix()
+    H = np.eye(4)
+    H[:3, :3] = w_R_b
+    H[:3, 3] = base_pos
+    offset = go2_config.foot_sphere_center_offset
+    body_names = list(env._robot.body_names)
+    origin = env._env_origins[0].detach().cpu().numpy()
     out: dict[str, np.ndarray] = {}
     for foot in FOOT_NAMES:
+        idx = _resolve_isaac_body_index(body_names, foot)
+        p_foot = env._robot.data.body_pos_w[0, idx].detach().cpu().numpy() - origin
         fk = model.kindyn.forward_kinematics_fun(foot)
-        out[foot] = _homogeneous_translation(fk(H, q_joints))
+        H_foot = np.array(fk(H, q_joints)).reshape(4, 4)
+        R_foot = H_foot[:3, :3]
+        out[foot] = p_foot + R_foot @ offset
     return out
 
 
@@ -593,21 +626,24 @@ def _compare_foot_kinematics(env, urdf_joints: list[JointGeometry]) -> dict:
     cfg = _read_isaac_configuration(env)
     q_nominal = go2_config.initial_crouch_qpos[7:19].astype(np.float64)
     q_isaac = np.asarray(cfg["joint_pos_mpc"], dtype=np.float64)
-    isaac_feet = _isaac_foot_positions(env)
     isaac_base = _isaac_base_position(env)
     nominal_base = go2_config.initial_crouch_qpos[:3].copy()
-
-    adam_nominal = _adam_foot_positions(model, nominal_base, np.zeros(3), q_nominal)
-    err_nominal_world = _foot_errors(adam_nominal, isaac_feet)
-
-    adam_readback = _adam_foot_positions(
-        model,
-        np.asarray(cfg["root_pos_w"], dtype=np.float64),
-        np.asarray(cfg["root_euler_xyz"], dtype=np.float64),
-        q_isaac,
+    nominal_euler = np.zeros(3)
+    readback_base = np.asarray(cfg["root_pos_w"], dtype=np.float64)
+    readback_euler = np.asarray(cfg["root_euler_xyz"], dtype=np.float64)
+    isaac_feet_nominal = _isaac_foot_sphere_centers(
+        env, model, nominal_base, nominal_euler, q_nominal
     )
-    err_readback_world = _foot_errors(adam_readback, isaac_feet)
-    adam_base = np.asarray(cfg["root_pos_w"], dtype=np.float64)
+    isaac_feet_readback = _isaac_foot_sphere_centers(
+        env, model, readback_base, readback_euler, q_isaac
+    )
+
+    adam_nominal = _adam_foot_positions(model, nominal_base, nominal_euler, q_nominal)
+    err_nominal_world = _foot_errors(adam_nominal, isaac_feet_nominal)
+
+    adam_readback = _adam_foot_positions(model, readback_base, readback_euler, q_isaac)
+    err_readback_world = _foot_errors(adam_readback, isaac_feet_readback)
+    adam_base = readback_base
     err_readback_base = _foot_errors_base_relative(
         adam_readback, isaac_feet, adam_base, isaac_base
     )
@@ -617,9 +653,11 @@ def _compare_foot_kinematics(env, urdf_joints: list[JointGeometry]) -> dict:
         "notes": {
             "adam_fk_convention": (
                 "adam FK uses world-frame base position + xyz euler + MPC joint order, "
-                "matching mpc/dynamics/model.py foot_position_* constraints."
+                "matching mpc/dynamics/model.py foot sphere-center constraints."
             ),
-            "isaac_foot_frame": "body_pos_w of FL_foot/FR_foot/RL_foot/RR_foot bodies",
+            "isaac_foot_frame": (
+                "body_pos_w of *_foot bodies + URDF collision sphere offset rotated by adam FK"
+            ),
             "leg_segment_urdf": "fixed |joint origin xyz| from URDF (pose-independent)",
             "leg_segment_isaac": "runtime 3D distance between body origins at current pose",
         },
@@ -637,7 +675,7 @@ def _compare_foot_kinematics(env, urdf_joints: list[JointGeometry]) -> dict:
         },
         "foot_error_base_relative_m": {
             "nominal_hardcoded_base": _foot_errors_base_relative(
-                adam_nominal, isaac_feet, nominal_base, isaac_base
+                adam_nominal, isaac_feet_nominal, nominal_base, isaac_base
             ),
             "isaac_readback_state": err_readback_base,
         },
@@ -785,9 +823,21 @@ def run_reference_contact_checks(
 
     model = KinoDynamic_Model()
     N = grf.shape[0]
-    foot_names = list(FOOT_NAMES)
-    fk_funs = [model.kindyn.forward_kinematics_fun(f) for f in foot_names]
-    jac_funs = [model.kindyn.jacobian_fun(f) for f in foot_names]
+    import go2_config
+
+    R = float(go2_config.foot_sphere_radius)
+    fk_funs = [
+        model.foot_center_position_fl_fun,
+        model.foot_center_position_fr_fun,
+        model.foot_center_position_rl_fun,
+        model.foot_center_position_rr_fun,
+    ]
+    jac_funs = [
+        model.foot_center_jacobian_fl_fun,
+        model.foot_center_jacobian_fr_fun,
+        model.foot_center_jacobian_rl_fun,
+        model.foot_center_jacobian_rr_fun,
+    ]
 
     stance_grf_without_contact = 0
     flight_grf_with_contact = 0
@@ -807,12 +857,11 @@ def run_reference_contact_checks(
             contact_on = True if contact is None else contact[fi, k] > 0.5
             fz = grf[k, fi * 3 + 2]
             f_tang = grf[k, fi * 3: fi * 3 + 2]
-            foot_pos = np.array(fk_funs[fi](H, q)).reshape(4, 4)[:3, 3]
-            foot_height = float(foot_pos[2])
+            foot_height = float(np.array(fk_funs[fi](H, q)).flatten()[2])
 
             if contact_on:
                 foot_heights_stance.append(foot_height)
-                if foot_height < -0.005:
+                if foot_height < R - 0.005:
                     low_stance_feet += 1
                 if fz < 1.0:
                     stance_grf_without_contact += 1
@@ -820,7 +869,7 @@ def run_reference_contact_checks(
                 flight_grf_with_contact += 1
 
             if contact_on and fz > 5.0:
-                J = np.array(jac_funs[fi](H, q))[:3, :]
+                J = np.array(jac_funs[fi](H, q)).reshape(3, -1)
                 v_foot = J @ v_gen
                 v_tang = v_foot[:2]
                 if np.linalg.norm(v_tang) > 0.01 and float(np.dot(f_tang, v_tang)) > 0.0:
@@ -838,7 +887,7 @@ def run_reference_contact_checks(
         "flags": [
             *(["GRF present during scheduled flight"] if flight_grf_with_contact else []),
             *(["missing GRF during scheduled stance"] if stance_grf_without_contact else []),
-            *(["stance feet below -5 mm in reference FK"] if low_stance_feet else []),
+            *(["stance sphere centers below R-5mm in reference FK"] if low_stance_feet else []),
             *(["MDP violations (f_t·v_t > 0) in reference"] if mdp_violations else []),
         ],
     }

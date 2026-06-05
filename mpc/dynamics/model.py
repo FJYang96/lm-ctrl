@@ -23,6 +23,32 @@ from liecasadi import SO3
 
 gym_quadruped_path = os.path.dirname(gym_quadruped.__file__)
 
+_FOOT_SPHERE_OFFSET = go2_config.foot_sphere_center_offset
+
+
+def _skew(v: Any) -> Any:
+    """3-vector to 3x3 skew-symmetric matrix."""
+    return cs.vertcat(
+        cs.horzcat(0, -v[2], v[1]),
+        cs.horzcat(v[2], 0, -v[0]),
+        cs.horzcat(-v[1], v[0], 0),
+    )
+
+
+def _foot_center_position(H_foot: Any, offset: np.ndarray) -> Any:
+    """Sphere center in world frame: p_foot + R_foot @ offset."""
+    R_foot = H_foot[0:3, 0:3]
+    p_foot = H_foot[0:3, 3]
+    return p_foot + R_foot @ cs.DM(offset)
+
+
+def _foot_center_jacobian_lin(J_foot: Any, H_foot: Any, offset: np.ndarray) -> Any:
+    """Translational Jacobian of sphere center: J_lin - skew(r_w) @ J_ang."""
+    J_lin = J_foot[0:3, :]
+    J_ang = J_foot[3:6, :]
+    r_w = H_foot[0:3, 0:3] @ cs.DM(offset)
+    return J_lin - _skew(r_w) @ J_ang
+
 
 class KinoDynamic_Model:
     """Full 18-DOF kinodynamic model for Go2 quadruped.
@@ -46,12 +72,38 @@ class KinoDynamic_Model:
         self.coriolis_fun = self.kindyn.coriolis_term_fun()
         self.centroidal_momentum_matrix_fun = self.kindyn.centroidal_momentum_matrix_fun()
 
+        offset = _FOOT_SPHERE_OFFSET
         for foot in ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]:
             prefix = foot.split("_")[0]
-            setattr(self, f"forward_kinematics_{prefix}_fun",
-                    self.kindyn.forward_kinematics_fun(foot))
-            setattr(self, f"jacobian_{prefix}_fun",
-                    self.kindyn.jacobian_fun(foot))
+            fk_fun = self.kindyn.forward_kinematics_fun(foot)
+            jac_fun = self.kindyn.jacobian_fun(foot)
+            setattr(self, f"forward_kinematics_{prefix}_fun", fk_fun)
+            setattr(self, f"jacobian_{prefix}_fun", jac_fun)
+
+            H_sym = cs.SX.sym("H", 4, 4)
+            q_sym = cs.SX.sym("q", 12)
+            H_foot = fk_fun(H_sym, q_sym)
+            J_foot = jac_fun(H_sym, q_sym)
+            p_center = _foot_center_position(H_foot, offset)
+            J_center = _foot_center_jacobian_lin(J_foot, H_foot, offset)
+            setattr(
+                self,
+                f"foot_center_position_{prefix.lower()}_fun",
+                cs.Function(
+                    f"foot_center_position_{prefix.lower()}",
+                    [H_sym, q_sym],
+                    [p_center],
+                ),
+            )
+            setattr(
+                self,
+                f"foot_center_jacobian_{prefix.lower()}_fun",
+                cs.Function(
+                    f"foot_center_jacobian_{prefix.lower()}",
+                    [H_sym, q_sym],
+                    [J_center],
+                ),
+            )
 
         # FK for body links that can penetrate ground (calves + head)
         for link in ["FL_calf", "FR_calf", "RL_calf", "RR_calf",
@@ -118,17 +170,25 @@ class KinoDynamic_Model:
         H[0:3, 0:3] = w_R_b
         H[0:3, 3] = com_pos
 
-        # Foot positions (stored for constraint access)
-        fk_funs = [self.forward_kinematics_FL_fun, self.forward_kinematics_FR_fun,
-                   self.forward_kinematics_RL_fun, self.forward_kinematics_RR_fun]
-        jac_funs = [self.jacobian_FL_fun, self.jacobian_FR_fun,
-                    self.jacobian_RL_fun, self.jacobian_RR_fun]
-        for fk, name in zip(fk_funs, ["fl", "fr", "rl", "rr"]):
-            setattr(self, f"foot_position_{name}", fk(H, joint_pos)[0:3, 3])
+        # Foot sphere-center positions (stored for constraint access)
+        center_fk_funs = [
+            self.foot_center_position_fl_fun,
+            self.foot_center_position_fr_fun,
+            self.foot_center_position_rl_fun,
+            self.foot_center_position_rr_fun,
+        ]
+        center_jac_funs = [
+            self.foot_center_jacobian_fl_fun,
+            self.foot_center_jacobian_fr_fun,
+            self.foot_center_jacobian_rl_fun,
+            self.foot_center_jacobian_rr_fun,
+        ]
+        for fk, name in zip(center_fk_funs, ["fl", "fr", "rl", "rr"]):
+            setattr(self, f"foot_center_position_{name}", fk(H, joint_pos))
 
-        # J^T · F summed across all feet (base DOFs only)
+        # J^T · F summed across all feet (base DOFs only), at sphere centers
         u_wrenches = sum(
-            jac_funs[i](H, joint_pos)[0:3, :].T @ foot_forces[i] @ stance[i]
+            center_jac_funs[i](H, joint_pos).T @ foot_forces[i] @ stance[i]
             for i in range(4)
         )[0:6]
 

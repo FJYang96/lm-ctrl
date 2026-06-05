@@ -31,12 +31,38 @@ def _build_H(com_pos: np.ndarray, euler: np.ndarray) -> np.ndarray:
 
 
 def _eval_fk(fk_fun: Any, H: np.ndarray, joint_pos: np.ndarray) -> np.ndarray:
-    """Evaluate a CasADi FK function and return foot position as (3,) ndarray."""
+    """Evaluate a CasADi FK function and return position as (3,) ndarray."""
     result = fk_fun(H, joint_pos)
-    return np.array(result[0:3, 3]).flatten()
+    arr = np.array(result)
+    if arr.ndim == 1 or arr.shape == (3, 1):
+        return arr.flatten()[:3]
+    return arr[0:3, 3].flatten()
 
 
 def _eval_jacobian(jac_fun: Any, H: np.ndarray, joint_pos: np.ndarray) -> np.ndarray:
     """Evaluate a CasADi Jacobian function and return (3, 18) translational Jacobian."""
     result = jac_fun(H, joint_pos)
-    return np.array(result[0:3, :]).reshape(3, -1)
+    arr = np.array(result)
+    if arr.shape[0] == 3:
+        return arr.reshape(3, -1)
+    return arr[0:3, :].reshape(3, -1)
+
+
+def _foot_center_fk_funs(kindyn_model: Any) -> list[Any]:
+    """Foot sphere-center FK functions in FL, FR, RL, RR order."""
+    return [
+        kindyn_model.foot_center_position_fl_fun,
+        kindyn_model.foot_center_position_fr_fun,
+        kindyn_model.foot_center_position_rl_fun,
+        kindyn_model.foot_center_position_rr_fun,
+    ]
+
+
+def _foot_center_jac_funs(kindyn_model: Any) -> list[Any]:
+    """Foot sphere-center translational Jacobian functions in FL, FR, RL, RR order."""
+    return [
+        kindyn_model.foot_center_jacobian_fl_fun,
+        kindyn_model.foot_center_jacobian_fr_fun,
+        kindyn_model.foot_center_jacobian_rl_fun,
+        kindyn_model.foot_center_jacobian_rr_fun,
+    ]

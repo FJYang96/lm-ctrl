@@ -138,6 +138,32 @@ body_half_extents: tuple[float, float, float] = (
     _box_size[2] / 2.0,
 )
 
+# Foot collision sphere (sphere contact model for MPC)
+def _parse_foot_collision(link_name: str) -> tuple[np.ndarray, float]:
+    link = _links[link_name]
+    collision = link.find("collision")
+    assert collision is not None, f"{link_name} missing collision"
+    origin = collision.find("origin")
+    xyz = (0.0, 0.0, 0.0)
+    if origin is not None:
+        xyz = _parse_origin_xyz_from_str(origin.get("xyz", "0 0 0"))
+    sphere = collision.find("geometry/sphere")
+    assert sphere is not None, f"{link_name} collision is not a sphere"
+    return np.array(xyz, dtype=float), float(sphere.get("radius", "0"))
+
+
+def _parse_origin_xyz_from_str(xyz_str: str) -> tuple[float, float, float]:
+    parts = xyz_str.split()
+    return (float(parts[0]), float(parts[1]), float(parts[2]))
+
+
+_foot_offsets_radii = [_parse_foot_collision(f"{leg}_foot") for leg in ("FL", "FR", "RL", "RR")]
+foot_sphere_center_offset: np.ndarray = _foot_offsets_radii[0][0]
+foot_sphere_radius: float = _foot_offsets_radii[0][1]
+for _off, _rad in _foot_offsets_radii[1:]:
+    assert np.allclose(_off, foot_sphere_center_offset), "foot sphere offsets differ across legs"
+    assert abs(_rad - foot_sphere_radius) < 1e-9, "foot sphere radii differ across legs"
+
 # Joint origins → leg segment lengths and hip offsets
 _fl_hip_xyz = _parse_origin_xyz(_joints["FL_hip_joint"])
 _fr_hip_xyz = _parse_origin_xyz(_joints["FR_hip_joint"])
@@ -235,7 +261,7 @@ composite_inertia: np.ndarray = np.array(
 
 # Initial crouch pose (pre-loaded jump stance, height ~0.21m)
 initial_crouch_qpos: np.ndarray = np.zeros(19)
-initial_crouch_qpos[0:3] = [0.0, 0.0, 0.2117]
+initial_crouch_qpos[0:3] = [0.0, 0.0, 0.2355]
 initial_crouch_qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
 initial_crouch_qpos[7:19] = [
     0.0,
@@ -275,9 +301,11 @@ capability_limits: dict[str, Any] = {
 
 # Analysis thresholds (used by motion quality reports and trajectory classification)
 analysis_thresholds: dict[str, float] = {
-    "ground_penetration_tolerance": 0.005,  # 5mm — feet/body below ground
-    "swing_clearance_min": 0.005,  # 5mm — min foot height during swing
-    "landing_foot_height_tolerance": 0.01,  # 1cm — foot considered "on ground"
+    "ground_penetration_tolerance": 0.005,  # 5mm — sphere bottom below ground
+    # Min sphere-center z during swing (R + 5mm margin above ground contact)
+    "swing_clearance_min": foot_sphere_radius + 0.005,
+    # Landing: sphere center z should be within 1cm of R
+    "landing_foot_height_tolerance": 0.01,
     "flight_height_offset": 0.05,  # 5cm above initial → classified as airborne
     "phantom_force_threshold": 1.0,  # 1N — GRF during flight = phantom
     "missing_force_threshold": 0.1,  # 0.1N — no GRF_z during stance = missing

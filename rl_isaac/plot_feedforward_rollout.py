@@ -88,7 +88,7 @@ parser.add_argument(
     default=0.0,
     help=(
         "Raise sim reference base CoM z (m) for the full rollout (PD targets + init). "
-        "Try 0.022 to compensate foot collision sphere radius vs MPC FK frame."
+        "Deprecated: MPC now uses foot sphere-center kinematics; leave at 0."
     ),
 )
 AppLauncher.add_app_launcher_args(parser)
@@ -331,7 +331,32 @@ def _foot_body_indices(env: Go2TrackingEnv) -> dict[str, int]:
     return {foot: names.index(foot) for foot in FOOT_NAMES}
 
 
-def _record_sim_state(env: Go2TrackingEnv, foot_body_idx: dict[str, int]) -> dict:
+def _foot_center_heights(
+    model: KinoDynamic_Model,
+    root_pos: np.ndarray,
+    root_euler: np.ndarray,
+    joint_pos: np.ndarray,
+) -> np.ndarray:
+    """Sphere-center z heights for all four feet (MPC convention)."""
+    H = np.eye(4)
+    H[:3, :3] = Rotation.from_euler("xyz", root_euler).as_matrix()
+    H[:3, 3] = root_pos
+    center_funs = [
+        model.foot_center_position_fl_fun,
+        model.foot_center_position_fr_fun,
+        model.foot_center_position_rl_fun,
+        model.foot_center_position_rr_fun,
+    ]
+    return np.array(
+        [float(np.array(f(H, joint_pos)).flatten()[2]) for f in center_funs],
+        dtype=np.float64,
+    )
+
+
+def _record_sim_state(
+    env: Go2TrackingEnv,
+    model: KinoDynamic_Model,
+) -> dict:
     root_pos = (env._robot.data.root_pos_w[0] - env._env_origins[0]).cpu().numpy()
     root_quat = env._robot.data.root_quat_w[0].cpu().numpy()
     root_euler = quaternion_to_euler(root_quat)
@@ -339,11 +364,7 @@ def _record_sim_state(env: Go2TrackingEnv, foot_body_idx: dict[str, int]) -> dic
     root_ang = env._robot.data.root_ang_vel_w[0].cpu().numpy()
     joint_pos = env._to_mpc_order(env._robot.data.joint_pos)[0].cpu().numpy()
     joint_vel = env._to_mpc_order(env._robot.data.joint_vel)[0].cpu().numpy()
-    body_pos = env._robot.data.body_pos_w[0].cpu().numpy()
-    foot_heights = np.array(
-        [body_pos[foot_body_idx[f], 2] - env._env_origins[0, 2].item() for f in FOOT_NAMES],
-        dtype=np.float64,
-    )
+    foot_heights = _foot_center_heights(model, root_pos, root_euler, joint_pos)
     net_forces = env._contact_sensor.data.net_forces_w[0].cpu().numpy()
     foot_sensor_ids = env._foot_body_ids_t.cpu().numpy()
     grf_fz = np.array([net_forces[i, 2] for i in foot_sensor_ids], dtype=np.float64)
@@ -368,7 +389,6 @@ def _reference_series(
     dt: float,
 ) -> dict[str, np.ndarray]:
     model = KinoDynamic_Model()
-    fk_funs = [model.kindyn.forward_kinematics_fun(f) for f in FOOT_NAMES]
     n_steps = jvel.shape[0]
     n_states = state.shape[0]
 
@@ -383,13 +403,12 @@ def _reference_series(
 
     foot_heights = np.zeros((n_steps + 1, 4), dtype=np.float64)
     for k in range(n_steps + 1):
-        euler = state[k, MPC_X_BASE_EUL]
-        H = np.eye(4)
-        H[:3, :3] = Rotation.from_euler("xyz", euler).as_matrix()
-        H[:3, 3] = state[k, MPC_X_BASE_POS]
-        q = state[k, MPC_X_Q_JOINTS]
-        for fi, fk in enumerate(fk_funs):
-            foot_heights[k, fi] = float(np.array(fk(H, q)).reshape(4, 4)[2, 3])
+        foot_heights[k] = _foot_center_heights(
+            model,
+            state[k, MPC_X_BASE_POS],
+            state[k, MPC_X_BASE_EUL],
+            state[k, MPC_X_Q_JOINTS],
+        )
 
     grf_fz = np.zeros((n_steps + 1, 4), dtype=np.float64)
     for k in range(n_steps):
@@ -430,11 +449,13 @@ def _stack_records(records: list[dict]) -> dict[str, np.ndarray]:
     return {key: np.stack([row[key] for row in records], axis=0) for key in records[0]}
 
 
-def _run_feedforward_rollout(env: Go2TrackingEnv) -> dict[str, np.ndarray]:
+def _run_feedforward_rollout(
+    env: Go2TrackingEnv,
+    model: KinoDynamic_Model,
+) -> dict[str, np.ndarray]:
     _reset_env_to_reference_start(env)
-    foot_body_idx = _foot_body_indices(env)
     horizon = env._max_phase
-    records: list[dict] = [_record_sim_state(env, foot_body_idx)]
+    records: list[dict] = [_record_sim_state(env, model)]
 
     original_reset = env._reset_idx
     env._reset_idx = lambda env_ids: None
@@ -444,7 +465,7 @@ def _run_feedforward_rollout(env: Go2TrackingEnv) -> dict[str, np.ndarray]:
             desired = env._ref_ff_torques[phase]
             actions = _torque_to_action(env, desired)
             env.step(actions)
-            records.append(_record_sim_state(env, foot_body_idx))
+            records.append(_record_sim_state(env, model))
     finally:
         env._reset_idx = original_reset
 
@@ -453,16 +474,16 @@ def _run_feedforward_rollout(env: Go2TrackingEnv) -> dict[str, np.ndarray]:
 
 def _run_implicit_pd_rollout(
     env: Go2TrackingEnv,
+    model: KinoDynamic_Model,
     control_dt: float,
     sim_dt: float,
 ) -> dict[str, np.ndarray]:
     """1 kHz sim with reference targets held at control_dt (ZOH)."""
     _reset_env_to_reference_start(env)
-    foot_body_idx = _foot_body_indices(env)
     steps_per_ref = max(1, int(round(control_dt / sim_dt)))
     total_sim_steps = env._max_phase * steps_per_ref
     zero = torch.zeros(env.num_envs, 12, device=env.device)
-    records: list[dict] = [_record_sim_state(env, foot_body_idx)]
+    records: list[dict] = [_record_sim_state(env, model)]
 
     original_reset = env._reset_idx
     env._reset_idx = lambda env_ids: None
@@ -470,7 +491,7 @@ def _run_implicit_pd_rollout(
         for k in range(total_sim_steps):
             env._phase[:] = min(k // steps_per_ref, env._max_phase - 1)
             env.step(zero)
-            records.append(_record_sim_state(env, foot_body_idx))
+            records.append(_record_sim_state(env, model))
     finally:
         env._reset_idx = original_reset
 
@@ -973,11 +994,14 @@ def main() -> None:
         actuator_kd=args_cli.actuator_kd,
         use_feedforward=use_feedforward,
     )
+    kindyn_model = KinoDynamic_Model()
     try:
         if control_mode == "implicit_pd":
-            sim_series = _run_implicit_pd_rollout(env, control_dt, sim_dt * decimation)
+            sim_series = _run_implicit_pd_rollout(
+                env, kindyn_model, control_dt, sim_dt * decimation
+            )
         else:
-            sim_series = _run_feedforward_rollout(env)
+            sim_series = _run_feedforward_rollout(env, kindyn_model)
     finally:
         _close_sim(env)
 

@@ -70,11 +70,10 @@ def foot_height_constraints(
     horizon: int = 1,
 ) -> tuple[cs.MX, cs.MX, cs.MX]:
     """
-    Add foot height constraints based on the contact schedule.
-    - Stance feet: Constrain vertical position to be slightly above zero.
-    - Swing feet: Constrain vertical position to be non-negative (above ground).
+    Foot sphere-center height constraints based on the contact schedule.
+    - Stance feet: z_center in [R, R + STANCE_HEIGHT_EPS] (sphere touching ground).
+    - Swing feet: z_center >= R (entire sphere clears ground).
     """
-    # ... (the forward kinematics part remains the same) ...
     com_position = x_k[0:3]
     roll = x_k[6]
     pitch = x_k[7]
@@ -86,18 +85,20 @@ def foot_height_constraints(
     H[0:3, 0:3] = w_R_b
     H[0:3, 3] = com_position
 
-    foot_height_fl = kindyn_model.forward_kinematics_FL_fun(H, joint_positions)[2, 3]
-    foot_height_fr = kindyn_model.forward_kinematics_FR_fun(H, joint_positions)[2, 3]
-    foot_height_rl = kindyn_model.forward_kinematics_RL_fun(H, joint_positions)[2, 3]
-    foot_height_rr = kindyn_model.forward_kinematics_RR_fun(H, joint_positions)[2, 3]
-
+    center_fk_funs = [
+        kindyn_model.foot_center_position_fl_fun,
+        kindyn_model.foot_center_position_fr_fun,
+        kindyn_model.foot_center_position_rl_fun,
+        kindyn_model.foot_center_position_rr_fun,
+    ]
     foot_heights = cs.vertcat(
-        foot_height_fl, foot_height_fr, foot_height_rl, foot_height_rr
+        *[fk(H, joint_positions)[2] for fk in center_fk_funs]
     )
-    foot_height_max = go2_config.mpc_config.path_constraint_params[
-        "STANCE_HEIGHT_EPS"
-    ] * contact_k + INF * (1 - contact_k)
-    foot_height_min = np.zeros(4)
+
+    R = float(go2_config.foot_sphere_radius)
+    eps = float(go2_config.mpc_config.path_constraint_params["STANCE_HEIGHT_EPS"])
+    foot_height_min = R * np.ones(4)
+    foot_height_max = (R + eps) * contact_k + INF * (1 - contact_k)
 
     return foot_heights, foot_height_min, foot_height_max
 
@@ -128,12 +129,13 @@ def no_slip_constraints(
     H = cs.MX.eye(4)
     H[0:3, 0:3] = w_R_b
     H[0:3, 3] = com_position
-    v = [
-        kindyn_model.jacobian_FL_fun(H, joint_positions)[0:3, :] @ qvel,
-        kindyn_model.jacobian_FR_fun(H, joint_positions)[0:3, :] @ qvel,
-        kindyn_model.jacobian_RL_fun(H, joint_positions)[0:3, :] @ qvel,
-        kindyn_model.jacobian_RR_fun(H, joint_positions)[0:3, :] @ qvel,
+    center_jac_funs = [
+        kindyn_model.foot_center_jacobian_fl_fun,
+        kindyn_model.foot_center_jacobian_fr_fun,
+        kindyn_model.foot_center_jacobian_rl_fun,
+        kindyn_model.foot_center_jacobian_rr_fun,
     ]
+    v = [jac(H, joint_positions) @ qvel for jac in center_jac_funs]
     e = float(go2_config.mpc_config.path_constraint_params["NO_SLIP_EPS"])
     # sumsqr(v) <= e^2  <=>  ||v|| <= e; avoids NaNs from d(||v||)/dv at v=0
     v_sq = cs.vertcat(*[cs.sumsqr(v[i]) for i in range(4)])
@@ -313,19 +315,19 @@ def torque_feasibility_constraints(
     h_b = h[0:6]
     h_j = h[6:18]
 
-    # J^T·F summed across all feet
+    # J^T·F summed across all feet (sphere-center Jacobians)
     jacobian_funs = [
-        kindyn_model.jacobian_FL_fun,
-        kindyn_model.jacobian_FR_fun,
-        kindyn_model.jacobian_RL_fun,
-        kindyn_model.jacobian_RR_fun,
+        kindyn_model.foot_center_jacobian_fl_fun,
+        kindyn_model.foot_center_jacobian_fr_fun,
+        kindyn_model.foot_center_jacobian_rl_fun,
+        kindyn_model.foot_center_jacobian_rr_fun,
     ]
     JtF = cs.MX.zeros(18)
     for leg_idx in range(4):
         f_foot = forces[leg_idx * 3 : leg_idx * 3 + 3]
         contact_flag = contact_k[leg_idx]
-        J_full = jacobian_funs[leg_idx](H, joint_positions)[0:3, :]
-        JtF += J_full.T @ (f_foot * contact_flag)
+        J_center = jacobian_funs[leg_idx](H, joint_positions)
+        JtF += J_center.T @ (f_foot * contact_flag)
 
     JtF_b = JtF[0:6]
     JtF_j = JtF[6:18]

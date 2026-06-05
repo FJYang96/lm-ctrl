@@ -8,7 +8,7 @@ import numpy as np
 
 import go2_config
 
-from ._helpers import _build_H, _eval_fk
+from ._helpers import _build_H, _eval_fk, _foot_center_fk_funs
 
 # Foot names in order matching the 4x3 GRF layout and contact_sequence rows
 _FOOT_NAMES = ("FL", "FR", "RL", "RR")
@@ -143,14 +143,10 @@ def _section_ground_penetration(
     lines: list[str] = []
     N = state_traj.shape[0] - 1
 
-    fk_funs = [
-        kindyn_model.forward_kinematics_FL_fun,
-        kindyn_model.forward_kinematics_FR_fun,
-        kindyn_model.forward_kinematics_RL_fun,
-        kindyn_model.forward_kinematics_RR_fun,
-    ]
+    fk_funs = _foot_center_fk_funs(kindyn_model)
+    R = float(go2_config.foot_sphere_radius)
 
-    # Compute foot positions at each timestep
+    # Sphere-center z at each timestep (stance contact when z ≈ R)
     foot_heights = np.zeros((4, state_traj.shape[0]))
     for t in range(state_traj.shape[0]):
         com_pos = state_traj[t, 0:3]
@@ -164,7 +160,7 @@ def _section_ground_penetration(
     # Ground penetration
     min_height = float(np.min(foot_heights))
 
-    penetration_threshold = -go2_config.analysis_thresholds[
+    penetration_threshold = R - go2_config.analysis_thresholds[
         "ground_penetration_tolerance"
     ]
     penetration_mask = foot_heights < penetration_threshold

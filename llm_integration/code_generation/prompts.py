@@ -182,9 +182,11 @@ Parameters:
   u_k: CasADi MX (24,) — control input at timestep k
     u_k[0:12]  = joint velocities [rad/s] (3 per leg: hip, thigh, calf × FL, FR, RL, RR)
     u_k[12:24] = ground reaction forces [N] (3 per leg: fx, fy, fz × FL, FR, RL, RR)
-  kindyn_model: robot kinematics/dynamics model with forward kinematics and Jacobian
-    functions for each foot (e.g. kindyn_model.forward_kinematics_FL_fun(H, joints))
-    — rarely needed, only for foot-position-based constraints
+  kindyn_model: robot kinematics/dynamics model. Feet use sphere contact at the URDF
+    collision sphere center — use kindyn_model.foot_center_position_fl_fun(H, joints)
+    for heights and kindyn_model.foot_center_jacobian_fl_fun(H, joints) for velocities.
+    Stance foot height: z_center in [R, R+eps] where R = foot_sphere_radius (0.022 m).
+    Swing foot height: z_center >= R. GRF is in world frame at the sphere center.
   config: robot configuration object — access physical params via config.robot_data.mass,
     config.robot_data.grf_limits, config.experiment.mu_ground, etc.
     — rarely needed, physical limits are already in this prompt

@@ -60,18 +60,18 @@ class FeedforwardComputer:
         h_b = h[0:6]
         h_j = h[6:18]
 
-        # J^T · F summed across all feet
-        jac_funs = {
-            "FL_foot": kindyn_model.kindyn.jacobian_fun("FL_foot"),
-            "FR_foot": kindyn_model.kindyn.jacobian_fun("FR_foot"),
-            "RL_foot": kindyn_model.kindyn.jacobian_fun("RL_foot"),
-            "RR_foot": kindyn_model.kindyn.jacobian_fun("RR_foot"),
-        }
+        # J^T · F summed across all feet (sphere-center Jacobians)
+        jac_funs = [
+            kindyn_model.foot_center_jacobian_fl_fun,
+            kindyn_model.foot_center_jacobian_fr_fun,
+            kindyn_model.foot_center_jacobian_rl_fun,
+            kindyn_model.foot_center_jacobian_rr_fun,
+        ]
         JtF = cs.SX.zeros(18)
-        for i, foot in enumerate(["FL_foot", "FR_foot", "RL_foot", "RR_foot"]):
+        for i, jac_fun in enumerate(jac_funs):
             f_foot = grf_sym[i * 3 : i * 3 + 3]
-            J_lin = jac_funs[foot](H, joint_pos_sym)[0:3, :]
-            JtF += J_lin.T @ f_foot
+            J_center = jac_fun(H, joint_pos_sym)
+            JtF += J_center.T @ f_foot
 
         JtF_b = JtF[0:6]
         JtF_j = JtF[6:18]
