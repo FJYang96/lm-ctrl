@@ -61,6 +61,16 @@ parser.add_argument(
     help="Reference control rate in Hz when --control-dt is not set (default: 100).",
 )
 parser.add_argument(
+    "--upsample-method",
+    type=str,
+    default="fk_ik",
+    choices=("fk_ik", "hermite"),
+    help="Reference upsampling method (default: fk_ik).",
+)
+parser.add_argument("--ik-alpha", type=float, default=1e-2)
+parser.add_argument("--ik-beta", type=float, default=1e-3)
+parser.add_argument("--pinv-damping", type=float, default=1e-4)
+parser.add_argument(
     "--output-dir",
     type=str,
     default="rl_isaac/physics_diagnostics_output",
@@ -141,8 +151,10 @@ from rl_isaac.reference import ReferenceTrajectory  # noqa: E402
 from rl_isaac.rewards import ACTION_LIMIT, KD, KP  # noqa: E402
 from rl_isaac.tracking_env import Go2TrackingEnv  # noqa: E402
 from rl_isaac.upsample_reference import (  # noqa: E402
+    KinematicUpsampleParams,
     resolve_ref_control_dt,
     resolve_source_dt,
+    save_reference_arrays,
     upsample_reference_arrays,
 )
 from utils.conversion import (  # noqa: E402
@@ -893,24 +905,39 @@ def main() -> None:
     contact_raw = (
         np.load(paths["contact_sequence"]) if paths["contact_sequence"] else None
     )
-    state_up, jvel_up, grf_up, contact_up, upsample_meta = upsample_reference_arrays(
+    upsample_params = KinematicUpsampleParams(
+        alpha=args_cli.ik_alpha,
+        beta=args_cli.ik_beta,
+        pinv_damping=args_cli.pinv_damping,
+    )
+    (
+        state_up,
+        jvel_up,
+        grf_up,
+        contact_up,
+        ff_up,
+        upsample_meta,
+    ) = upsample_reference_arrays(
         state_raw,
         jvel_raw,
         grf_raw,
         contact_raw,
         source_dt=source_dt,
         target_dt=control_dt,
+        method=args_cli.upsample_method,
+        params=upsample_params,
     )
 
     upsampled_dir = out_dir / "upsampled_reference"
-    upsampled_dir.mkdir(parents=True, exist_ok=True)
-    np.save(upsampled_dir / "upsampled_state_traj.npy", state_up)
-    np.save(upsampled_dir / "upsampled_joint_vel_traj.npy", jvel_up)
-    np.save(upsampled_dir / "upsampled_grf_traj.npy", grf_up)
-    if contact_up is not None:
-        np.save(upsampled_dir / "upsampled_contact_sequence.npy", contact_up)
-    with (upsampled_dir / "upsampled_metadata.json").open("w", encoding="utf-8") as f:
-        json.dump(upsample_meta, f, indent=2)
+    save_reference_arrays(
+        upsampled_dir,
+        state_up,
+        jvel_up,
+        grf_up,
+        contact_up,
+        upsample_meta,
+        feedforward_torques=ff_up,
+    )
 
     state_for_env = state_up.copy()
     if base_z_offset != 0.0:
@@ -921,10 +948,14 @@ def main() -> None:
         state_traj=state_up,
         joint_vel_traj=jvel_up,
         grf_traj=grf_up,
+        feedforward_torques=ff_up,
         contact_sequence=contact_up,
         control_dt=control_dt,
     )
-    ff_seed = FeedforwardComputer(KinoDynamic_Model()).precompute_trajectory(ref)
+    if ff_up is not None:
+        ff_seed = ff_up
+    else:
+        ff_seed = FeedforwardComputer(KinoDynamic_Model()).precompute_trajectory(ref)
     np.save(upsampled_dir / "upsampled_feedforward_torque_traj.npy", ff_seed)
 
     # Env loads upsampled arrays; sim state traj may include base-z offset.
@@ -944,6 +975,7 @@ def main() -> None:
     print("Rollout visualization")
     print("============================================================")
     print(f"  control_mode: {control_mode}")
+    print(f"  upsample:     {upsample_meta.get('method', args_cli.upsample_method)}")
     print(f"  source_dt:    {source_dt:.4f} s")
     print(f"  control_dt:   {control_dt:.4f} s ({1.0 / control_dt:.0f} Hz reference)")
     print(f"  sim_dt:       {sim_dt:.4f} s, decimation={decimation}")
@@ -1040,6 +1072,10 @@ def main() -> None:
         "control_mode": control_mode,
         "source_dt": source_dt,
         "control_dt": control_dt,
+        "upsample_method": args_cli.upsample_method,
+        "ik_alpha": args_cli.ik_alpha,
+        "ik_beta": args_cli.ik_beta,
+        "pinv_damping": args_cli.pinv_damping,
         "sim_dt": sim_dt,
         "decimation": decimation,
         "steps_per_ref": spr,

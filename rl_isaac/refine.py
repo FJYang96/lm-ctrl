@@ -64,6 +64,16 @@ parser.add_argument(
     choices=(100, 200),
     help="Reference control rate in Hz when --control-dt is not set (default: 100).",
 )
+parser.add_argument(
+    "--upsample-method",
+    type=str,
+    default="fk_ik",
+    choices=("fk_ik", "hermite"),
+    help="Reference upsampling method (default: fk_ik).",
+)
+parser.add_argument("--ik-alpha", type=float, default=1e-2)
+parser.add_argument("--ik-beta", type=float, default=1e-3)
+parser.add_argument("--pinv-damping", type=float, default=1e-4)
 parser.add_argument("--render-best-every", type=int, default=10)
 parser.add_argument("--save-best-npy-every", type=int, default=1)
 parser.add_argument("--seed", type=int, default=0)
@@ -124,6 +134,7 @@ from rl_isaac.rewards import (  # noqa: E402
 )
 from rl_isaac.tracking_env import Go2TrackingEnv  # noqa: E402
 from rl_isaac.upsample_reference import (  # noqa: E402
+    KinematicUpsampleParams,
     resolve_ref_control_dt,
     resolve_source_dt,
     save_reference_arrays,
@@ -496,13 +507,27 @@ def refine(args: argparse.Namespace) -> None:
     state_raw = np.load(paths.state_traj)
     jvel_raw = np.load(paths.joint_vel_traj)
     grf_raw = np.load(paths.grf_traj)
-    state_up, jvel_up, grf_up, contact_up, upsample_meta = upsample_reference_arrays(
+    upsample_params = KinematicUpsampleParams(
+        alpha=args.ik_alpha,
+        beta=args.ik_beta,
+        pinv_damping=args.pinv_damping,
+    )
+    (
+        state_up,
+        jvel_up,
+        grf_up,
+        contact_up,
+        ff_up,
+        upsample_meta,
+    ) = upsample_reference_arrays(
         state_raw,
         jvel_raw,
         grf_raw,
         contact_seq,
         source_dt=source_dt,
         target_dt=control_dt,
+        method=args.upsample_method,
+        params=upsample_params,
     )
     upsampled_dir = run_dir / "upsampled_reference"
     upsampled_paths = save_reference_arrays(
@@ -512,6 +537,7 @@ def refine(args: argparse.Namespace) -> None:
         grf_up,
         contact_up,
         upsample_meta,
+        feedforward_torques=ff_up,
     )
     env_paths = RefPaths(
         state_traj=upsampled_paths["state_traj"],
@@ -524,6 +550,7 @@ def refine(args: argparse.Namespace) -> None:
 
     print(
         "Reference upsampling: "
+        f"method={upsample_meta.get('method', args.upsample_method)}, "
         f"source_dt={source_dt:.4f}s ({upsample_meta['source_horizon']} steps) -> "
         f"control_dt={control_dt:.4f}s ({upsample_meta['target_horizon']} steps)"
     )
@@ -536,14 +563,18 @@ def refine(args: argparse.Namespace) -> None:
         state_traj=state_up,
         joint_vel_traj=jvel_up,
         grf_traj=grf_up,
+        feedforward_torques=ff_up,
         contact_sequence=contact_up,
         control_dt=control_dt,
     )
-    ff_seed = (
-        FeedforwardComputer(KinoDynamic_Model())
-        .precompute_trajectory(ref)
-        .astype(np.float32)
-    )
+    if ff_up is not None:
+        ff_seed = ff_up.astype(np.float32)
+    else:
+        ff_seed = (
+            FeedforwardComputer(KinoDynamic_Model())
+            .precompute_trajectory(ref)
+            .astype(np.float32)
+        )
     ref.set_feedforward(ff_seed)
     horizon = ref.max_phase
     np.save(upsampled_dir / "upsampled_feedforward_torque_traj.npy", ff_seed)
@@ -716,6 +747,10 @@ def refine(args: argparse.Namespace) -> None:
             "torque_limit_scale": args.torque_limit_scale,
             "seed": args.seed,
             "render_best_every": args.render_best_every,
+            "upsample_method": args.upsample_method,
+            "ik_alpha": args.ik_alpha,
+            "ik_beta": args.ik_beta,
+            "pinv_damping": args.pinv_damping,
         },
         "horizon": horizon,
         "seed_score": seed_score,
