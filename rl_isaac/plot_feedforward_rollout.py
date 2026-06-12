@@ -3,11 +3,11 @@
 Supports two control modes:
 
   implicit_pd (default): 1 kHz PhysX implicit PD (Kp/Kd on actuators) tracking
-      the 50 Hz reference joints, with optional feedforward torque.
+      the 100 Hz reference joints, with optional feedforward torque.
 
-  ff_invert: 50 Hz manual PD with inverted actions to realize open-loop FF torques.
+  ff_invert: manual PD with inverted actions to realize open-loop FF torques.
 
-Reference is plotted at control_dt (default 50 Hz). Sim is plotted at the actual
+Reference is plotted at control_dt (default 100 Hz). Sim is plotted at the actual
 simulation rate (1 kHz when decimation=1).
 
 Usage (inside Isaac Docker):
@@ -50,8 +50,15 @@ parser.add_argument(
 parser.add_argument(
     "--control-dt",
     type=float,
-    default=0.02,
-    help="Control / plot timestep in seconds (50 Hz default).",
+    default=None,
+    help="Control / plot timestep in seconds (overrides --ref-rate-hz).",
+)
+parser.add_argument(
+    "--ref-rate-hz",
+    type=int,
+    default=100,
+    choices=(100, 200),
+    help="Reference control rate in Hz when --control-dt is not set (default: 100).",
 )
 parser.add_argument(
     "--output-dir",
@@ -61,17 +68,11 @@ parser.add_argument(
 parser.add_argument("--run-tag", type=str, default="")
 parser.add_argument("--dpi", type=int, default=150)
 parser.add_argument(
-    "--zoom-steps",
-    type=int,
-    default=10,
-    help="Number of reference control steps for zoomed-in plots (default: 10).",
-)
-parser.add_argument(
     "--control-mode",
     type=str,
     default="implicit_pd",
     choices=("implicit_pd", "ff_invert"),
-    help="implicit_pd: 1kHz actuator PD + ref targets; ff_invert: 50Hz open-loop FF.",
+    help="implicit_pd: 1kHz actuator PD + ref targets; ff_invert: open-loop FF.",
 )
 parser.add_argument("--decimation", type=int, default=1, help="Env decimation (1 = 1kHz).")
 parser.add_argument("--sim-dt", type=float, default=0.001, help="Physics timestep (s).")
@@ -140,6 +141,7 @@ from rl_isaac.reference import ReferenceTrajectory  # noqa: E402
 from rl_isaac.rewards import ACTION_LIMIT, KD, KP  # noqa: E402
 from rl_isaac.tracking_env import Go2TrackingEnv  # noqa: E402
 from rl_isaac.upsample_reference import (  # noqa: E402
+    resolve_ref_control_dt,
     resolve_source_dt,
     upsample_reference_arrays,
 )
@@ -386,7 +388,6 @@ def _reference_series(
     state: np.ndarray,
     jvel: np.ndarray,
     grf: np.ndarray,
-    dt: float,
 ) -> dict[str, np.ndarray]:
     model = KinoDynamic_Model()
     n_steps = jvel.shape[0]
@@ -416,22 +417,6 @@ def _reference_series(
             grf_fz[k, fi] = grf[k, fi * 3 + 2]
     grf_fz[n_steps] = grf_fz[n_steps - 1]
 
-    ff = FeedforwardComputer(model)
-    ff_torques = np.zeros((n_steps + 1, 12), dtype=np.float64)
-    for k in range(n_steps):
-        q_ddot = (jvel[k] - jvel[k - 1]) / dt if k > 0 else np.zeros(12)
-        ff_torques[k] = ff.compute(
-            state[k, MPC_X_BASE_POS],
-            state[k, MPC_X_BASE_EUL],
-            state[k, MPC_X_BASE_VEL],
-            state[k, MPC_X_BASE_ANG],
-            state[k, MPC_X_Q_JOINTS],
-            jvel[k],
-            grf[k],
-            q_ddot,
-        )
-    ff_torques[n_steps] = ff_torques[n_steps - 1]
-
     return {
         "com_pos": com_pos,
         "com_euler": com_euler,
@@ -441,7 +426,6 @@ def _reference_series(
         "joint_vel": joint_vel,
         "foot_heights": foot_heights,
         "grf_fz": grf_fz,
-        "ff_torque": ff_torques,
     }
 
 
@@ -883,9 +867,9 @@ def main() -> None:
 
     paths = _resolve_trajectory_paths(args_cli)
     source_dt = resolve_source_dt(args_cli.source_dt, args_cli.traj_dir or None)
-    control_dt = float(args_cli.control_dt)
-    if control_dt <= 0.0:
-        raise ValueError("--control-dt must be > 0.")
+    control_dt = resolve_ref_control_dt(
+        args_cli.control_dt, ref_rate_hz=args_cli.ref_rate_hz
+    )
 
     control_mode = args_cli.control_mode
     decimation = int(args_cli.decimation)
@@ -961,7 +945,7 @@ def main() -> None:
     print("============================================================")
     print(f"  control_mode: {control_mode}")
     print(f"  source_dt:    {source_dt:.4f} s")
-    print(f"  control_dt:   {control_dt:.4f} s (reference rate)")
+    print(f"  control_dt:   {control_dt:.4f} s ({1.0 / control_dt:.0f} Hz reference)")
     print(f"  sim_dt:       {sim_dt:.4f} s, decimation={decimation}")
     print(f"  sim rate:     {1.0 / (sim_dt * decimation):.0f} Hz")
     print(f"  actuator:     Kp={args_cli.actuator_kp}, Kd={args_cli.actuator_kd}")
@@ -972,11 +956,16 @@ def main() -> None:
     print(f"  output:       {out_dir}")
     print("============================================================")
 
-    ref_series = _reference_series(state_up, jvel_up, grf_up, control_dt)
+    ref_series = _reference_series(state_up, jvel_up, grf_up)
     if ff_seed.shape[0] + 1 == ref_series["com_pos"].shape[0]:
         ref_series["ff_torque"] = np.vstack([ff_seed, ff_seed[-1:]])
-    else:
+    elif ff_seed.shape[0] == ref_series["com_pos"].shape[0]:
         ref_series["ff_torque"] = ff_seed
+    else:
+        raise ValueError(
+            f"FF torque length {ff_seed.shape[0]} incompatible with "
+            f"reference states {ref_series['com_pos'].shape[0]}"
+        )
 
     if control_mode == "ff_invert" and decimation != 20:
         print("  note: ff_invert mode typically uses decimation=20 (50 Hz).")
@@ -1012,13 +1001,13 @@ def main() -> None:
     ref_trim = {k: v[:n_ref] for k, v in ref_series.items()}
     sim_trim = {k: v[:n_sim] for k, v in sim_series.items()}
 
-    zoom_steps = max(1, int(args_cli.zoom_steps))
-    n_ref_zoom = min(n_ref, zoom_steps + 1)
-    n_sim_zoom = min(n_sim, zoom_steps * steps_per_ref + 1)
+    zoom_frac = 0.2
+    n_ref_zoom = max(2, int(np.ceil(n_ref * zoom_frac)))
+    n_sim_zoom = max(2, int(np.ceil(n_sim * zoom_frac)))
     t_ref_zoom = t_ref[:n_ref_zoom]
     t_sim_zoom = t_sim[:n_sim_zoom]
     ref_zoom, sim_zoom = _slice_series(ref_trim, sim_trim, n_ref_zoom, n_sim_zoom)
-    zoom_label = f"first {zoom_steps} ref steps"
+    zoom_label = "first 1/5 of trajectory"
 
     spr = 1 if control_mode == "ff_invert" else steps_per_ref
     plot_paths = _render_plot_suite(
@@ -1039,7 +1028,7 @@ def main() -> None:
         sim_zoom,
         args_cli.dpi,
         steps_per_ref=spr,
-        suffix=f"zoom{zoom_steps}",
+        suffix="zoom_first5th",
         subtitle=zoom_label,
     )
     _save_rollout_npz(out_dir / "rollout_data.npz", t_ref, t_sim, ref_trim, sim_trim)
@@ -1063,7 +1052,7 @@ def main() -> None:
         "n_ref_timesteps": int(n_ref),
         "n_sim_timesteps": int(n_sim),
         "duration_s": float(t_ref[-1]) if n_ref else 0.0,
-        "zoom_steps": zoom_steps,
+        "zoom_fraction": zoom_frac,
         "max_com_pos_err_m": float(
             np.linalg.norm(
                 ref_trim["com_pos"][:n_err] - sim_at_ref["com_pos"][:n_err], axis=1

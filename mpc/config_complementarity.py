@@ -64,8 +64,8 @@ class ComplementarityMPCConfig(MPCConfig):
     path_constraint_params: dict[str, float] = field(
         default_factory=lambda: {
             "SWING_GRF_EPS": 0.0,
-            "STANCE_HEIGHT_EPS": 0.005,
-            "NO_SLIP_EPS": 0.005,
+            "STANCE_HEIGHT_EPS": 0.002,
+            "NO_SLIP_EPS": 0.002,
         }
     )
 

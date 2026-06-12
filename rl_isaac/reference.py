@@ -41,12 +41,16 @@ class ReferenceTrajectory:
         grf_traj: np.ndarray,
         feedforward_torques: np.ndarray | None = None,
         contact_sequence: np.ndarray | None = None,
-        control_dt: float = 0.02,
+        control_dt: float | None = None,
     ):
+        if control_dt is None:
+            import go2_config
+
+            control_dt = go2_config.default_ref_control_dt
         self.state_traj = state_traj.copy()
         self.joint_vel_traj = joint_vel_traj.copy()
         self.grf_traj = grf_traj.copy()
-        self.control_dt = control_dt
+        self.control_dt = float(control_dt)
         self.max_phase = joint_vel_traj.shape[0]
         self.duration = self.max_phase * control_dt
 
@@ -149,7 +153,7 @@ class ReferenceTrajectory:
         joint_vel_traj_path: str,
         grf_traj_path: str,
         contact_sequence_path: str | None = None,
-        control_dt: float = 0.02,
+        control_dt: float | None = None,
     ) -> ReferenceTrajectory:
         """Load from .npy files (e.g. results/ directory)."""
         contact_seq = None

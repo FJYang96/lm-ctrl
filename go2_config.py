@@ -358,6 +358,10 @@ default_flight_duration: float = 0.4
 default_mpc_dt_complementarity: float = 0.05
 default_mpc_dt_standard: float = 0.1
 
+# Reference upsampling / Isaac control timestep (after MPC → fine grid).
+default_ref_control_dt: float = 0.01  # 100 Hz
+high_ref_control_dt: float = 0.005  # 200 Hz
+
 # Select constraint mode: "standard" or "complementarity"
 CONSTRAINT_MODE: str = "complementarity"
 

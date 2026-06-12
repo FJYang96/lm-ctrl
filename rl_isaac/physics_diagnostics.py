@@ -364,7 +364,9 @@ def _spawn_isaac_env(ref_paths: dict[str, str]):
     cfg.grf_traj_path = ref_paths["grf_traj"]
     cfg.joint_vel_traj_path = ref_paths["joint_vel_traj"]
     cfg.contact_sequence_path = ref_paths.get("contact_sequence") or ""
-    cfg.control_dt = 0.02
+    import go2_config
+
+    cfg.control_dt = go2_config.default_ref_control_dt
     env = Go2TrackingEnv(cfg)
     env.reset()
     return env

@@ -54,8 +54,15 @@ parser.add_argument(
 parser.add_argument(
     "--control-dt",
     type=float,
-    default=0.02,
-    help="MPPI / Isaac control timestep in seconds (50 Hz default).",
+    default=None,
+    help="MPPI / Isaac control timestep in seconds (overrides --ref-rate-hz).",
+)
+parser.add_argument(
+    "--ref-rate-hz",
+    type=int,
+    default=100,
+    choices=(100, 200),
+    help="Reference control rate in Hz when --control-dt is not set (default: 100).",
 )
 parser.add_argument("--render-best-every", type=int, default=10)
 parser.add_argument("--save-best-npy-every", type=int, default=1)
@@ -117,6 +124,7 @@ from rl_isaac.rewards import (  # noqa: E402
 )
 from rl_isaac.tracking_env import Go2TrackingEnv  # noqa: E402
 from rl_isaac.upsample_reference import (  # noqa: E402
+    resolve_ref_control_dt,
     resolve_source_dt,
     save_reference_arrays,
     upsample_reference_arrays,
@@ -179,8 +187,12 @@ def _seed_everything(seed: int) -> None:
 
 def _build_env(
     paths: RefPaths, num_envs: int, render: bool, headless: bool = False,
-    control_dt: float = 0.02,
+    control_dt: float | None = None,
 ) -> Go2TrackingEnv:
+    import go2_config
+
+    if control_dt is None:
+        control_dt = go2_config.default_ref_control_dt
     cfg = Go2TrackingEnvCfg()
     cfg.scene.num_envs = num_envs
     cfg.state_traj_path = paths.state_traj
@@ -474,9 +486,7 @@ def refine(args: argparse.Namespace) -> None:
 
     t0 = time.time()
     source_dt = resolve_source_dt(args.source_dt, paths.traj_dir or None)
-    control_dt = float(args.control_dt)
-    if control_dt <= 0.0:
-        raise ValueError("--control-dt must be > 0.")
+    control_dt = resolve_ref_control_dt(args.control_dt, ref_rate_hz=args.ref_rate_hz)
 
     contact_seq = (
         np.load(paths.contact_sequence)

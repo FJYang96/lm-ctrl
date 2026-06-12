@@ -1,8 +1,8 @@
 """Upsample MPC reference trajectories to the RL/MPPI control timestep.
 
-MPC plans at coarse dt (e.g. 0.05 s) while Isaac Lab control runs at 50 Hz
-(0.02 s). This module resamples state, inputs, and contact data onto the finer
-grid so feedforward torques, MPPI, and tracking rewards share one time base.
+MPC plans at coarse dt (e.g. 0.05 s / 20 Hz) while Isaac Lab control runs at
+100 Hz by default (0.01 s). Joint positions and velocities are resampled via
+cubic Hermite splines; base state uses linear / SLERP; GRF uses zero-order hold.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from scipy.interpolate import CubicHermiteSpline
 
 from utils.conversion import (
     MPC_X_BASE_ANG,
@@ -87,6 +88,39 @@ def _zoh_index(t_dst: np.ndarray, source_dt: float, n_src: int) -> np.ndarray:
     return np.clip(idx, 0, n_src - 1)
 
 
+def _joint_hermite_knots(
+    state_traj: np.ndarray,
+    joint_vel_traj: np.ndarray,
+    n_mpc: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build joint position and tangent arrays at MPC state knot times."""
+    q_knots = state_traj[:, MPC_X_Q_JOINTS].astype(np.float64)
+    m_knots = np.zeros((n_mpc + 1, q_knots.shape[1]), dtype=np.float64)
+    m_knots[:n_mpc] = joint_vel_traj
+    m_knots[n_mpc] = joint_vel_traj[-1]
+    return q_knots, m_knots
+
+
+def _hermite_interp_joints(
+    t_knots: np.ndarray,
+    q_knots: np.ndarray,
+    m_knots: np.ndarray,
+    t_dst: np.ndarray,
+    *,
+    derivative_order: int = 0,
+) -> np.ndarray:
+    """Evaluate cubic Hermite splines for all joints at ``t_dst``."""
+    n_joints = q_knots.shape[1]
+    out = np.zeros((len(t_dst), n_joints), dtype=np.float64)
+    for j in range(n_joints):
+        spline = CubicHermiteSpline(t_knots, q_knots[:, j], m_knots[:, j])
+        if derivative_order == 0:
+            out[:, j] = spline(t_dst)
+        else:
+            out[:, j] = spline.derivative(derivative_order)(t_dst)
+    return out
+
+
 def upsample_reference_arrays(
     state_traj: np.ndarray,
     joint_vel_traj: np.ndarray,
@@ -124,6 +158,7 @@ def upsample_reference_arrays(
         "source_duration_s": float(duration),
         "target_duration_s": float(sim_duration),
         "upsampled": abs(source_dt - target_dt) > 1e-9,
+        "joint_interp": "cubic_hermite",
     }
 
     if not metadata["upsampled"]:
@@ -138,7 +173,6 @@ def upsample_reference_arrays(
     t_src_state = np.linspace(0.0, duration, n_mpc + 1)
     t_dst_state = np.linspace(0.0, duration, n_sim + 1)
     t_dst_u = np.arange(n_sim, dtype=np.float64) * target_dt
-    t_src_u = np.arange(n_mpc, dtype=np.float64) * source_dt
 
     state_out = np.zeros((n_sim + 1, state_traj.shape[1]), dtype=np.float64)
     state_out[:, MPC_X_BASE_POS] = _linear_interp(
@@ -153,14 +187,17 @@ def upsample_reference_arrays(
     state_out[:, MPC_X_BASE_ANG] = _linear_interp(
         t_src_state, state_traj[:, MPC_X_BASE_ANG], t_dst_state
     )
-    state_out[:, MPC_X_Q_JOINTS] = _linear_interp(
-        t_src_state, state_traj[:, MPC_X_Q_JOINTS], t_dst_state
-    )
     state_out[:, MPC_X_INTEGRAL] = _linear_interp(
         t_src_state, state_traj[:, MPC_X_INTEGRAL], t_dst_state
     )
 
-    joint_vel_out = _linear_interp(t_src_u, joint_vel_traj, t_dst_u)
+    q_knots, m_knots = _joint_hermite_knots(state_traj, joint_vel_traj, n_mpc)
+    state_out[:, MPC_X_Q_JOINTS] = _hermite_interp_joints(
+        t_src_state, q_knots, m_knots, t_dst_state
+    )
+    joint_vel_out = _hermite_interp_joints(
+        t_src_state, q_knots, m_knots, t_dst_u, derivative_order=1
+    )
 
     zoh_idx = _zoh_index(t_dst_u, source_dt, n_mpc)
     grf_out = grf_traj[zoh_idx].copy()
@@ -253,3 +290,20 @@ def resolve_source_dt(
     import go2_config
 
     return float(go2_config.default_mpc_dt_complementarity)
+
+
+def resolve_ref_control_dt(
+    explicit_dt: float | None,
+    ref_rate_hz: int = 100,
+) -> float:
+    """Resolve reference control dt from explicit override or ``ref_rate_hz``."""
+    if explicit_dt is not None and explicit_dt > 0.0:
+        return float(explicit_dt)
+
+    import go2_config
+
+    if ref_rate_hz == 200:
+        return float(go2_config.high_ref_control_dt)
+    if ref_rate_hz != 100:
+        raise ValueError(f"Unsupported ref_rate_hz={ref_rate_hz}; use 100 or 200.")
+    return float(go2_config.default_ref_control_dt)
